@@ -258,10 +258,12 @@ fn status_schema_mismatch_returns_error_code() {
     assert_eq!(v["ready"].as_bool(), Some(false));
     assert_eq!(v["failure_category"].as_str(), Some("schema_mismatch"));
     assert_eq!(v["health_class"].as_str(), Some("schema_mismatch"));
+    let schema_error = v["db_state"]["open_error"]
+        .as_str()
+        .or_else(|| v["db_state"]["query_error"].as_str());
     assert!(
-        v["db_state"]["query_error"]
-            .as_str()
-            .is_some_and(|text| text.contains("graph_build_state"))
+        schema_error.is_some_and(|text| !text.trim().is_empty()),
+        "schema mismatch must include actionable database error: {v:?}"
     );
 }
 

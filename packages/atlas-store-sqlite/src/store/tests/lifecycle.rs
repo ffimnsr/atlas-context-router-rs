@@ -83,6 +83,41 @@ fn migration_upgrades_every_historical_version_to_latest_schema() {
 }
 
 #[test]
+fn migration_016_preserves_rows_and_allows_same_path_across_repos() {
+    let conn = open_unmigrated_in_memory();
+    apply_migrations_through(&conn, 15);
+    conn.execute(
+        "INSERT INTO files (path, language, hash, size, indexed_at, source_repo_id)
+         VALUES ('src/lib.rs', 'rust', 'repo-a-hash', 10, '2026-01-01T00:00:00Z', 'repo-a')",
+        [],
+    )
+    .unwrap();
+
+    let mut store = Store {
+        conn,
+        _thread_bound: std::marker::PhantomData,
+    };
+    store.migrate().unwrap();
+    store
+        .conn
+        .execute(
+            "INSERT INTO files (path, language, hash, size, indexed_at, source_repo_id)
+             VALUES ('src/lib.rs', 'rust', 'repo-b-hash', 20, '2026-01-02T00:00:00Z', 'repo-b')",
+            [],
+        )
+        .unwrap();
+
+    assert_eq!(
+        store.file_hash_for_repo("repo-a", "src/lib.rs").unwrap(),
+        Some("repo-a-hash".to_string())
+    );
+    assert_eq!(
+        store.file_hash_for_repo("repo-b", "src/lib.rs").unwrap(),
+        Some("repo-b-hash".to_string())
+    );
+}
+
+#[test]
 fn schema_version_stored() {
     let store = open_in_memory();
     let version: i32 = store

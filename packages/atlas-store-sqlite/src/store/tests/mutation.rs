@@ -207,6 +207,52 @@ fn delete_file_graph_removes_dangling_cross_file_edges() {
 }
 
 #[test]
+fn replace_file_graph_preserves_cross_file_edges_to_retained_nodes() {
+    let mut store = open_in_memory();
+    let original_target = make_node(
+        NodeKind::Function,
+        "target",
+        "a.rs::fn::target",
+        "a.rs",
+        "rust",
+    );
+    let caller = make_node(
+        NodeKind::Function,
+        "caller",
+        "b.rs::fn::caller",
+        "b.rs",
+        "rust",
+    );
+    let inbound = make_edge(
+        EdgeKind::Calls,
+        "b.rs::fn::caller",
+        "a.rs::fn::target",
+        "b.rs",
+    );
+    store
+        .replace_file_graph("a.rs", "h1", None, None, &[original_target], &[])
+        .unwrap();
+    store
+        .replace_file_graph("b.rs", "h1", None, None, &[caller], &[inbound])
+        .unwrap();
+
+    let updated_target = make_node(
+        NodeKind::Function,
+        "target",
+        "a.rs::fn::target",
+        "a.rs",
+        "rust",
+    );
+    store
+        .replace_file_graph("a.rs", "h2", None, None, &[updated_target], &[])
+        .unwrap();
+
+    let caller_edges = store.edges_by_file("b.rs").unwrap();
+    assert_eq!(caller_edges.len(), 1);
+    assert_eq!(caller_edges[0].target_qn, "a.rs::fn::target");
+}
+
+#[test]
 fn replace_file_graph_removes_stale_cross_file_edges_on_update() {
     let mut store = open_in_memory();
     // b.rs references old_fn from a.rs; after a.rs is re-indexed with only
@@ -777,6 +823,45 @@ fn node_signatures_by_file_returns_entry_per_node() {
 }
 
 #[test]
+fn node_signatures_by_file_for_repo_excludes_same_path_from_other_repo() {
+    let mut store = open_in_memory();
+    for (repo_id, qname) in [
+        ("repo-a", "repo::repo-a::src/lib.rs::fn::run"),
+        ("repo-b", "repo::repo-b::src/lib.rs::fn::run"),
+    ] {
+        let file = ParsedFile {
+            path: "src/lib.rs".to_string(),
+            language: Some("rust".to_string()),
+            hash: format!("{repo_id}-hash"),
+            size: None,
+            nodes: vec![make_node(
+                NodeKind::Function,
+                "run",
+                qname,
+                "src/lib.rs",
+                "rust",
+            )],
+            edges: vec![],
+        };
+        store
+            .replace_files_transactional_for_repo(repo_id, &[file])
+            .unwrap();
+    }
+
+    let repo_a = store
+        .node_signatures_by_file_for_repo("repo-a", "src/lib.rs")
+        .unwrap();
+    let repo_b = store
+        .node_signatures_by_file_for_repo("repo-b", "src/lib.rs")
+        .unwrap();
+
+    assert_eq!(repo_a.len(), 1);
+    assert!(repo_a.contains_key("repo::repo-a::src/lib.rs::fn::run"));
+    assert_eq!(repo_b.len(), 1);
+    assert!(repo_b.contains_key("repo::repo-b::src/lib.rs::fn::run"));
+}
+
+#[test]
 fn node_signatures_stable_across_position_change() {
     let mut store = open_in_memory();
     let mut node = make_node(NodeKind::Function, "foo", "a.rs::fn::foo", "a.rs", "rust");
@@ -897,6 +982,58 @@ fn file_owner_id_returns_id_string() {
     );
 }
 
+#[test]
+fn upsert_file_owner_for_repo_does_not_modify_other_repo() {
+    let mut store = open_in_memory();
+    for (repo_id, qname) in [
+        ("repo-a", "repo::repo-a::src/lib.rs::fn::run"),
+        ("repo-b", "repo::repo-b::src/lib.rs::fn::run"),
+    ] {
+        let file = ParsedFile {
+            path: "src/lib.rs".to_string(),
+            language: Some("rust".to_string()),
+            hash: format!("{repo_id}-hash"),
+            size: None,
+            nodes: vec![make_node(
+                NodeKind::Function,
+                "run",
+                qname,
+                "src/lib.rs",
+                "rust",
+            )],
+            edges: vec![],
+        };
+        store
+            .replace_files_transactional_for_repo(repo_id, &[file])
+            .unwrap();
+    }
+
+    let owner = PackageOwner {
+        owner_id: "cargo:Cargo.toml".to_owned(),
+        kind: PackageOwnerKind::Cargo,
+        root: ".".to_owned(),
+        manifest_path: "Cargo.toml".to_owned(),
+        package_name: Some("repo-a".to_owned()),
+    };
+    store
+        .upsert_file_owner_for_repo("repo-a", "src/lib.rs", Some(&owner))
+        .unwrap();
+
+    assert_eq!(
+        store
+            .file_owner_id_for_repo("repo-a", "src/lib.rs")
+            .unwrap()
+            .as_deref(),
+        Some("cargo:Cargo.toml")
+    );
+    assert_eq!(
+        store
+            .file_owner_id_for_repo("repo-b", "src/lib.rs")
+            .unwrap(),
+        None
+    );
+}
+
 // file_hash
 // -------------------------------------------------------------------------
 
@@ -961,6 +1098,70 @@ fn rename_file_graph_moves_nodes_and_edges() {
 
     // files row moved
     assert_eq!(store.file_hash("new.rs").unwrap(), Some("h1".to_string()));
+}
+
+#[test]
+fn rename_file_graph_for_repo_preserves_other_repo_rows() {
+    let mut store = open_in_memory();
+    let repo_a_file = ParsedFile {
+        path: "old.rs".to_string(),
+        language: Some("rust".to_string()),
+        hash: "repo-a-hash".to_string(),
+        size: None,
+        nodes: vec![make_node(
+            NodeKind::Function,
+            "a",
+            "repo::repo-a::old.rs::fn::a",
+            "old.rs",
+            "rust",
+        )],
+        edges: vec![],
+    };
+    let repo_b_file = ParsedFile {
+        path: "old.rs".to_string(),
+        language: Some("rust".to_string()),
+        hash: "repo-b-hash".to_string(),
+        size: None,
+        nodes: vec![make_node(
+            NodeKind::Function,
+            "b",
+            "repo::repo-b::old.rs::fn::b",
+            "old.rs",
+            "rust",
+        )],
+        edges: vec![],
+    };
+    store
+        .replace_files_transactional_for_repo("repo-a", &[repo_a_file])
+        .unwrap();
+    store
+        .replace_files_transactional_for_repo("repo-b", &[repo_b_file])
+        .unwrap();
+
+    store
+        .rename_file_graph_for_repo("repo-a", "old.rs", "new.rs")
+        .unwrap();
+
+    assert_eq!(
+        store.file_hash_for_repo("repo-a", "new.rs").unwrap(),
+        Some("repo-a-hash".to_string())
+    );
+    assert_eq!(store.file_hash_for_repo("repo-a", "old.rs").unwrap(), None);
+    assert_eq!(
+        store.file_hash_for_repo("repo-b", "old.rs").unwrap(),
+        Some("repo-b-hash".to_string())
+    );
+    assert_eq!(store.file_hash_for_repo("repo-b", "new.rs").unwrap(), None);
+
+    let repo_b_old_nodes: i64 = store
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM nodes WHERE source_repo_id = 'repo-b' AND file_path = 'old.rs'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(repo_b_old_nodes, 1);
 }
 
 #[test]

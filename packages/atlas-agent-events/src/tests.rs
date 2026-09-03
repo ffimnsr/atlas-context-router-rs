@@ -11,6 +11,7 @@ use atlas_adapters::{
 };
 use atlas_contentstore::{ContentStore, SourceMeta};
 use atlas_engine::{BuildOptions, build_graph};
+use atlas_repo::stable_repo_id;
 use atlas_session::{SessionEventType, SessionId, SessionStore};
 use atlas_store_sqlite::Store;
 
@@ -826,10 +827,14 @@ fn post_tool_use_hook_refreshes_graph_for_changed_files() {
     let repo_str = repo.to_string_lossy().into_owned();
     let graph_db_path = format!("{repo_str}/.atlas/worldtree.db");
     Store::open(&graph_db_path).unwrap();
+    let source_repo_id = stable_repo_id(Utf8Path::new(&repo_str));
     build_graph(
         Utf8Path::new(&repo_str),
         &graph_db_path,
-        &BuildOptions::default(),
+        &BuildOptions {
+            source_repo_id: Some(source_repo_id.clone()),
+            ..BuildOptions::default()
+        },
     )
     .unwrap();
 
@@ -867,6 +872,15 @@ fn post_tool_use_hook_refreshes_graph_for_changed_files() {
         nodes
             .iter()
             .any(|node| node.qualified_name.ends_with("::fn::beta"))
+    );
+    let repo_hashes = store.file_hashes_for_repo(&source_repo_id).unwrap();
+    assert!(
+        repo_hashes.contains_key("Cargo.toml") && repo_hashes.contains_key("src/lib.rs"),
+        "hook refresh must update same repo-scoped file inventory as build"
+    );
+    assert!(
+        store.file_hashes_for_repo("legacy").unwrap().is_empty(),
+        "hook refresh must not create legacy file rows"
     );
 }
 

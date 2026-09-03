@@ -165,6 +165,7 @@ fn schema_fixture(version: i32) -> &'static str {
         13 => include_str!("../../migrations/schema_versions/013.sql"),
         14 => include_str!("../../migrations/schema_versions/014.sql"),
         15 => include_str!("../../migrations/schema_versions/015.sql"),
+        16 => include_str!("../../migrations/schema_versions/016.sql"),
         _ => panic!("missing schema fixture for version {version}"),
     }
 }

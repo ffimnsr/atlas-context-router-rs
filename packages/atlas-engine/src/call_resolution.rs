@@ -25,11 +25,7 @@ pub fn reconcile_call_targets(
             continue;
         }
 
-        let nodes: Vec<Node> = store
-            .nodes_by_file(path)?
-            .into_iter()
-            .filter(|node| node_repo_id(node) == Some(source_repo_id))
-            .collect();
+        let nodes: Vec<Node> = store.nodes_by_file_for_repo(source_repo_id, path)?;
         if nodes.is_empty() {
             continue;
         }
@@ -44,11 +40,7 @@ pub fn reconcile_call_targets(
         }
 
         let import_bindings = collect_import_bindings(&nodes);
-        let mut edges: Vec<Edge> = store
-            .edges_by_file(path)?
-            .into_iter()
-            .filter(|edge| edge_repo_id(edge) == Some(source_repo_id))
-            .collect();
+        let mut edges: Vec<Edge> = store.edges_by_file_for_repo(source_repo_id, path)?;
         let mut changed = false;
         let resolution_ctx = ResolutionContext {
             store,
@@ -121,7 +113,7 @@ pub fn reconcile_call_targets(
         }
 
         if changed {
-            store.rewrite_file_edges(path, &edges)?;
+            store.rewrite_file_edges_for_repo(source_repo_id, path, &edges)?;
             touched_files += 1;
         }
     }
@@ -365,13 +357,6 @@ fn load_go_module(repo_root: &Utf8Path) -> Option<String> {
 
 fn node_repo_id(node: &Node) -> Option<&str> {
     node.extra_json
-        .as_object()
-        .and_then(|extra| extra.get("repo_id"))
-        .and_then(|value| value.as_str())
-}
-
-fn edge_repo_id(edge: &Edge) -> Option<&str> {
-    edge.extra_json
         .as_object()
         .and_then(|extra| extra.get("repo_id"))
         .and_then(|value| value.as_str())

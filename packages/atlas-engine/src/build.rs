@@ -277,7 +277,11 @@ pub fn build_graph(
                 .context("cannot store parsed files")?;
             for pf in &parsed_files {
                 store
-                    .upsert_file_owner(&pf.path, owners.owner_for_path(&pf.path))
+                    .upsert_file_owner_for_repo(
+                        &source_repo_id,
+                        &pf.path,
+                        owners.owner_for_path(&pf.path),
+                    )
                     .with_context(|| format!("cannot store owner metadata for {}", pf.path))?;
             }
             total_nodes += n;
@@ -799,5 +803,19 @@ mod tests {
         assert_eq!(node_a.extra_json["repo_id"], serde_json::json!(repo_a_id));
         assert_eq!(node_b.extra_json["repo_id"], serde_json::json!(repo_b_id));
         assert_ne!(node_a.qualified_name, node_b.qualified_name);
+        assert!(
+            store
+                .file_hashes_for_repo(&repo_a_id)
+                .unwrap()
+                .contains_key("src/lib.rs"),
+            "repo a file inventory must survive repo b build"
+        );
+        assert!(
+            store
+                .file_hashes_for_repo(&repo_b_id)
+                .unwrap()
+                .contains_key("src/lib.rs"),
+            "repo b file inventory must coexist at same relative path"
+        );
     }
 }

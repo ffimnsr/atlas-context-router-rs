@@ -279,10 +279,10 @@ pub fn update_graph(
         let _rename_span = tracing::info_span!("update.rename_stable").entered();
         for (old, new) in &to_rename {
             store
-                .rename_file_graph(old, new)
+                .rename_file_graph_for_repo(&source_repo_id, old, new)
                 .with_context(|| format!("cannot rename graph '{old}' -> '{new}'"))?;
             store
-                .upsert_file_owner(new, owners.owner_for_path(new))
+                .upsert_file_owner_for_repo(&source_repo_id, new, owners.owner_for_path(new))
                 .with_context(|| format!("cannot update owner metadata for '{new}'"))?;
         }
     }
@@ -293,7 +293,7 @@ pub fn update_graph(
         .iter()
         .filter_map(|p| {
             store
-                .node_signatures_by_file(p)
+                .node_signatures_by_file_for_repo(&source_repo_id, p)
                 .ok()
                 .map(|sigs| (p.clone(), sigs))
         })
@@ -456,7 +456,7 @@ pub fn update_graph(
 
     let changed_qn_refs: Vec<&str> = all_changed_qnames.iter().map(String::as_str).collect();
     let dependents = store
-        .find_dependents_for_qnames(&changed_qn_refs)
+        .find_dependents_for_qnames_for_repo(&source_repo_id, &changed_qn_refs)
         .context("cannot query dependents")?;
     drop(_deps_span);
 
@@ -606,7 +606,11 @@ pub fn update_graph(
             .context("cannot store parsed files")?;
         for pf in &chunk_owned {
             store
-                .upsert_file_owner(&pf.path, owners.owner_for_path(&pf.path))
+                .upsert_file_owner_for_repo(
+                    &source_repo_id,
+                    &pf.path,
+                    owners.owner_for_path(&pf.path),
+                )
                 .with_context(|| format!("cannot store owner metadata for {}", pf.path))?;
         }
         total_nodes += n;
@@ -927,6 +931,77 @@ mod tests {
     // values from the changed-file phase are collected into `parsed_changed`
     // before the sequential write phase begins.  Both updated files must appear
     // correctly in the store after the update regardless of Rayon scheduling.
+    #[test]
+    fn body_only_update_preserves_cross_file_caller_edge() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_root = dir.path();
+
+        git(repo_root, &["init", "--quiet"]);
+        std::fs::write(repo_root.join("lib.rs"), "mod a;\nmod b;\n").unwrap();
+        std::fs::write(
+            repo_root.join("a.rs"),
+            "pub fn target() -> i32 {\n    1\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            repo_root.join("b.rs"),
+            "use crate::a::target;\n\npub fn caller() -> i32 {\n    target()\n}\n",
+        )
+        .unwrap();
+        git(repo_root, &["add", "lib.rs", "a.rs", "b.rs"]);
+        git(repo_root, &["commit", "--quiet", "-m", "init"]);
+
+        let db_path = repo_root.join("worldtree.db");
+        build_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &BuildOptions::default(),
+        )
+        .unwrap();
+
+        let caller_edge_exists = || {
+            Store::open(db_path.to_str().unwrap())
+                .unwrap()
+                .edges_by_file("b.rs")
+                .unwrap()
+                .into_iter()
+                .any(|edge| {
+                    edge.source_qn.ends_with("::fn::caller")
+                        && edge.target_qn.ends_with("::fn::target")
+                })
+        };
+        assert!(
+            caller_edge_exists(),
+            "build must resolve b.rs caller to target"
+        );
+
+        std::fs::write(
+            repo_root.join("a.rs"),
+            "pub fn target() -> i32 {\n    2\n}\n",
+        )
+        .unwrap();
+        let summary = update_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &UpdateOptions {
+                fail_fast: true,
+                dry_run: false,
+                batch_size: 16,
+                target: UpdateTarget::WorkingTree,
+                budget: BuildRunBudget::default(),
+                source_repo_id: None,
+                namespace_qualified_names: false,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(summary.parsed, 1, "body-only edit must not reparse caller");
+        assert!(
+            caller_edge_exists(),
+            "body-only target replacement must retain unchanged caller edge"
+        );
+    }
+
     #[test]
     fn update_changed_files_parallel_parse_completes_before_store_write() {
         let dir = tempfile::tempdir().unwrap();

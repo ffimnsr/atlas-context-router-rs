@@ -52,6 +52,27 @@ impl Store {
         Ok(rows)
     }
 
+    pub fn nodes_by_file_for_repo(&self, source_repo_id: &str, path: &str) -> Result<Vec<Node>> {
+        let path = canonicalize_repo_path(path)?;
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, kind, name, qualified_name, file_path, line_start, line_end,
+                        language, parent_name, params, return_type, modifiers,
+                        is_test, file_hash, extra_json
+                 FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2
+                 ORDER BY line_start",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![source_repo_id, path.as_str()], row_to_node)
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
     /// All file records in the graph, ordered by canonical repo-relative path.
     ///
     /// Used by docs generation and other whole-graph consumers that need the
@@ -153,14 +174,49 @@ impl Store {
         Ok(rows)
     }
 
-    /// Replace only the stored edges for `path`, leaving nodes and file
+    pub fn edges_by_file_for_repo(
+        &self,
+        source_repo_id: &str,
+        path: &str,
+    ) -> Result<Vec<atlas_core::Edge>> {
+        let path = canonicalize_repo_path(path)?;
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, kind, source_qualified, target_qualified, file_path,
+                        line, confidence, confidence_tier, extra_json
+                 FROM edges WHERE source_repo_id = ?1 AND file_path = ?2",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![source_repo_id, path.as_str()], row_to_edge)
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Replace only the stored edges for legacy `path`, leaving nodes and file
     /// metadata untouched.
     pub fn rewrite_file_edges(&mut self, path: &str, edges: &[atlas_core::Edge]) -> Result<()> {
+        self.rewrite_file_edges_for_repo("legacy", path, edges)
+    }
+
+    pub fn rewrite_file_edges_for_repo(
+        &mut self,
+        source_repo_id: &str,
+        path: &str,
+        edges: &[atlas_core::Edge],
+    ) -> Result<()> {
         let normalized = canonicalize_graph_slice(path, &[], edges)?;
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         self.conn.execute_batch("BEGIN IMMEDIATE").map_err(db_err)?;
         self.conn
-            .execute("DELETE FROM edges WHERE file_path = ?1", [&normalized.path])
+            .execute(
+                "DELETE FROM edges WHERE source_repo_id = ?1 AND file_path = ?2",
+                params![source_repo_id, normalized.path],
+            )
             .map_err(db_err)?;
         for edge in &normalized.edges {
             let extra = serde_json::to_string(&edge.extra_json).map_err(AtlasError::Serde)?;
@@ -168,8 +224,8 @@ impl Store {
                 .execute(
                     "INSERT INTO edges
                          (kind, source_qualified, target_qualified, file_path,
-                          line, confidence, confidence_tier, extra_json)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                          line, confidence, confidence_tier, extra_json, source_repo_id)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
                     params![
                         edge.kind.as_str(),
                         edge.source_qn,
@@ -179,6 +235,7 @@ impl Store {
                         edge.confidence,
                         edge.confidence_tier,
                         extra,
+                        source_repo_id,
                     ],
                 )
                 .map_err(db_err)?;
@@ -300,6 +357,14 @@ impl Store {
     /// invalidation to symbols whose signatures actually changed, avoiding
     /// unnecessary reparsing of files that only depend on stable symbols.
     pub fn find_dependents_for_qnames(&self, changed_qnames: &[&str]) -> Result<Vec<String>> {
+        self.find_dependents_for_qnames_for_repo("legacy", changed_qnames)
+    }
+
+    pub fn find_dependents_for_qnames_for_repo(
+        &self,
+        source_repo_id: &str,
+        changed_qnames: &[&str],
+    ) -> Result<Vec<String>> {
         if changed_qnames.is_empty() {
             return Ok(vec![]);
         }
@@ -311,25 +376,27 @@ impl Store {
         // files themselves and will be processed by the caller already).
         let sql = format!(
             "SELECT DISTINCT ns.file_path
-             FROM edges  e
-             JOIN nodes  ns ON e.source_qualified = ns.qualified_name
-             WHERE e.target_qualified IN ({placeholders})
+             FROM edges e
+             JOIN nodes ns
+               ON ns.source_repo_id = e.source_repo_id
+              AND ns.qualified_name = e.source_qualified
+             WHERE e.source_repo_id = ?
+               AND e.target_qualified IN ({placeholders})
                AND e.source_qualified NOT IN (
                    SELECT qualified_name FROM nodes
-                   WHERE qualified_name IN ({placeholders})
+                   WHERE source_repo_id = ? AND qualified_name IN ({placeholders})
                )
              ORDER BY ns.file_path"
         );
 
-        let params: Vec<&dyn rusqlite::types::ToSql> = changed_qnames
-            .iter()
-            .chain(changed_qnames.iter())
-            .map(|q| q as &dyn rusqlite::types::ToSql)
-            .collect();
+        let params = std::iter::once(source_repo_id)
+            .chain(changed_qnames.iter().copied())
+            .chain(std::iter::once(source_repo_id))
+            .chain(changed_qnames.iter().copied());
 
         let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
         let rows = stmt
-            .query_map(params.as_slice(), |r| r.get(0))
+            .query_map(rusqlite::params_from_iter(params), |r| r.get(0))
             .map_err(db_err)?
             .filter_map(|r| r.ok())
             .collect();

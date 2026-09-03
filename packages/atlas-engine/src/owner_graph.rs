@@ -52,7 +52,7 @@ pub(crate) fn refresh_owner_graphs(
             .context("cannot refresh synthetic owner/workspace nodes")?;
         for (parsed_file, owner) in &package_files {
             store
-                .upsert_file_owner(&parsed_file.path, Some(owner))
+                .upsert_file_owner_for_repo(source_repo_id, &parsed_file.path, Some(owner))
                 .with_context(|| {
                     format!(
                         "cannot store owner metadata for synthetic package {}",

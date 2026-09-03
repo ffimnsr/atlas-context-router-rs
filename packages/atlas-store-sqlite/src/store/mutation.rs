@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use atlas_core::{
     AtlasError, Node, PackageOwner, PackageOwnerKind, ParsedFile, RepoProvenance, Result,
@@ -88,15 +88,26 @@ fn do_replace_file_graph(
         params![source_repo_id, path],
     )
     .map_err(db_err)?;
-    // Remove dangling cross-file edges referencing old nodes from this file.
-    conn.execute(
-        "DELETE FROM edges
-         WHERE source_repo_id = ?1
-           AND (source_qualified IN (SELECT qualified_name FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2)
-             OR target_qualified IN (SELECT qualified_name FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2))",
-        params![source_repo_id, path],
-    )
-    .map_err(db_err)?;
+
+    // Keep cross-file edges whose endpoint qualified name survives replacement.
+    // Incremental updates do not reparse unchanged callers after body-only edits,
+    // so deleting those inbound edges would progressively erase graph topology.
+    let retained_qnames = nodes
+        .iter()
+        .map(|node| node.qualified_name.as_str())
+        .collect::<HashSet<_>>();
+    for old_node in &old_nodes {
+        if retained_qnames.contains(old_node.qualified_name.as_str()) {
+            continue;
+        }
+        conn.execute(
+            "DELETE FROM edges
+             WHERE source_repo_id = ?1
+               AND (source_qualified = ?2 OR target_qualified = ?2)",
+            params![source_repo_id, old_node.qualified_name],
+        )
+        .map_err(db_err)?;
+    }
     conn.execute(
         "DELETE FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2",
         params![source_repo_id, path],
@@ -334,17 +345,25 @@ impl Store {
     /// intentionally — moving a function within a file does not change its
     /// interface and must not trigger unnecessary dependent reparsing.
     pub fn node_signatures_by_file(&self, path: &str) -> Result<HashMap<String, String>> {
+        self.node_signatures_by_file_for_repo(LEGACY_SOURCE_REPO_ID, path)
+    }
+
+    pub fn node_signatures_by_file_for_repo(
+        &self,
+        source_repo_id: &str,
+        path: &str,
+    ) -> Result<HashMap<String, String>> {
         let path = canonicalize_repo_path(path)?;
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT qualified_name, kind, params, return_type, modifiers, is_test
-                 FROM nodes WHERE file_path = ?1",
+                 FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2",
             )
             .map_err(db_err)?;
         let map = stmt
-            .query_map([path.as_str()], |row| {
+            .query_map(params![source_repo_id, path.as_str()], |row| {
                 let qn: String = row.get(0)?;
                 let kind: String = row.get(1)?;
                 let params: Option<String> = row.get(2)?;
@@ -607,8 +626,17 @@ impl Store {
         Ok(paths)
     }
 
-    /// Upsert owner metadata for a stored file row.
+    /// Upsert owner metadata for a stored legacy file row.
     pub fn upsert_file_owner(&mut self, path: &str, owner: Option<&PackageOwner>) -> Result<()> {
+        self.upsert_file_owner_for_repo(LEGACY_SOURCE_REPO_ID, path, owner)
+    }
+
+    pub fn upsert_file_owner_for_repo(
+        &mut self,
+        source_repo_id: &str,
+        path: &str,
+        owner: Option<&PackageOwner>,
+    ) -> Result<()> {
         let path = canonicalize_repo_path(path)?;
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         let (owner_id, owner_kind, owner_root, owner_manifest_path, owner_name) = match owner {
@@ -624,13 +652,14 @@ impl Store {
         self.conn
             .execute(
                 "UPDATE files
-                 SET owner_id = ?2,
-                     owner_kind = ?3,
-                     owner_root = ?4,
-                     owner_manifest_path = ?5,
-                     owner_name = ?6
-                 WHERE path = ?1",
+                 SET owner_id = ?3,
+                     owner_kind = ?4,
+                     owner_root = ?5,
+                     owner_manifest_path = ?6,
+                     owner_name = ?7
+                 WHERE source_repo_id = ?1 AND path = ?2",
                 params![
+                    source_repo_id,
                     path.as_str(),
                     owner_id,
                     owner_kind,
@@ -651,6 +680,15 @@ impl Store {
     /// can simply be retargeted to the new path instead of being deleted and
     /// rebuilt from scratch.
     pub fn rename_file_graph(&mut self, old_path: &str, new_path: &str) -> Result<()> {
+        self.rename_file_graph_for_repo(LEGACY_SOURCE_REPO_ID, old_path, new_path)
+    }
+
+    pub fn rename_file_graph_for_repo(
+        &mut self,
+        source_repo_id: &str,
+        old_path: &str,
+        new_path: &str,
+    ) -> Result<()> {
         let old_path = canonicalize_repo_path(old_path)?;
         let new_path = canonicalize_repo_path(new_path)?;
         if old_path == new_path {
@@ -668,11 +706,11 @@ impl Store {
                     "SELECT id, kind, name, qualified_name, file_path, line_start, line_end,
                             language, parent_name, params, return_type, modifiers,
                             is_test, file_hash, extra_json
-                     FROM nodes WHERE file_path = ?1",
+                     FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2",
                 )
                 .map_err(db_err)?;
             let rows: Vec<Node> = stmt
-                .query_map([old_path.as_str()], row_to_node)
+                .query_map(params![source_repo_id, old_path.as_str()], row_to_node)
                 .map_err(db_err)?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -705,16 +743,18 @@ impl Store {
         // Update node file_path references.
         self.conn
             .execute(
-                "UPDATE nodes SET file_path = ?1 WHERE file_path = ?2",
-                [new_path.as_str(), old_path.as_str()],
+                "UPDATE nodes SET file_path = ?1
+                 WHERE source_repo_id = ?2 AND file_path = ?3",
+                params![new_path.as_str(), source_repo_id, old_path.as_str()],
             )
             .map_err(db_err)?;
 
         // Update edge file_path references.
         self.conn
             .execute(
-                "UPDATE edges SET file_path = ?1 WHERE file_path = ?2",
-                [new_path.as_str(), old_path.as_str()],
+                "UPDATE edges SET file_path = ?1
+                 WHERE source_repo_id = ?2 AND file_path = ?3",
+                params![new_path.as_str(), source_repo_id, old_path.as_str()],
             )
             .map_err(db_err)?;
 
@@ -723,15 +763,18 @@ impl Store {
             .execute(
                 "INSERT OR REPLACE INTO files
                      (path, language, hash, size, indexed_at, owner_id, owner_kind,
-                      owner_root, owner_manifest_path, owner_name)
+                      owner_root, owner_manifest_path, owner_name, source_repo_id)
                  SELECT ?1, language, hash, size, datetime('now'), owner_id, owner_kind,
-                        owner_root, owner_manifest_path, owner_name
-                 FROM files WHERE path = ?2",
-                [new_path.as_str(), old_path.as_str()],
+                        owner_root, owner_manifest_path, owner_name, source_repo_id
+                 FROM files WHERE source_repo_id = ?2 AND path = ?3",
+                params![new_path.as_str(), source_repo_id, old_path.as_str()],
             )
             .map_err(db_err)?;
         self.conn
-            .execute("DELETE FROM files WHERE path = ?1", [old_path.as_str()])
+            .execute(
+                "DELETE FROM files WHERE source_repo_id = ?1 AND path = ?2",
+                params![source_repo_id, old_path.as_str()],
+            )
             .map_err(db_err)?;
 
         // FTS-reindex with the new file_path.

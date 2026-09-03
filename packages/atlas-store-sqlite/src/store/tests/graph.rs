@@ -504,6 +504,68 @@ fn impact_radius_reports_traversal_edge_cap() {
     assert!(traversal.suggested_narrower_query.is_some());
 }
 
+#[test]
+fn repo_scoped_file_reads_and_edge_rewrite_preserve_other_repo() {
+    let mut store = open_in_memory();
+    for repo_id in ["repo-a", "repo-b"] {
+        let qname = format!("repo::{repo_id}::shared.rs::fn::run");
+        let node = make_node(NodeKind::Function, "run", &qname, "shared.rs", "rust");
+        let edge = make_edge(EdgeKind::Calls, &qname, &qname, "shared.rs");
+        store
+            .replace_files_transactional_for_repo(
+                repo_id,
+                &[ParsedFile {
+                    path: "shared.rs".to_string(),
+                    language: Some("rust".to_string()),
+                    hash: format!("{repo_id}-hash"),
+                    size: None,
+                    nodes: vec![node],
+                    edges: vec![edge],
+                }],
+            )
+            .unwrap();
+    }
+
+    assert_eq!(
+        store
+            .nodes_by_file_for_repo("repo-a", "shared.rs")
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        store
+            .edges_by_file_for_repo("repo-b", "shared.rs")
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let repo_a_qname = "repo::repo-a::shared.rs::fn::run";
+    let replacement = make_edge(
+        EdgeKind::Calls,
+        repo_a_qname,
+        "repo::repo-a::shared.rs::fn::updated",
+        "shared.rs",
+    );
+    store
+        .rewrite_file_edges_for_repo("repo-a", "shared.rs", &[replacement])
+        .unwrap();
+
+    let repo_a_edges = store.edges_by_file_for_repo("repo-a", "shared.rs").unwrap();
+    let repo_b_edges = store.edges_by_file_for_repo("repo-b", "shared.rs").unwrap();
+    assert_eq!(repo_a_edges.len(), 1);
+    assert_eq!(
+        repo_a_edges[0].target_qn,
+        "repo::repo-a::shared.rs::fn::updated"
+    );
+    assert_eq!(repo_b_edges.len(), 1);
+    assert_eq!(
+        repo_b_edges[0].target_qn,
+        "repo::repo-b::shared.rs::fn::run"
+    );
+}
+
 // -------------------------------------------------------------------------
 // find_dependents_for_qnames
 // -------------------------------------------------------------------------
@@ -536,6 +598,52 @@ fn find_dependents_for_qnames_returns_importers_of_changed_symbols() {
         .find_dependents_for_qnames(&["a.rs::fn::foo"])
         .unwrap();
     assert_eq!(deps, vec!["b.rs"]);
+}
+
+#[test]
+fn find_dependents_for_qnames_for_repo_excludes_foreign_repo_edges() {
+    let mut store = open_in_memory();
+    let target_qn = "repo::repo-b::a.rs::fn::foo";
+    let caller_qn = "repo::repo-b::b.rs::fn::bar";
+    let target = make_node(NodeKind::Function, "foo", target_qn, "a.rs", "rust");
+    let caller = make_node(NodeKind::Function, "bar", caller_qn, "b.rs", "rust");
+    let edge = make_edge(EdgeKind::Calls, caller_qn, target_qn, "b.rs");
+    store
+        .replace_files_transactional_for_repo(
+            "repo-b",
+            &[
+                ParsedFile {
+                    path: "a.rs".to_string(),
+                    language: Some("rust".to_string()),
+                    hash: "a".to_string(),
+                    size: None,
+                    nodes: vec![target],
+                    edges: vec![],
+                },
+                ParsedFile {
+                    path: "b.rs".to_string(),
+                    language: Some("rust".to_string()),
+                    hash: "b".to_string(),
+                    size: None,
+                    nodes: vec![caller],
+                    edges: vec![edge],
+                },
+            ],
+        )
+        .unwrap();
+
+    assert!(
+        store
+            .find_dependents_for_qnames_for_repo("repo-a", &[target_qn])
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .find_dependents_for_qnames_for_repo("repo-b", &[target_qn])
+            .unwrap(),
+        vec!["b.rs"]
+    );
 }
 
 #[test]

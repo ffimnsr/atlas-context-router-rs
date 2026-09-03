@@ -78,9 +78,14 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "015_graph_build_recovery_state",
         up_sql: include_str!("migrations/015_graph_build_recovery_state.sql"),
     },
+    Migration {
+        version: 16,
+        name: "016_files_repo_scoped_identity",
+        up_sql: include_str!("migrations/016_files_repo_scoped_identity.sql"),
+    },
 ];
 
-pub const LATEST_VERSION: i32 = 15;
+pub const LATEST_VERSION: i32 = 16;
 
 pub const MIGRATION_SET: MigrationSet = MigrationSet {
     db_kind: "worldtree",

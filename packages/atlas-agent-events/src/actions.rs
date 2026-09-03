@@ -10,6 +10,7 @@ use atlas_core::BudgetPolicy;
 use atlas_core::model::{ChangeType, ContextIntent, ContextRequest, ContextTarget};
 use atlas_engine::{Config, UpdateOptions, UpdateTarget, update_graph};
 use atlas_impact::analyze as advanced_impact;
+use atlas_repo::stable_repo_id;
 use atlas_review::{ContextEngine, build_explain_change_summary};
 use atlas_session::{SessionId, SessionStore};
 use atlas_store_sqlite::{BuildFinishStats, Store};
@@ -344,12 +345,14 @@ fn execute_graph_refresh_action(
             "error": "invalid build budget config",
         });
     };
+    let repo_path = Utf8Path::new(repo);
+    let source_repo_id = stable_repo_id(repo_path);
     if let Ok(store) = Store::open(graph_db_path) {
-        let _ = store.begin_build(repo);
+        let _ = store.begin_build_for_repo(&source_repo_id, repo);
     }
 
     let result = update_graph(
-        Utf8Path::new(repo),
+        repo_path,
         graph_db_path,
         &UpdateOptions {
             fail_fast: false,
@@ -357,7 +360,7 @@ fn execute_graph_refresh_action(
             batch_size: config.parse_batch_size(),
             target,
             budget: build_budget,
-            source_repo_id: None,
+            source_repo_id: Some(source_repo_id.clone()),
             namespace_qualified_names: false,
         },
     );
@@ -375,7 +378,8 @@ fn execute_graph_refresh_action(
                 } else {
                     atlas_store_sqlite::GraphBuildState::Built
                 };
-                let _ = store.finish_build(
+                let _ = store.finish_build_for_repo(
+                    &source_repo_id,
                     repo,
                     BuildFinishStats {
                         state,
@@ -414,7 +418,7 @@ fn execute_graph_refresh_action(
         }
         Err(error) => {
             if let Ok(store) = Store::open(graph_db_path) {
-                let _ = store.fail_build(repo, &error.to_string());
+                let _ = store.fail_build_for_repo(&source_repo_id, repo, &error.to_string());
             }
             json!({
                 "status": "error",
