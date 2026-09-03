@@ -185,8 +185,10 @@ impl Store {
             .filter_map(|r| r.ok())
             .map(|(qn, blob)| {
                 let vec: Vec<f32> = blob
-                    .chunks_exact(4)
-                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|chunk| f32::from_le_bytes(*chunk))
                     .collect();
                 let sim = cosine_similarity(query_embedding, &vec);
                 (qn, sim)
