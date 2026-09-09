@@ -88,9 +88,14 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "017_graph_build_indexed_ref",
         up_sql: include_str!("migrations/017_graph_build_indexed_ref.sql"),
     },
+    Migration {
+        version: 18,
+        name: "018_repo_scoped_node_identity",
+        up_sql: include_str!("migrations/018_repo_scoped_node_identity.sql"),
+    },
 ];
 
-pub const LATEST_VERSION: i32 = 17;
+pub const LATEST_VERSION: i32 = 18;
 
 pub const MIGRATION_SET: MigrationSet = MigrationSet {
     db_kind: "worldtree",

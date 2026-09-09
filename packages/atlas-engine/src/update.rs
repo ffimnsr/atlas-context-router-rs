@@ -634,7 +634,7 @@ pub fn update_graph(
         total_edges += e;
 
         // Refresh chunk text in one transaction for this parsed batch.
-        if let Err(err) = store.replace_chunks_for_parsed_files(&chunk_owned) {
+        if let Err(err) = store.replace_chunks_for_parsed_files(&source_repo_id, &chunk_owned) {
             chunk_upsert_failures += 1;
             tracing::warn!("chunk batch upsert failed: {err:#}");
         }

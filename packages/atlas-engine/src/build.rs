@@ -294,7 +294,8 @@ pub fn build_graph(
             total_edges += e;
 
             // Index chunk text for retrieval (embeddings generated separately).
-            if let Err(err) = store.replace_chunks_for_parsed_files(&parsed_files) {
+            if let Err(err) = store.replace_chunks_for_parsed_files(&source_repo_id, &parsed_files)
+            {
                 chunk_upsert_failures += 1;
                 tracing::warn!("chunk batch upsert failed: {err:#}");
             }

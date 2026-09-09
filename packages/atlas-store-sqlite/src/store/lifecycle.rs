@@ -348,6 +348,9 @@ impl Store {
     /// Return nodes that have no edges (neither as source nor target).
     ///
     /// These are isolated nodes that may indicate parse gaps or stale data.
+    /// Synthetic owner/workspace/registry metadata nodes (`.atlas/synthetic/`)
+    /// are exempt: a package node is legitimately edge-less when its owner has
+    /// no workspace-membership link or its member files are absent.
     /// `limit` caps the result set; pass `usize::MAX` for all.
     pub fn orphan_nodes(&self, limit: usize) -> Result<Vec<Node>> {
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
@@ -362,6 +365,7 @@ impl Store {
                 WHERE e.source_qualified = n.qualified_name
                    OR e.target_qualified = n.qualified_name
             )
+              AND n.file_path NOT LIKE '.atlas/synthetic/%'
             LIMIT ?1
         ";
         let mut stmt = self.conn.prepare(sql).map_err(db_err)?;

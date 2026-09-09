@@ -3,6 +3,93 @@ use super::*;
 // --- replace_file_graph --------------------------------------------------
 
 #[test]
+fn nodes_with_same_qname_coexist_across_repo_ids() {
+    let mut store = open_in_memory();
+    let parsed = |hash: &str| ParsedFile {
+        path: "a.rs".to_string(),
+        language: Some("rust".to_string()),
+        hash: hash.to_string(),
+        size: None,
+        nodes: vec![make_node(
+            NodeKind::Function,
+            "x",
+            "a.rs::fn::x",
+            "a.rs",
+            "rust",
+        )],
+        edges: vec![],
+    };
+
+    // Un-namespaced qnames collide on relative path across repos: each repo
+    // must keep its own node row (UNIQUE (source_repo_id, qualified_name)).
+    store
+        .replace_files_transactional_for_repo("legacy", &[parsed("h1")])
+        .unwrap();
+    store
+        .replace_files_transactional_for_repo("repo_b", &[parsed("h2")])
+        .unwrap();
+
+    let count: i64 = store
+        .conn
+        .query_row(
+            "SELECT count(*) FROM nodes
+             WHERE qualified_name = 'a.rs::fn::x'
+               AND (source_repo_id = 'legacy' OR source_repo_id = 'repo_b')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        count, 2,
+        "each repo keeps its own node row for the same qname"
+    );
+}
+
+#[test]
+fn chunk_replacement_is_repo_scoped() {
+    let mut store = open_in_memory();
+    let parsed = |hash: &str, name: &str, qn: &str| ParsedFile {
+        path: "a.rs".to_string(),
+        language: Some("rust".to_string()),
+        hash: hash.to_string(),
+        size: None,
+        nodes: vec![make_node(NodeKind::Function, name, qn, "a.rs", "rust")],
+        edges: vec![],
+    };
+
+    store
+        .replace_files_transactional_for_repo("legacy", &[parsed("h1", "x", "a.rs::fn::x")])
+        .unwrap();
+    store
+        .replace_files_transactional_for_repo("repo_b", &[parsed("h2", "y", "a.rs::fn::y")])
+        .unwrap();
+    store
+        .replace_chunks_for_parsed_files("legacy", &[parsed("h1", "x", "a.rs::fn::x")])
+        .unwrap();
+
+    // Replacing chunks for repo_b must not delete repo legacy's chunks
+    // (same relative path in both repos).
+    store
+        .replace_chunks_for_parsed_files("repo_b", &[parsed("h2", "y", "a.rs::fn::y")])
+        .unwrap();
+
+    let mut stmt = store
+        .conn
+        .prepare("SELECT node_qn FROM retrieval_chunks ORDER BY node_qn")
+        .unwrap();
+    let qns: Vec<String> = stmt
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<std::result::Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        qns,
+        ["a.rs::fn::x", "a.rs::fn::y"],
+        "chunk replacement must stay within the source repo"
+    );
+}
+
+#[test]
 fn replace_file_graph_inserts_nodes_and_edges() {
     let mut store = open_in_memory();
     let nodes = vec![

@@ -384,6 +384,52 @@ fn orphan_nodes_empty_when_all_nodes_connected() {
 }
 
 #[test]
+fn orphan_nodes_exempt_synthetic_metadata_nodes() {
+    let mut store = open_in_memory();
+    // Real-file orphan must still be reported.
+    let real_orphan = make_node(NodeKind::Function, "lone", "a.rs::fn::lone", "a.rs", "rust");
+    // Synthetic package/workspace nodes are legitimately edge-less when their
+    // owner has no workspace-membership link or member files.
+    let synthetic_package = make_node(
+        NodeKind::Package,
+        "fuzz",
+        "package::cargo:fuzz/Cargo.toml",
+        ".atlas/synthetic/owners/package/cargo/cargo_fuzz_Cargo_toml.atlas",
+        "toml",
+    );
+    store
+        .replace_file_graph(
+            "a.rs",
+            "h-a",
+            Some("rust"),
+            None,
+            std::slice::from_ref(&real_orphan),
+            &[],
+        )
+        .unwrap();
+    store
+        .replace_file_graph(
+            ".atlas/synthetic/owners/package/cargo/cargo_fuzz_Cargo_toml.atlas",
+            "h-syn",
+            Some("toml"),
+            None,
+            &[synthetic_package],
+            &[],
+        )
+        .unwrap();
+
+    let orphans = store
+        .orphan_nodes(100)
+        .expect("orphan_nodes must not error");
+    assert_eq!(
+        orphans.len(),
+        1,
+        "real orphans must still be reported; synthetic nodes are exempt"
+    );
+    assert_eq!(orphans[0].qualified_name, "a.rs::fn::lone");
+}
+
+#[test]
 fn orphan_nodes_all_when_no_edges() {
     let mut store = open_in_memory();
     let a = make_node(NodeKind::Function, "a", "a.rs::fn::a", "a.rs", "rust");

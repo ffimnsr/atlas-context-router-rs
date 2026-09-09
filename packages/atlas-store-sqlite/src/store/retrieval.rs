@@ -44,24 +44,32 @@ impl Store {
         Ok(())
     }
 
-    /// Delete all retrieval chunks whose symbol belongs to `file_path`.
+    /// Delete all retrieval chunks whose symbol belongs to `file_path` within
+    /// `source_repo_id`.
     ///
     /// Call before re-indexing a file so stale / renamed symbols are removed.
-    pub fn delete_chunks_for_file(&self, file_path: &str) -> Result<()> {
+    /// Repo-scoped: identical relative paths in other repos must not lose
+    /// their chunks.
+    pub fn delete_chunks_for_file(&self, source_repo_id: &str, file_path: &str) -> Result<()> {
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         self.conn
             .execute(
                 "DELETE FROM retrieval_chunks
                  WHERE node_qn IN (
-                     SELECT qualified_name FROM nodes WHERE file_path = ?1
+                     SELECT qualified_name FROM nodes
+                     WHERE source_repo_id = ?1 AND file_path = ?2
                  )",
-                params![file_path],
+                params![source_repo_id, file_path],
             )
             .map_err(db_err)?;
         Ok(())
     }
 
-    pub fn replace_chunks_for_parsed_files(&self, files: &[ParsedFile]) -> Result<usize> {
+    pub fn replace_chunks_for_parsed_files(
+        &self,
+        source_repo_id: &str,
+        files: &[ParsedFile],
+    ) -> Result<usize> {
         if files.is_empty() {
             return Ok(0);
         }
@@ -75,7 +83,8 @@ impl Store {
                 .prepare(
                     "DELETE FROM retrieval_chunks
                      WHERE node_qn IN (
-                         SELECT qualified_name FROM nodes WHERE file_path = ?1
+                         SELECT qualified_name FROM nodes
+                         WHERE source_repo_id = ?1 AND file_path = ?2
                      )",
                 )
                 .map_err(db_err)?;
@@ -91,7 +100,7 @@ impl Store {
             let mut written = 0usize;
             for parsed_file in files {
                 delete_stmt
-                    .execute(params![parsed_file.path])
+                    .execute(params![source_repo_id, parsed_file.path])
                     .map_err(db_err)?;
                 for node in &parsed_file.nodes {
                     upsert_stmt
