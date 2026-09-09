@@ -13,6 +13,11 @@ pub enum DiffTarget {
     /// Changes staged in the index (`git diff --cached`).
     Staged,
     /// Unstaged working-tree changes (`git diff`).
+    ///
+    /// When a stored indexed ref exists, callers that want "everything that
+    /// changed since the last sync" (committed, staged, and unstaged) should
+    /// diff against that ref instead of the index; `update_graph` does this
+    /// for its default target.
     WorkingTree,
 }
 
@@ -95,6 +100,25 @@ pub fn changed_files(repo_root: &Utf8Path, target: &DiffTarget) -> Result<Vec<Ch
     results.extend(recursive_changes);
     results.extend(expanded);
     Ok(dedup_changes(results))
+}
+
+/// Return the current `HEAD` commit sha for `repo_root`, or `None` when the
+/// repo has no commits or git is unavailable.
+///
+/// Used to record which git state a graph build/update synced from so later
+/// incremental updates can diff against it (catching committed changes that a
+/// plain index diff would miss).
+pub fn head_ref(repo_root: &Utf8Path) -> Option<String> {
+    let output = git_cmd()
+        .args(["rev-parse", "HEAD"])
+        .current_dir(repo_root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8(output.stdout).ok()?.trim().to_owned();
+    (!value.is_empty()).then_some(value)
 }
 
 fn collect_recursive_submodule_changes(

@@ -32,7 +32,13 @@ pub fn install_git_hooks(repo_root: &Path, dry_run: bool, force: bool) -> Result
     }
 
     let mut paths = Vec::new();
-    for hook_name in ["pre-commit", "post-checkout", "post-merge", "post-rewrite"] {
+    for hook_name in [
+        "pre-commit",
+        "post-commit",
+        "post-checkout",
+        "post-merge",
+        "post-rewrite",
+    ] {
         paths.push(install_git_hook(
             git_dir.join("hooks").join(hook_name),
             dry_run,

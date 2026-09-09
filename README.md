@@ -411,7 +411,8 @@ Full rebuild:
 atlas build
 ```
 
-Incremental update from working tree or git base:
+Incremental update (everything changed since the last sync — committed, staged, or
+unstaged; falls back to index-only diffing when no prior sync is recorded) or from a git base:
 
 ```bash
 atlas update

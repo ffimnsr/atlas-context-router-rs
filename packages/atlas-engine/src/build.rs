@@ -9,7 +9,7 @@ use atlas_core::{BudgetReport, BuildUpdateBudgetCounters, PackageOwner, model::P
 use atlas_parser::ParserRegistry;
 use atlas_repo::{
     collect_supported_files_with_stats, discover_package_owners, find_repo_root, hash_file,
-    stable_repo_fingerprint,
+    head_ref, stable_repo_fingerprint,
 };
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
@@ -345,7 +345,7 @@ pub fn build_graph(
         ));
     }
 
-    Ok(BuildSummary {
+    let summary = BuildSummary {
         scanned,
         skipped_unsupported,
         skipped_unchanged,
@@ -359,7 +359,20 @@ pub fn build_graph(
         budget_counters,
         budget: budget_report,
         elapsed_ms: started.elapsed().as_millis(),
-    })
+    };
+
+    // Record the synced git ref on clean runs so a later default `atlas
+    // update` can diff against it and pick up committed changes. Degraded
+    // runs keep any previous ref so a subsequent update re-diffs broadly.
+    if !opts.dry_run
+        && !summary.is_degraded()
+        && let Some(head) = head_ref(repo_root)
+        && let Err(error) = store.set_last_indexed_ref(repo_root.as_str(), &source_repo_id, &head)
+    {
+        tracing::warn!("cannot record indexed ref: {error:#}");
+    }
+
+    Ok(summary)
 }
 
 /// Detect and return the repo root for `start_dir`, delegating to git.
@@ -489,6 +502,36 @@ mod tests {
             .status()
             .expect("git command");
         assert!(status.success(), "git {args:?} failed");
+    }
+
+    #[test]
+    fn build_graph_records_indexed_ref_after_clean_build() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_root = dir.path();
+
+        git(repo_root, &["init", "--quiet"]);
+        std::fs::write(repo_root.join("a.rs"), "pub fn a() {}\n").unwrap();
+        git(repo_root, &["add", "a.rs"]);
+        git(repo_root, &["commit", "--quiet", "-m", "init"]);
+
+        let db_path = repo_root.join("worldtree.db");
+        build_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &BuildOptions::default(),
+        )
+        .unwrap();
+
+        let store = Store::open(db_path.to_str().unwrap()).unwrap();
+        let head = head_ref(Utf8Path::from_path(repo_root).unwrap()).unwrap();
+        assert_eq!(
+            store
+                .last_indexed_ref(repo_root.to_str().unwrap())
+                .unwrap()
+                .as_deref(),
+            Some(head.as_str()),
+            "clean full build must record the synced HEAD ref"
+        );
     }
 
     #[test]

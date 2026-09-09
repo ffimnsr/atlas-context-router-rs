@@ -17,7 +17,7 @@ mod path;
 mod registry;
 mod root;
 
-pub use diff::{DiffTarget, changed_files};
+pub use diff::{DiffTarget, changed_files, head_ref};
 pub use files::{
     CollectFilesStats, DEFAULT_IGNORE_PATTERNS, DEFAULT_MAX_FILE_BYTES, collect_files,
     collect_supported_files, collect_supported_files_with_stats, glob_match, load_atlasignore,

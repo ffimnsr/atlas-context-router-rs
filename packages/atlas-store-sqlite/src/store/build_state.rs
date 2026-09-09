@@ -43,6 +43,7 @@ pub struct GraphBuildStatus {
     pub last_error: Option<String>,
     pub recovery_mode: Option<String>,
     pub quarantine_path: Option<String>,
+    pub last_indexed_ref: Option<String>,
     pub updated_at: String,
 }
 
@@ -90,6 +91,7 @@ fn row_to_build_status(row: &Row<'_>) -> rusqlite::Result<GraphBuildStatus> {
         last_error: row.get(14)?,
         recovery_mode: row.get(15)?,
         quarantine_path: row.get(16)?,
+        last_indexed_ref: row.get(18)?,
         updated_at: row.get(17)?,
     })
 }
@@ -216,6 +218,43 @@ impl Store {
         Ok(())
     }
 
+    /// Return the last indexed git ref for a repo, or `None` when the repo
+    /// has never recorded one (fresh DB or pre-migration 017 database).
+    pub fn last_indexed_ref(&self, repo_root: &str) -> Result<Option<String>> {
+        use rusqlite::OptionalExtension;
+        self.conn
+            .query_row(
+                "SELECT last_indexed_ref FROM graph_build_state WHERE repo_root = ?1",
+                params![repo_root],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map(|value| value.flatten())
+            .map_err(|e| AtlasError::Db(e.to_string()))
+    }
+
+    /// Record the git ref the graph state for `repo_root` was synced from.
+    pub fn set_last_indexed_ref(
+        &self,
+        repo_root: &str,
+        source_repo_id: &str,
+        git_ref: &str,
+    ) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO graph_build_state
+                    (repo_root, source_repo_id, state, last_indexed_ref, updated_at)
+                 VALUES (?1, ?2, 'built', ?3, datetime('now'))
+                 ON CONFLICT(repo_root) DO UPDATE SET
+                    source_repo_id   = ?2,
+                    last_indexed_ref = ?3,
+                    updated_at       = datetime('now')",
+                params![repo_root, source_repo_id, git_ref],
+            )
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        Ok(())
+    }
+
     /// Return the build status for a single repo root, or `None` if no record exists.
     pub fn get_build_status(&self, repo_root: &str) -> Result<Option<GraphBuildStatus>> {
         let mut stmt = self
@@ -225,7 +264,7 @@ impl Store {
                     files_accepted, files_skipped_by_byte_budget, files_failed,
                     bytes_accepted, bytes_skipped, nodes_written, edges_written,
                     budget_stop_reason, last_built_at, last_error, recovery_mode,
-                    quarantine_path, updated_at
+                    quarantine_path, updated_at, last_indexed_ref
                  FROM graph_build_state
                  WHERE repo_root = ?1",
             )
@@ -249,7 +288,7 @@ impl Store {
                     files_accepted, files_skipped_by_byte_budget, files_failed,
                     bytes_accepted, bytes_skipped, nodes_written, edges_written,
                     budget_stop_reason, last_built_at, last_error, recovery_mode,
-                    quarantine_path, updated_at
+                    quarantine_path, updated_at, last_indexed_ref
                  FROM graph_build_state
                  ORDER BY repo_root",
             )

@@ -12,7 +12,7 @@ use atlas_core::{
 };
 use atlas_parser::{ParserRegistry, TreeCache};
 use atlas_repo::{
-    CanonicalRepoPath, DiffTarget, changed_files, discover_package_owners, hash_file,
+    CanonicalRepoPath, DiffTarget, changed_files, discover_package_owners, hash_file, head_ref,
     stable_repo_fingerprint,
 };
 use atlas_store_sqlite::Store;
@@ -52,7 +52,9 @@ fn canonicalize_batch_change(
 /// Specifies which set of changes to process.
 #[derive(Debug, Clone)]
 pub enum UpdateTarget {
-    /// Unstaged working-tree changes.
+    /// Default target: everything changed since the last indexed ref
+    /// (committed, staged, and unstaged). Falls back to index-only diffing
+    /// when the database has no recorded indexed ref.
     WorkingTree,
     /// Changes staged for commit.
     Staged,
@@ -216,6 +218,15 @@ pub fn update_graph(
             let diff_target = match other {
                 UpdateTarget::Staged => DiffTarget::Staged,
                 UpdateTarget::BaseRef(r) => DiffTarget::BaseRef(r.clone()),
+                UpdateTarget::WorkingTree => {
+                    // Diff against the ref this repo was last synced from so
+                    // committed changes (e.g. refactors split into new module
+                    // files) are picked up, not just index-unstaged edits.
+                    match store.last_indexed_ref(repo_root.as_str())? {
+                        Some(commit) if !commit.is_empty() => DiffTarget::BaseRef(commit),
+                        _ => DiffTarget::WorkingTree,
+                    }
+                }
                 _ => DiffTarget::WorkingTree,
             };
             changed_files(repo_root, &diff_target).context("cannot detect changed files")?
@@ -667,7 +678,7 @@ pub fn update_graph(
         ));
     }
 
-    Ok(UpdateSummary {
+    let summary = UpdateSummary {
         deleted: deleted_count,
         renamed: renamed_count,
         parsed: parsed_count,
@@ -681,7 +692,20 @@ pub fn update_graph(
         budget_counters,
         budget: budget_report,
         elapsed_ms: started.elapsed().as_millis(),
-    })
+    };
+
+    // Record the synced git ref on clean runs. Degraded/partial runs keep
+    // the old ref so a later update re-diffs against it and catches any
+    // changes this run missed.
+    if !opts.dry_run
+        && !summary.is_degraded()
+        && let Some(head) = head_ref(repo_root)
+        && let Err(error) = store.set_last_indexed_ref(repo_root.as_str(), &source_repo_id, &head)
+    {
+        tracing::warn!("cannot record indexed ref: {error:#}");
+    }
+
+    Ok(summary)
 }
 
 fn annotate_parsed_file_repo(
@@ -1217,5 +1241,196 @@ mod tests {
         };
 
         assert!(summary.is_degraded());
+    }
+
+    // Regression for committed-refactor staleness: the default WorkingTree
+    // target must pick up changes that were already committed, because it
+    // diffs against the last indexed ref recorded by the previous build/
+    // update instead of only the git index.
+    #[test]
+    fn update_default_target_reparses_committed_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_root = dir.path();
+
+        git(repo_root, &["init", "--quiet"]);
+        std::fs::write(repo_root.join("lib.rs"), "pub fn keep() {}\n").unwrap();
+        git(repo_root, &["add", "lib.rs"]);
+        git(repo_root, &["commit", "--quiet", "-m", "init"]);
+
+        let db_path = repo_root.join("worldtree.db");
+        build_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &BuildOptions::default(),
+        )
+        .unwrap();
+
+        // Commit the refactor: old function pruned, new module file added.
+        std::fs::write(repo_root.join("lib.rs"), "pub fn slim() {}\n").unwrap();
+        std::fs::write(repo_root.join("extra.rs"), "pub fn extra() {}\n").unwrap();
+        git(repo_root, &["add", "lib.rs", "extra.rs"]);
+        git(repo_root, &["commit", "--quiet", "-m", "refactor"]);
+
+        let summary = update_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &UpdateOptions {
+                fail_fast: true,
+                dry_run: false,
+                batch_size: 16,
+                target: UpdateTarget::WorkingTree,
+                budget: BuildRunBudget::default(),
+                source_repo_id: None,
+                namespace_qualified_names: false,
+            },
+        )
+        .unwrap();
+        assert!(
+            summary.parsed >= 2,
+            "committed refactor must be parsed, parsed={}",
+            summary.parsed
+        );
+
+        let store = Store::open(db_path.to_str().unwrap()).unwrap();
+        let lib_sigs = store.node_signatures_by_file("lib.rs").unwrap();
+        assert!(
+            lib_sigs.contains_key("lib.rs::fn::slim"),
+            "refactored lib.rs symbols must be in the graph"
+        );
+        assert!(
+            !lib_sigs.contains_key("lib.rs::fn::keep"),
+            "pruned function must leave the graph"
+        );
+        assert!(
+            store
+                .node_signatures_by_file("extra.rs")
+                .unwrap()
+                .contains_key("extra.rs::fn::extra"),
+            "added module file must be in the graph"
+        );
+    }
+
+    #[test]
+    fn update_default_target_advances_indexed_ref_and_noops_when_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_root = dir.path();
+
+        git(repo_root, &["init", "--quiet"]);
+        std::fs::write(repo_root.join("lib.rs"), "pub fn one() {}\n").unwrap();
+        git(repo_root, &["add", "lib.rs"]);
+        git(repo_root, &["commit", "--quiet", "-m", "init"]);
+
+        let db_path = repo_root.join("worldtree.db");
+        build_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &BuildOptions::default(),
+        )
+        .unwrap();
+
+        // Commit a change, then sync it with the default target.
+        std::fs::write(
+            repo_root.join("lib.rs"),
+            "pub fn one() {}\npub fn two() {}\n",
+        )
+        .unwrap();
+        git(repo_root, &["add", "lib.rs"]);
+        git(repo_root, &["commit", "--quiet", "-m", "add two"]);
+
+        let first = update_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &UpdateOptions {
+                fail_fast: true,
+                dry_run: false,
+                batch_size: 16,
+                target: UpdateTarget::WorkingTree,
+                budget: BuildRunBudget::default(),
+                source_repo_id: None,
+                namespace_qualified_names: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(first.parsed, 1, "committed change must be parsed once");
+
+        let store = Store::open(db_path.to_str().unwrap()).unwrap();
+        let head = head_ref(Utf8Path::from_path(repo_root).unwrap()).unwrap();
+        assert_eq!(
+            store
+                .last_indexed_ref(repo_root.to_str().unwrap())
+                .unwrap()
+                .as_deref(),
+            Some(head.as_str()),
+            "clean update must advance the indexed ref to HEAD"
+        );
+
+        let second = update_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &UpdateOptions {
+                fail_fast: true,
+                dry_run: false,
+                batch_size: 16,
+                target: UpdateTarget::WorkingTree,
+                budget: BuildRunBudget::default(),
+                source_repo_id: None,
+                namespace_qualified_names: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(second.parsed, 0, "clean tree after sync must be a no-op");
+        assert_eq!(second.deleted, 0, "clean tree must not delete anything");
+    }
+
+    #[test]
+    fn update_default_target_still_sees_unstaged_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_root = dir.path();
+
+        git(repo_root, &["init", "--quiet"]);
+        std::fs::write(repo_root.join("lib.rs"), "pub fn base() {}\n").unwrap();
+        git(repo_root, &["add", "lib.rs"]);
+        git(repo_root, &["commit", "--quiet", "-m", "init"]);
+
+        let db_path = repo_root.join("worldtree.db");
+        build_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &BuildOptions::default(),
+        )
+        .unwrap();
+
+        // Unstaged edit: must still be parsed by the default target even
+        // though the diff now compares the worktree against HEAD.
+        std::fs::write(
+            repo_root.join("lib.rs"),
+            "pub fn base() {}\npub fn draft() {}\n",
+        )
+        .unwrap();
+
+        let summary = update_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &UpdateOptions {
+                fail_fast: true,
+                dry_run: false,
+                batch_size: 16,
+                target: UpdateTarget::WorkingTree,
+                budget: BuildRunBudget::default(),
+                source_repo_id: None,
+                namespace_qualified_names: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(summary.parsed, 1, "unstaged edit must be parsed");
+
+        let store = Store::open(db_path.to_str().unwrap()).unwrap();
+        assert!(
+            store
+                .node_signatures_by_file("lib.rs")
+                .unwrap()
+                .contains_key("lib.rs::fn::draft"),
+            "unstaged edit symbols must be in the graph"
+        );
     }
 }

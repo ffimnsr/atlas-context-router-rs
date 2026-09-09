@@ -15,6 +15,33 @@ fn begin_build_sets_state_building() {
 }
 
 #[test]
+fn last_indexed_ref_roundtrip_and_status_field() {
+    let store = open_in_memory();
+    assert_eq!(store.last_indexed_ref("/repo").unwrap(), None);
+
+    store
+        .set_last_indexed_ref("/repo", "repo_1", "abc123")
+        .unwrap();
+    assert_eq!(
+        store.last_indexed_ref("/repo").unwrap().as_deref(),
+        Some("abc123")
+    );
+    let status = store.get_build_status("/repo").unwrap().unwrap();
+    assert_eq!(status.last_indexed_ref.as_deref(), Some("abc123"));
+    assert_eq!(status.source_repo_id, "repo_1");
+
+    // Upsert advances the ref and preserves it across begin_build resets.
+    store.begin_build_for_repo("repo_1", "/repo").unwrap();
+    store
+        .set_last_indexed_ref("/repo", "repo_1", "def456")
+        .unwrap();
+    assert_eq!(
+        store.last_indexed_ref("/repo").unwrap().as_deref(),
+        Some("def456")
+    );
+}
+
+#[test]
 fn finish_build_after_begin_sets_built_with_counters() {
     let store = open_in_memory();
     store.begin_build("/repo").unwrap();

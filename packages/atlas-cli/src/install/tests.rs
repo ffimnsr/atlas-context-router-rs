@@ -768,7 +768,7 @@ fn git_hooks_installed_and_executable() {
     let tmp = TempDir::new().unwrap();
     repo_with_git(tmp.path());
     let hooks = install_git_hooks(tmp.path(), false, false).unwrap();
-    assert_eq!(hooks.len(), 4);
+    assert_eq!(hooks.len(), 5);
     for hook in hooks {
         let file_name = hook
             .file_name()
@@ -850,7 +850,7 @@ fn install_git_hooks_force_replaces_non_atlas_hook() {
 
     let hooks = install_git_hooks(tmp.path(), false, true).unwrap();
 
-    assert_eq!(hooks.len(), 4);
+    assert_eq!(hooks.len(), 5);
     let content = fs::read_to_string(hook).unwrap();
     assert!(!content.contains("echo custom"));
     assert!(content.contains(HOOK_START_MARKER));
@@ -872,12 +872,18 @@ fn install_summary_reports_all_git_hooks() {
         },
     )
     .unwrap();
-    assert_eq!(summary.hook_paths.len(), 4);
+    assert_eq!(summary.hook_paths.len(), 5);
     assert!(
         summary
             .hook_paths
             .iter()
             .any(|path| path.ends_with("pre-commit"))
+    );
+    assert!(
+        summary
+            .hook_paths
+            .iter()
+            .any(|path| path.ends_with("post-commit"))
     );
     assert!(
         summary
