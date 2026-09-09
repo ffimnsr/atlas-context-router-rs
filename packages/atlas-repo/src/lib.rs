@@ -20,8 +20,8 @@ mod root;
 pub use diff::{DiffTarget, changed_files, head_ref};
 pub use files::{
     CollectFilesStats, DEFAULT_IGNORE_PATTERNS, DEFAULT_MAX_FILE_BYTES, collect_files,
-    collect_supported_files, collect_supported_files_with_stats, glob_match, load_atlasignore,
-    should_ignore,
+    collect_supported_files, collect_supported_files_with_stats, estimate_tracked_files,
+    glob_match, load_atlasignore, should_ignore,
 };
 pub use hash::hash_file;
 pub use owners::{PackageOwners, WorkspaceRoot, discover_package_owners};

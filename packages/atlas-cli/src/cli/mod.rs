@@ -52,8 +52,9 @@ pub struct Cli {
 pub enum Command {
     /// Initialize the atlas work directory and database in the current repo.
     Init {
-        /// Config template profile to write on first init.
-        #[arg(long, default_value = "standard", value_parser = ["minimal", "standard", "full"])]
+        /// Config template profile to write on first init: auto tunes build/
+        /// search/mcp/context values from hardware and repo size.
+        #[arg(long, default_value = "auto", value_parser = ["minimal", "standard", "full", "auto"])]
         profile: String,
     },
 

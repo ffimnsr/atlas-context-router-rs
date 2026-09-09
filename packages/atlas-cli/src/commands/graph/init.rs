@@ -36,18 +36,50 @@ pub fn run_init(cli: &Cli) -> Result<()> {
     debug!(session_db_path = %session_db_path, "init: opened session store");
 
     let config_path = atlas_engine::paths::config_path(&repo);
-    let profile = match &cli.command {
-        Command::Init { profile } => match profile.as_str() {
-            "minimal" => atlas_engine::config::ConfigTemplateProfile::Minimal,
-            "standard" => atlas_engine::config::ConfigTemplateProfile::Standard,
-            "full" => atlas_engine::config::ConfigTemplateProfile::Full,
-            other => anyhow::bail!("unsupported init profile: {other}"),
-        },
+    let profile_label = match &cli.command {
+        Command::Init { profile } => profile.as_str(),
         _ => unreachable!(),
     };
-    let config_created = atlas_engine::Config::write_template(&atlas_dir, profile)
-        .with_context(|| format!("cannot write config to {}", config_path.display()))?;
-    debug!(config_path = %config_path.display(), config_created, profile = profile.as_str(), "init: prepared config template");
+    // Tuning inputs are collected only when a config will actually be written
+    // so re-runs stay cheap and never fail on probe errors (e.g. non-git dirs
+    // with an existing config).
+    let config_missing = !config_path.exists();
+    let (config_created, mut tuning) = match profile_label {
+        "auto" if config_missing => {
+            let system = atlas_engine::config::probe_system();
+            let repo_estimate = atlas_engine::config::probe_repo(std::path::Path::new(&repo))
+                .with_context(|| format!("cannot estimate repo size for {repo}"))?;
+            let eff_cores = system.physical_cores.clamp(1, 8);
+            let wall_est_s =
+                atlas_engine::config::estimate_build_wall_seconds(repo_estimate.files, eff_cores);
+            let created =
+                atlas_engine::Config::write_auto_template(&atlas_dir, &system, &repo_estimate)
+                    .with_context(|| format!("cannot write config to {}", config_path.display()))?;
+            let tuning = serde_json::json!({
+                "logical_cores": system.logical_cores,
+                "physical_cores": system.physical_cores,
+                "ram_total_mib": system.ram_total_bytes / (1024 * 1024),
+                "tracked_files": repo_estimate.files,
+                "tracked_bytes": repo_estimate.bytes,
+                "est_build_seconds": (wall_est_s * 10.0).round() as u64 / 10,
+            });
+            (created, if created { Some(tuning) } else { None })
+        }
+        "auto" => (false, None),
+        other => {
+            let profile = match other {
+                "minimal" => atlas_engine::config::ConfigTemplateProfile::Minimal,
+                "standard" => atlas_engine::config::ConfigTemplateProfile::Standard,
+                "full" => atlas_engine::config::ConfigTemplateProfile::Full,
+                unsupported => anyhow::bail!("unsupported init profile: {unsupported}"),
+            };
+            let created = atlas_engine::Config::write_template(&atlas_dir, profile)
+                .with_context(|| format!("cannot write config to {}", config_path.display()))?;
+            (created, None)
+        }
+    };
+    let profile = profile_label.to_owned();
+    debug!(config_path = %config_path.display(), config_created, profile, "init: prepared config template");
 
     let repo_registry = super::super::repo::bootstrap_and_save_registry(Utf8Path::new(&repo))
         .context("cannot bootstrap repo registry")?;
@@ -59,21 +91,22 @@ pub fn run_init(cli: &Cli) -> Result<()> {
     debug!(registry_path = %repo_registry_path, registrations = repo_registry.registrations.len(), "init: prepared repo registry");
 
     if cli.json {
-        print_json(
-            "init",
-            serde_json::json!({
-                "atlas_dir": atlas_dir.display().to_string(),
-                "db_path": db_path,
-                "content_db_path": content_db_path,
-                "session_db_path": session_db_path,
-                "config_path": config_path.display().to_string(),
-                "config_created": config_created,
-                "config_profile": profile.as_str(),
-                "repo_registry_path": repo_registry_path.to_string(),
-                "repo_registrations": repo_registry.registrations.len(),
-                "repo_registry_warnings": repo_registry.warnings,
-            }),
-        )?;
+        let mut payload = serde_json::json!({
+            "atlas_dir": atlas_dir.display().to_string(),
+            "db_path": db_path,
+            "content_db_path": content_db_path,
+            "session_db_path": session_db_path,
+            "config_path": config_path.display().to_string(),
+            "config_created": config_created,
+            "config_profile": profile,
+            "repo_registry_path": repo_registry_path.to_string(),
+            "repo_registrations": repo_registry.registrations.len(),
+            "repo_registry_warnings": repo_registry.warnings,
+        });
+        if let Some(tuning) = tuning.take() {
+            payload["auto_tuning"] = tuning;
+        }
+        print_json("init", payload)?;
     } else if super::super::init_wizard::should_run(cli.json) {
         let repo_root = std::path::Path::new(&repo);
         super::super::init_wizard::run(repo_root)?;

@@ -7,6 +7,7 @@
 
 mod accessors;
 mod analysis;
+mod auto;
 mod budget;
 mod build;
 mod context;
@@ -25,6 +26,10 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 pub use analysis::{AnalysisConfig, FeedbackAdjustmentConfig};
+pub use auto::{
+    RepoEstimate, SystemSnapshot, estimate_build_wall_seconds, probe_repo, probe_system,
+    render_auto_template, tuned_config,
+};
 pub use build::{BuildConfig, BuildRunBudget, DEFAULT_PARSE_BATCH_SIZE};
 pub use context::{
     ContextConfig, ContextTokenizerConfig, TokenizerFallbackMode, TokenizerProvider,

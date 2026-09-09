@@ -9,7 +9,7 @@ use atlas_core::{
 use tree_sitter::Node as TsNode;
 
 use super::InsightsEngine;
-use super::insights::{module_matches_any, path_matches_any};
+use super::insights::{module_matches_any, path_matches_ignore_list};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MetricValue<T> {
@@ -271,8 +271,11 @@ pub(super) fn is_ignored_node(
     owner_id: Option<&str>,
 ) -> bool {
     let module_id = module_id_for_file(&node.file_path, owner_id);
-    path_matches_any(&node.file_path, &engine.config().ignore_files)
-        || module_matches_any(&node.qualified_name, &engine.config().ignore_modules)
+    path_matches_ignore_list(
+        &node.file_path,
+        &engine.config().ignore_files,
+        engine.ignore_files_glob.as_ref(),
+    ) || module_matches_any(&node.qualified_name, &engine.config().ignore_modules)
         || module_matches_any(&module_id, &engine.config().ignore_modules)
         || owner_id.is_some_and(|owner| module_matches_any(owner, &engine.config().ignore_modules))
         || engine

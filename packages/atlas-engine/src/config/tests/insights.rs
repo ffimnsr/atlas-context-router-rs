@@ -19,6 +19,29 @@ fn insights_config_rejects_non_positive_thresholds() {
 }
 
 #[test]
+fn insights_config_rejects_invalid_ignore_file_globs() {
+    let mut config = Config::default();
+    config.insights.ignore_files = vec!["[".to_owned()];
+
+    let err = config
+        .insights_config()
+        .expect_err("invalid ignore_files glob");
+    assert!(
+        err.to_string()
+            .contains("insights.ignore_files[0] is not a valid glob")
+    );
+}
+
+#[test]
+fn insights_config_accepts_ignore_file_globs_and_prefixes() {
+    let mut config = Config::default();
+    config.insights.ignore_files = vec!["*.md".to_owned(), "*.json".to_owned(), "tests".to_owned()];
+    config
+        .insights_config()
+        .expect("valid globs and legacy prefixes are accepted");
+}
+
+#[test]
 fn insights_config_rejects_outlier_percentile_above_100() {
     let mut config = Config::default();
     config.insights.outlier_percentile_cutoff = 101;

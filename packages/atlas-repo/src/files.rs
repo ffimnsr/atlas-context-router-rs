@@ -79,6 +79,41 @@ pub fn collect_files(repo_root: &Utf8Path, max_bytes: Option<u64>) -> Result<Vec
     Ok(files)
 }
 
+/// Quick size estimate of the tracked worktree for init-time tuning.
+///
+/// Returns the number of git-tracked (plus untracked-but-not-ignored) files and
+/// their total byte size. Uses one stat syscall per file, parallelized with std
+/// scoped threads; never reads file contents. Submodules are included, matching
+/// [`collect_files`] semantics.
+pub fn estimate_tracked_files(repo_root: &Utf8Path) -> Result<(usize, u64)> {
+    let paths = git_ls_files(repo_root)?;
+    let files = paths.len();
+    let workers = std::thread::available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(1)
+        .max(1);
+    let bytes: u64 = std::thread::scope(|scope| {
+        let mut handles = Vec::new();
+        for chunk in paths.chunks(paths.len().div_ceil(workers).max(1)) {
+            handles.push(scope.spawn(move || {
+                chunk
+                    .iter()
+                    .filter_map(|path| {
+                        std::fs::metadata(repo_root.join(path.as_path()).as_std_path())
+                            .ok()
+                            .map(|meta| meta.len())
+                    })
+                    .sum::<u64>()
+            }));
+        }
+        handles
+            .into_iter()
+            .filter_map(|handle| handle.join().ok())
+            .sum()
+    });
+    Ok((files, bytes))
+}
+
 /// Collect all git-tracked files under `repo_root`, applying the same filters
 /// as [`collect_files`] plus a caller-supplied support predicate.
 ///

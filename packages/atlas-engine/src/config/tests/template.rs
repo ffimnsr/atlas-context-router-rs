@@ -49,13 +49,44 @@ fn render_template_full_activates_keys() {
     assert!(template.contains("ignore_node_kinds = [\"import\"]"));
     assert!(template.contains("[[insights.layer_rules]]\nname = \"api\""));
     assert!(template.contains("# layer_rules_file = \"layer-rules.toml\""));
-    assert!(template.contains("[sanitization]\nredaction_rules_file = \"\""));
+    // Unset optionals are omitted rather than rendered as `key = ""`, which
+    // would fail config validation on load.
+    assert!(!template.contains("redaction_rules_file ="));
     assert!(template.contains("[mcp.http_auth]\nenabled = true"));
     assert!(template.contains("required_scopes = { mcp = [\"atlas:mcp\", \"atlas:read\"] }"));
-    // Tokenizer accounting: active heuristic defaults in the full profile.
+    // Tokenizer accounting: active heuristic defaults in the full profile;
+    // unset optional model/tokenizer_file keys are omitted.
     assert!(template.contains(
-        "[context.tokenizer]\nprovider = \"heuristic\"\nmodel = \"\"\ntokenizer_file = \"\"\nfallback = \"heuristic\"\nbytes_per_token = 4"
+        "[context.tokenizer]\nprovider = \"heuristic\"\nfallback = \"heuristic\"\nbytes_per_token = 4"
     ));
+    assert!(!template.contains("tokenizer_file = \"\""));
+}
+
+#[test]
+fn full_and_auto_templates_round_trip_through_config_load() {
+    use std::fs;
+    use tempfile::tempdir;
+
+    for content in [
+        Config::render_template(ConfigTemplateProfile::Full).expect("full template"),
+        render_auto_template(
+            &super::super::auto::SystemSnapshot {
+                logical_cores: 8,
+                physical_cores: 8,
+                ram_total_bytes: 16 * 1024 * 1024 * 1024,
+                ram_available_bytes: 8 * 1024 * 1024 * 1024,
+            },
+            &super::super::auto::RepoEstimate {
+                files: 1_000,
+                bytes: 64 * 1024 * 1024,
+            },
+        )
+        .expect("auto template"),
+    ] {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("config.toml"), &content).expect("write config");
+        Config::load(dir.path()).expect("template must load without validation errors");
+    }
 }
 
 #[test]

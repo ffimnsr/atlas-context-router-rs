@@ -12,6 +12,7 @@ pub enum ConfigTemplateProfile {
     Minimal,
     Standard,
     Full,
+    Auto,
 }
 
 impl ConfigTemplateProfile {
@@ -20,13 +21,33 @@ impl ConfigTemplateProfile {
             Self::Minimal => "minimal",
             Self::Standard => "standard",
             Self::Full => "full",
+            Self::Auto => "auto",
         }
     }
 }
 
 impl Config {
     pub fn render_template(profile: ConfigTemplateProfile) -> Result<String> {
-        let active = Self::profile(profile);
+        match profile {
+            ConfigTemplateProfile::Auto => anyhow::bail!(
+                "auto profile requires hardware and repo probes; use Config::render_auto_template"
+            ),
+            _ => Self::render_template_with(profile, Self::profile(profile), Vec::new()),
+        }
+    }
+
+    /// Render a template from an explicit active config. `extra_banner_lines`
+    /// are appended after the profile banner (used by the auto profile to
+    /// explain its tuning inputs).
+    pub(crate) fn render_template_with(
+        profile: ConfigTemplateProfile,
+        active: Config,
+        extra_banner_lines: Vec<String>,
+    ) -> Result<String> {
+        let active_mode = matches!(
+            profile,
+            ConfigTemplateProfile::Full | ConfigTemplateProfile::Auto
+        );
         active.build_run_budget()?;
         active.budget_policy()?;
         active.insights.validate()?;
@@ -68,6 +89,14 @@ impl Config {
                 );
                 lines.push(String::new());
             }
+            ConfigTemplateProfile::Auto => {}
+        }
+
+        for line in &extra_banner_lines {
+            lines.push(line.clone());
+        }
+        if !extra_banner_lines.is_empty() {
+            lines.push(String::new());
         }
 
         lines.extend(render_section(
@@ -99,7 +128,7 @@ impl Config {
                     active.build.max_wall_time_ms.to_string(),
                 ),
             ],
-            profile == ConfigTemplateProfile::Full,
+            active_mode,
         ));
 
         lines.extend(render_section(
@@ -118,7 +147,7 @@ impl Config {
                     active.search.max_query_wall_time_ms.to_string(),
                 ),
             ],
-            profile == ConfigTemplateProfile::Full,
+            active_mode,
         ));
 
         lines.extend(render_section(
@@ -145,7 +174,7 @@ impl Config {
                     active.search.embedding.retry_backoff_ms.to_string(),
                 ),
             ],
-            profile == ConfigTemplateProfile::Full,
+            active_mode,
         ));
 
         lines.extend(render_section(
@@ -184,7 +213,7 @@ impl Config {
                     active.analysis.feedback_adjustment.enabled.to_string(),
                 ),
             ],
-            profile == ConfigTemplateProfile::Full,
+            active_mode,
         ));
 
         lines.extend(render_section(
@@ -333,7 +362,7 @@ impl Config {
                     render_string_array(&active.insights.ignore_node_kinds),
                 ),
             ],
-            profile == ConfigTemplateProfile::Full,
+            active_mode,
         ));
 
         lines.push("# layer_rules_file = \"layer-rules.toml\"".to_owned());
@@ -347,7 +376,7 @@ impl Config {
             "sanitization",
             &[(
                 "redaction_rules_file",
-                if profile == ConfigTemplateProfile::Full {
+                if active_mode {
                     render_optional_string(active.sanitization.redaction_rules_file.as_deref())
                 } else {
                     render_optional_example_string(
@@ -356,7 +385,7 @@ impl Config {
                     )
                 },
             )],
-            profile == ConfigTemplateProfile::Full,
+            active_mode,
         ));
 
         lines.extend(render_section(
@@ -405,7 +434,7 @@ impl Config {
                     active.context.max_saved_context_bytes.to_string(),
                 ),
             ],
-            profile == ConfigTemplateProfile::Full,
+            active_mode,
         ));
 
         lines.extend(render_section(
@@ -417,7 +446,7 @@ impl Config {
                 ),
                 (
                     "model",
-                    if profile == ConfigTemplateProfile::Full {
+                    if active_mode {
                         render_optional_string(active.context.tokenizer.model.as_deref())
                     } else {
                         render_optional_example_string(
@@ -428,7 +457,7 @@ impl Config {
                 ),
                 (
                     "tokenizer_file",
-                    if profile == ConfigTemplateProfile::Full {
+                    if active_mode {
                         render_optional_string(active.context.tokenizer.tokenizer_file.as_deref())
                     } else {
                         render_optional_example_string(
@@ -446,7 +475,7 @@ impl Config {
                     active.context.tokenizer.bytes_per_token.to_string(),
                 ),
             ],
-            profile == ConfigTemplateProfile::Full,
+            active_mode,
         ));
         // Tokenizer-backed example: keep commented unless a real local file
         // exists, so generated templates never activate a missing file.
@@ -470,7 +499,7 @@ impl Config {
                     active.mcp.max_mcp_response_bytes.to_string(),
                 ),
             ],
-            profile == ConfigTemplateProfile::Full,
+            active_mode,
         ));
 
         lines.extend(render_section(
@@ -502,7 +531,7 @@ impl Config {
                     render_string_array(&active.mcp.http_auth.allowed_origins),
                 ),
             ],
-            profile == ConfigTemplateProfile::Full,
+            active_mode,
         ));
 
         lines.push(String::new());
@@ -528,7 +557,7 @@ impl Config {
                 "allow_custom_frontends",
                 active.memory.allow_custom_frontends.to_string(),
             )],
-            profile == ConfigTemplateProfile::Full,
+            active_mode,
         ));
 
         lines.extend(render_section(
@@ -543,7 +572,7 @@ impl Config {
                     active.memory.decay.critical_never_prune.to_string(),
                 ),
             ],
-            profile == ConfigTemplateProfile::Full,
+            active_mode,
         ));
         lines.push(
             "# critical memories are never auto-pruned while critical_never_prune = true"
@@ -563,7 +592,7 @@ impl Config {
                     active.memory.wake_up.max_pending_changes.to_string(),
                 ),
             ],
-            profile == ConfigTemplateProfile::Full,
+            active_mode,
         ));
         lines.push(
             "# wake-up pack lists are capped by max_items; feedback is always the smallest list"
@@ -577,6 +606,10 @@ impl Config {
         let mut config = Self::default();
         match profile {
             ConfigTemplateProfile::Minimal => {}
+            ConfigTemplateProfile::Auto => {
+                // Tuned values are produced by `config::auto::tuned_config`;
+                // this arm keeps `profile()` total for exhaustive matches.
+            }
             ConfigTemplateProfile::Standard => {
                 config.build.parse_batch_size = 64;
                 config.search.max_query_wall_time_ms = 30_000;
@@ -639,8 +672,13 @@ impl Config {
 }
 
 fn render_section(name: &str, fields: &[(&str, String)], active: bool) -> Vec<String> {
-    let mut lines = vec![format!("[{}]", name)];
+    let mut lines = vec![format!("[{name}]")];
     for (key, value) in fields {
+        // Unset optionals render as the empty-string literal; emitting
+        // `key = ""` would produce config that fails validation on load.
+        if value == "\"\"" {
+            continue;
+        }
         if active {
             lines.push(format!("{key} = {value}"));
         } else {
@@ -704,7 +742,10 @@ fn render_insights_layer_rules(
     rules: &[InsightsLayerRule],
     profile: ConfigTemplateProfile,
 ) -> Vec<String> {
-    let active = profile == ConfigTemplateProfile::Full;
+    let active = matches!(
+        profile,
+        ConfigTemplateProfile::Full | ConfigTemplateProfile::Auto
+    );
     if rules.is_empty() && active {
         return Vec::new();
     }

@@ -8,6 +8,9 @@ Versioning policy may evolve while Atlas is still moving quickly, but release no
 
 ### Features
 
+- `atlas init --profile auto` (new default) tunes `[build]`/`[search]`/`[mcp]`/`[context]`/`[insights]` from hardware (cores, RAM via `sysinfo`) and repo size (git-tracked file count + bytes), with all values clamped to policy safe maxima and a tuning summary in `--json` output
+- `[insights] ignore_files` accepts glob patterns (`*.md`, `*.json`) in addition to legacy exact/prefix entries, with load-time glob validation; invalid globs are rejected at config load
+- accept repo-relative, repo-dir-prefixed, and absolute-under-root file paths on every MCP and CLI file-path surface (discovery tools, context/change-source tools, graph and analysis tools, `docs-section`, `context`, `impact`, `review-context`, `explain-change`, `update --files`, `insights --files`, `analyze dead-code --subpath`, `query --subpath`) with structured not-found/ambiguity errors
 - support canonical relative, `~`, `$HOME`, and `${HOME}` repository paths for portable editor configuration
 
 ## 1.7.5 - 2026-09-03

@@ -9,6 +9,7 @@ use tempfile::tempdir;
 
 use super::{Config, ConfigTemplateProfile, TokenizerFallbackMode, TokenizerProvider};
 
+mod auto;
 mod insights;
 mod load;
 mod mcp;

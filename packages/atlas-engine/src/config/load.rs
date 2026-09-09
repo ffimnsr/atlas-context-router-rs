@@ -109,11 +109,33 @@ impl Config {
     ///
     /// Does not overwrite an existing file.
     pub fn write_template(atlas_dir: &Path, profile: ConfigTemplateProfile) -> Result<bool> {
+        if profile == ConfigTemplateProfile::Auto {
+            anyhow::bail!(
+                "auto profile requires hardware and repo probes; use Config::write_auto_template"
+            );
+        }
         let path = atlas_dir.join(crate::paths::ATLAS_CONFIG);
         if path.exists() {
             return Ok(false);
         }
         let content = Self::render_template(profile)?;
+        fs::write(&path, content).with_context(|| format!("cannot write {}", path.display()))?;
+        Ok(true)
+    }
+
+    /// Write the tuned auto-profile config to `<atlas_dir>/config.toml`.
+    ///
+    /// Does not overwrite an existing file.
+    pub fn write_auto_template(
+        atlas_dir: &Path,
+        system: &super::auto::SystemSnapshot,
+        repo: &super::auto::RepoEstimate,
+    ) -> Result<bool> {
+        let path = atlas_dir.join(crate::paths::ATLAS_CONFIG);
+        if path.exists() {
+            return Ok(false);
+        }
+        let content = super::auto::render_auto_template(system, repo)?;
         fs::write(&path, content).with_context(|| format!("cannot write {}", path.display()))?;
         Ok(true)
     }

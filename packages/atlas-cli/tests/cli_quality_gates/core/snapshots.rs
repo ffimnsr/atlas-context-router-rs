@@ -53,7 +53,8 @@ fn update_dry_run_output_matches_golden() {
 #[test]
 fn doctor_output_matches_golden() {
     let repo = setup_fixture_repo();
-    run_atlas(repo.path(), &["init"]);
+    // Standard profile keeps the golden snapshot machine-independent.
+    run_atlas(repo.path(), &["init", "--profile", "standard"]);
     run_atlas(repo.path(), &["build"]);
 
     assert_cli_json_snapshot(

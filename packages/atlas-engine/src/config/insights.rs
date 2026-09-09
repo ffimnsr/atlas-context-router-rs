@@ -12,6 +12,12 @@ use super::{
     validate_positive_f64, validate_usize_limit,
 };
 
+pub(crate) fn has_glob_meta(pattern: &str) -> bool {
+    pattern
+        .bytes()
+        .any(|byte| matches!(byte, b'*' | b'?' | b'['))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InsightsLayerRule {
@@ -65,6 +71,9 @@ pub struct InsightsConfig {
     pub duplicate_medium_threshold: f64,
     pub duplicate_low_threshold: f64,
     pub duplicate_suppressions: Vec<String>,
+    /// Repo-relative file paths (exact or directory-prefix) or glob patterns
+    /// (e.g. `*.md`, `**/fixtures/*.json`) excluded from insights reports.
+    /// Glob matching uses globset semantics; `*` crosses path separators.
     pub ignore_files: Vec<String>,
     pub ignore_modules: Vec<String>,
     pub ignore_node_kinds: Vec<String>,
@@ -249,6 +258,12 @@ impl InsightsConfig {
         }
         for (index, value) in self.ignore_files.iter().enumerate() {
             validate_nonempty_string(&format!("insights.ignore_files[{index}]"), value)?;
+            if has_glob_meta(value) && globset::Glob::new(value).is_err() {
+                anyhow::bail!(
+                    "insights.ignore_files[{index}] is not a valid glob: {value} \
+                     (patterns match repo-relative file paths; escape literal '[' as '[[')"
+                );
+            }
         }
         for (index, value) in self.ignore_modules.iter().enumerate() {
             validate_nonempty_string(&format!("insights.ignore_modules[{index}]"), value)?;

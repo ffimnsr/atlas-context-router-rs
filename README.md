@@ -134,12 +134,19 @@ Atlas shells out to `git`, so the runtime stage uses a minimal Git-capable base 
 Inside any git repository:
 
 ```bash
-atlas init --profile standard
+atlas init            # default --profile auto: tunes config to your hardware and repo
 atlas build
 atlas status
 atlas debug-config
 atlas query "symbol_name"
 ```
+
+`atlas init --profile auto` (the default) writes an active `config.toml` tuned
+from detected cores/RAM and the repo's tracked file count — build wall-time and
+byte budgets, MCP worker threads, context/search limits, and an insights
+ignore-list for docs/data files (`*.md`, `*.json`). All tuned values stay within
+policy safe maxima. `minimal`, `standard`, and `full` templates remain available
+via `--profile`.
 
 Repair local Atlas state without rebuilding graph data:
 

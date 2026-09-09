@@ -7,7 +7,7 @@ fn parse_init_command() {
     let cli = parse(&["atlas", "init"]);
     assert!(matches!(
         cli.command,
-        Command::Init { ref profile } if profile == "standard"
+        Command::Init { ref profile } if profile == "auto"
     ));
 }
 #[test]
@@ -16,6 +16,14 @@ fn parse_init_full_profile() {
     assert!(matches!(
         cli.command,
         Command::Init { ref profile } if profile == "full"
+    ));
+}
+#[test]
+fn parse_init_auto_profile() {
+    let cli = parse(&["atlas", "init", "--profile", "auto"]);
+    assert!(matches!(
+        cli.command,
+        Command::Init { ref profile } if profile == "auto"
     ));
 }
 #[test]

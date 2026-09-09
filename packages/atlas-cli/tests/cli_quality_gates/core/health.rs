@@ -20,7 +20,8 @@ fn quarantine_artifacts(atlas_dir: &std::path::Path) -> Vec<std::path::PathBuf> 
 fn sqlite_fts5_smoke_round_trip() {
     let repo = setup_fixture_repo();
 
-    run_atlas(repo.path(), &["init"]);
+    // Standard profile keeps MCP worker expectations machine-independent.
+    run_atlas(repo.path(), &["init", "--profile", "standard"]);
     run_atlas(repo.path(), &["build"]);
 
     let status = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
@@ -48,7 +49,8 @@ fn sqlite_fts5_smoke_round_trip() {
 fn doctor_reports_mcp_serve_config() {
     let repo = setup_fixture_repo();
 
-    run_atlas(repo.path(), &["init"]);
+    // Standard profile keeps MCP worker expectations machine-independent.
+    run_atlas(repo.path(), &["init", "--profile", "standard"]);
     run_atlas(repo.path(), &["build"]);
 
     let output = sanitized_command(env!("CARGO_BIN_EXE_atlas"))
@@ -622,6 +624,51 @@ fn init_full_profile_writes_active_config_template() {
     assert!(config_text.contains("build_graph = 900000"));
     assert!(config_text.contains("update_graph = 900000"));
     assert!(config_text.contains("get_review_context = 120000"));
+}
+
+#[test]
+fn init_auto_profile_writes_tuned_active_config() {
+    let repo = setup_fixture_repo();
+
+    let data = read_json_data_output(
+        "init",
+        run_atlas(repo.path(), &["--json", "init", "--profile", "auto"]),
+    );
+    let config_path = repo.path().join(".atlas").join("config.toml");
+    let config_text = fs::read_to_string(&config_path).expect("read generated config");
+
+    assert_eq!(data["config_profile"], json!("auto"));
+    assert_eq!(data["config_created"], json!(true));
+    let tuning = data["auto_tuning"]
+        .as_object()
+        .expect("auto_tuning present");
+    assert!(tuning["tracked_files"].as_u64().is_some());
+    assert!(tuning["physical_cores"].as_u64().is_some());
+    assert!(tuning["est_build_seconds"].as_u64().is_some());
+
+    assert!(config_text.contains("# profile = \"auto\""));
+    // Tuned values are active and validated by policy bounds.
+    assert!(config_text.contains("max_wall_time_ms = "));
+    assert!(config_text.contains("max_files_per_run = "));
+    assert!(config_text.contains("worker_threads = "));
+    assert!(config_text.contains("ignore_files = [\"*.md\", \"*.json\"]"));
+    assert!(config_text.contains("est_build="));
+
+    // Re-running init is non-destructive: existing config is never overwritten
+    // and probes are skipped entirely.
+    let second = read_json_data_output(
+        "init",
+        run_atlas(repo.path(), &["--json", "init", "--profile", "auto"]),
+    );
+    assert_eq!(second["config_created"], json!(false));
+    assert!(
+        second.get("auto_tuning").is_none(),
+        "re-run must not probe hardware/repo when config already exists"
+    );
+    assert_eq!(
+        fs::read_to_string(&config_path).expect("config unchanged"),
+        config_text
+    );
 }
 
 #[test]

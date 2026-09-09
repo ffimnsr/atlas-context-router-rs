@@ -18,6 +18,7 @@ pub struct InsightsEngine<'s> {
     store: Option<&'s Store>,
     summary: InsightsGraphSummary,
     config: atlas_engine::config::InsightsConfig,
+    pub(super) ignore_files_glob: Option<globset::GlobSet>,
     generated_at: String,
 }
 
@@ -33,6 +34,7 @@ impl<'s> InsightsEngine<'s> {
                 atlas_provenance: store.provenance_meta()?,
                 atlas_freshness: None,
             },
+            ignore_files_glob: build_ignore_files_glob(&config.ignore_files),
             config,
             generated_at: format_rfc3339(now_utc()),
         })
@@ -45,6 +47,7 @@ impl<'s> InsightsEngine<'s> {
         Self {
             store: None,
             summary,
+            ignore_files_glob: build_ignore_files_glob(&config.ignore_files),
             config,
             generated_at: format_rfc3339(now_utc()),
         }
@@ -149,14 +152,16 @@ impl<'s> InsightsEngine<'s> {
 
     fn is_ignored_finding(&self, finding: &InsightFinding) -> bool {
         finding.evidence.iter().any(|evidence| {
-            evidence
-                .file_path
+            evidence.file_path.as_deref().is_some_and(|path| {
+                path_matches_ignore_list(
+                    path,
+                    &self.config.ignore_files,
+                    self.ignore_files_glob.as_ref(),
+                )
+            }) || evidence
+                .qualified_name
                 .as_deref()
-                .is_some_and(|path| path_matches_any(path, &self.config.ignore_files))
-                || evidence
-                    .qualified_name
-                    .as_deref()
-                    .is_some_and(|qname| module_matches_any(qname, &self.config.ignore_modules))
+                .is_some_and(|qname| module_matches_any(qname, &self.config.ignore_modules))
                 || evidence.node_kind.as_deref().is_some_and(|kind| {
                     self.config
                         .ignore_node_kinds
@@ -165,6 +170,39 @@ impl<'s> InsightsEngine<'s> {
                 })
         })
     }
+}
+
+fn has_glob_meta(pattern: &str) -> bool {
+    pattern
+        .bytes()
+        .any(|byte| matches!(byte, b'*' | b'?' | b'['))
+}
+
+/// Compile glob-style `ignore_files` entries (`*.md`, `**/fixtures/*.json`)
+/// into a matcher. Exact/prefix entries keep their legacy semantics; invalid
+/// globs are skipped here (config validation reports them at load time).
+pub(super) fn build_ignore_files_glob(patterns: &[String]) -> Option<globset::GlobSet> {
+    let mut builder = globset::GlobSetBuilder::new();
+    let mut any = false;
+    for pattern in patterns {
+        if has_glob_meta(pattern)
+            && let Ok(glob) = globset::Glob::new(pattern)
+        {
+            builder.add(glob);
+            any = true;
+        }
+    }
+    if any { builder.build().ok() } else { None }
+}
+
+/// Match a repo-relative file path against `ignore_files`: compiled globs
+/// first, then legacy exact/prefix entries.
+pub(super) fn path_matches_ignore_list(
+    path: &str,
+    patterns: &[String],
+    globs: Option<&globset::GlobSet>,
+) -> bool {
+    globs.is_some_and(|set| set.is_match(path)) || path_matches_any(path, patterns)
 }
 
 pub(super) fn path_matches_any(path: &str, patterns: &[String]) -> bool {
