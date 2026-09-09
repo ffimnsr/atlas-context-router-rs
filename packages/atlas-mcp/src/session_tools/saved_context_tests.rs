@@ -551,10 +551,17 @@ fn test_purge_saved_context_rejects_tampered_request_state() {
     let first_body = tool_body(&first);
     let request_state = first_body["requestState"].as_str().unwrap();
     let mut tampered_chars = request_state.chars().collect::<Vec<_>>();
-    let last = tampered_chars
-        .last_mut()
-        .expect("sealed requestState must not be empty");
-    *last = if *last == 'A' { 'B' } else { 'A' };
+    // Tamper a full-width base64url character inside the signature section.
+    // The final character carries the canonical trailing-bits remainder, so
+    // flipping it can yield a non-canonical encoding that fails base64url
+    // decoding ("must be valid sealed JSON") instead of MAC verification
+    // ("signature mismatch"); the penultimate character is always full-width.
+    let flip_index = tampered_chars
+        .len()
+        .checked_sub(2)
+        .expect("sealed requestState must have a signature section");
+    let flip = &mut tampered_chars[flip_index];
+    *flip = if *flip == 'A' { 'B' } else { 'A' };
     let tampered_state = tampered_chars.into_iter().collect::<String>();
 
     let error = {
