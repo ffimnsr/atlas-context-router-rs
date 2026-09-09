@@ -6,3 +6,4 @@
 # everyone who runs the test benefits from these saved cases.
 cc 230eacb65d3262a13e8ca2612352b8ff68ffca4ebd3309af009593ca0789f4ef # shrinks to input = "/"
 cc 2e1038e5fd8da0629aeb0d2bc7de77734c8868b474fe2b00a8995d1f2e1fb818 # shrinks to input = "*"
+cc 0ca94722978c1011a0e7a60ad5732ee0060a4f8199981dea21c29fca0f01d7e5 # shrinks to input = "OR"

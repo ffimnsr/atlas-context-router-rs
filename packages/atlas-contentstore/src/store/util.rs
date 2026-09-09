@@ -17,15 +17,34 @@ pub(super) fn format_days_ago(days: u32) -> String {
     format_days_ago_with(&SystemClock, days)
 }
 
+/// FTS5 bare-keyword operators that error when used as bare queries or at
+/// query edges (case-sensitive per FTS5; lowercase spellings are plain terms).
+const FTS5_BARE_OPERATORS: [&str; 3] = ["AND", "OR", "NOT"];
+
 pub(super) fn fts5_escape(input: &str) -> String {
     let has_special = input
         .chars()
         .any(|c| matches!(c, '"' | '(' | ')' | '^' | '-' | '*'));
-    if has_special {
+    if has_special || has_misplaced_operator(input) {
         format!("\"{}\"", input.replace('"', "\"\""))
     } else {
         input.to_string()
     }
+}
+
+/// True when a bare-keyword operator appears at an edge or adjacent to
+/// another operator, which FTS5 rejects as a syntax error (e.g. bare `OR`,
+/// `a OR`, `OR a`, `a OR OR b`).
+fn has_misplaced_operator(input: &str) -> bool {
+    let tokens: Vec<&str> = input.split_whitespace().collect();
+    let is_operator = |token: &str| FTS5_BARE_OPERATORS.contains(&token);
+    tokens.iter().enumerate().any(|(index, token)| {
+        is_operator(token)
+            && (index == 0
+                || index + 1 == tokens.len()
+                || is_operator(tokens[index - 1])
+                || is_operator(tokens[index + 1]))
+    })
 }
 
 /// Extract vocabulary terms from text for the vocabulary table.
@@ -193,5 +212,25 @@ mod tests {
         let clock = FixedClock::new(now);
         assert_eq!(format_now_with(&clock), "2023-11-14T22:13:20Z");
         assert_eq!(format_days_ago_with(&clock, 2), "2023-11-12T22:13:20Z");
+    }
+
+    #[test]
+    fn fts5_escape_quotes_bare_or_misplaced_operators() {
+        for bare in ["AND", "OR", "NOT"] {
+            assert_eq!(fts5_escape(bare), format!("\"{bare}\""), "bare {bare}");
+        }
+        assert_eq!(fts5_escape("a OR"), "\"a OR\"");
+        assert_eq!(fts5_escape("OR a"), "\"OR a\"");
+        assert_eq!(fts5_escape("a AND OR b"), "\"a AND OR b\"");
+    }
+
+    #[test]
+    fn fts5_escape_preserves_well_placed_operators_and_lowercase_words() {
+        assert_eq!(fts5_escape("a OR b"), "a OR b");
+        assert_eq!(fts5_escape("a AND b AND c"), "a AND b AND c");
+        assert_eq!(fts5_escape("a NOT b"), "a NOT b");
+        assert_eq!(fts5_escape("or"), "or");
+        assert_eq!(fts5_escape("and"), "and");
+        assert_eq!(fts5_escape("not"), "not");
     }
 }

@@ -239,6 +239,10 @@ pub(super) fn repeat_placeholders(n: usize) -> String {
     (0..n).map(|_| "?").collect::<Vec<_>>().join(",")
 }
 
+/// FTS5 bare-keyword operators that error when used as bare queries or at
+/// query edges (case-sensitive per FTS5; lowercase spellings are plain terms).
+const FTS5_BARE_OPERATORS: [&str; 3] = ["AND", "OR", "NOT"];
+
 /// Wrap a user-provided FTS5 query so special characters don't break syntax.
 /// Safe queries pass through unchanged; everything else is wrapped as a phrase.
 pub(super) fn fts5_escape(input: &str) -> String {
@@ -250,10 +254,23 @@ pub(super) fn fts5_escape(input: &str) -> String {
 }
 
 pub(super) fn looks_like_safe_fts_query(input: &str) -> bool {
-    !input.is_empty()
-        && input
-            .split_whitespace()
-            .all(|token| token == "OR" || looks_like_safe_fts_term(token))
+    let tokens: Vec<&str> = input.split_whitespace().collect();
+    if tokens.is_empty() {
+        return false;
+    }
+    let is_operator = |token: &str| FTS5_BARE_OPERATORS.contains(&token);
+    tokens.iter().enumerate().all(|(index, token)| {
+        if is_operator(token) {
+            // Bare operators need real operands on both sides; a bare `OR`,
+            // edge operator, or `a OR OR b` is an FTS5 syntax error.
+            index > 0
+                && index + 1 < tokens.len()
+                && !is_operator(tokens[index - 1])
+                && !is_operator(tokens[index + 1])
+        } else {
+            looks_like_safe_fts_term(token)
+        }
+    })
 }
 
 fn looks_like_safe_fts_term(token: &str) -> bool {
@@ -308,12 +325,29 @@ mod tests {
         assert_eq!(fts5_escape("*"), "\"*\"");
     }
 
+    fn safe_fts_query() -> impl Strategy<Value = String> {
+        // Terms interleaved with optional `OR`s, guaranteeing every operator
+        // has a real term on both sides (bare/edge operators are unsafe).
+        let term = string_regex(r"[A-Za-z0-9_]{1,8}\*?").unwrap();
+        (
+            proptest::collection::vec(term, 2..7),
+            proptest::collection::vec(any::<bool>(), 1..6),
+        )
+            .prop_map(|(terms, ors)| {
+                let mut tokens = vec![terms[0].clone()];
+                for (index, term) in terms.iter().skip(1).enumerate() {
+                    if ors.get(index).copied().unwrap_or(false) {
+                        tokens.push("OR".to_owned());
+                    }
+                    tokens.push(term.clone());
+                }
+                tokens.join(" ")
+            })
+    }
+
     proptest! {
         #[test]
-        fn safe_fts_queries_pass_through_unchanged(
-            tokens in proptest::collection::vec(string_regex(r"(?:OR|[A-Za-z0-9_]{1,8}\*?)").unwrap(), 1..6),
-        ) {
-            let query = tokens.join(" ");
+        fn safe_fts_queries_pass_through_unchanged(query in safe_fts_query()) {
             prop_assert!(looks_like_safe_fts_query(&query));
             prop_assert_eq!(fts5_escape(&query), query);
         }
