@@ -1575,7 +1575,7 @@ mod tests {
         let build = tool_manual("mcp", "build_graph").expect("build graph manual");
         assert_eq!(
             build.usage.target_tool_call_examples,
-            vec![r#"{"arguments":{},"name":"build_graph"}"#.to_owned()]
+            vec![r#"{"name":"build_graph","arguments":{}}"#.to_owned()]
         );
         assert!(
             build

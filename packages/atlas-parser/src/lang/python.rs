@@ -72,8 +72,8 @@ impl PythonSyntaxFacts {
 }
 
 impl LangParser for PythonParser {
-    fn language_name(&self) -> &'static str {
-        "python"
+    fn language_name(&self) -> std::borrow::Cow<'static, str> {
+        "python".into()
     }
 
     fn supports(&self, path: &str) -> bool {

@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use atlas_core::{BudgetReport, BuildUpdateBudgetCounters, PackageOwner, model::ParsedFile};
-use atlas_parser::ParserRegistry;
+use atlas_parser::{ExternalParserConfig, ParserRegistry};
 use atlas_repo::{
     collect_supported_files_with_stats, discover_package_owners, find_repo_root, hash_file,
     head_ref, stable_repo_fingerprint,
@@ -34,6 +34,8 @@ pub struct BuildOptions {
     pub source_repo_id: Option<String>,
     /// Prefix qualified names so equal paths/symbols from separate repos cannot collide.
     pub namespace_qualified_names: bool,
+    /// External (config-driven) parsers registered before the scan.
+    pub external_parsers: Vec<ExternalParserConfig>,
 }
 
 impl Default for BuildOptions {
@@ -45,6 +47,7 @@ impl Default for BuildOptions {
             budget: BuildRunBudget::default(),
             source_repo_id: None,
             namespace_qualified_names: false,
+            external_parsers: Vec::new(),
         }
     }
 }
@@ -109,7 +112,10 @@ pub fn build_graph(
         }
     }
 
-    let registry = ParserRegistry::with_defaults();
+    let mut registry = ParserRegistry::with_defaults();
+    registry
+        .register_externals(&opts.external_parsers)
+        .context("cannot register external parsers")?;
     let owners = discover_package_owners(repo_root).context("cannot discover package owners")?;
 
     let _scan_span = tracing::info_span!("build.scan").entered();
@@ -488,6 +494,7 @@ fn annotate_parsed_file_owner(parsed_file: &mut ParsedFile, owner: Option<&Packa
 mod tests {
     use super::*;
     use atlas_core::{BudgetStatus, Node, NodeId, NodeKind};
+    use atlas_parser::{ExternalParserConfig, ExternalSymbolRule};
     use atlas_store_sqlite::Store;
     use std::process::Command;
 
@@ -502,6 +509,113 @@ mod tests {
             .status()
             .expect("git command");
         assert!(status.success(), "git {args:?} failed");
+    }
+
+    /// Copy the vendored tree-sitter-rust grammar C sources into a tempdir so
+    /// the loader compiles it (same path a user grammar checkout would take).
+    fn external_rust_grammar() -> (tempfile::TempDir, camino::Utf8PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let src_dir = dir.path().join("grammar").join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+
+        let registry_dir = std::path::PathBuf::from(env!("CARGO_HOME")).join("registry/src");
+        let mut found = None;
+        for vendor_dir in std::fs::read_dir(&registry_dir).unwrap() {
+            let vendor_dir = vendor_dir.unwrap().path();
+            if !vendor_dir.is_dir() {
+                continue;
+            }
+            for entry in std::fs::read_dir(&vendor_dir).unwrap() {
+                let entry = entry.unwrap();
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with("tree-sitter-rust-")
+                    && entry.path().join("src/parser.c").exists()
+                {
+                    found = Some(entry.path().join("src"));
+                    break;
+                }
+            }
+            if found.is_some() {
+                break;
+            }
+        }
+        let src = found.unwrap_or_else(|| {
+            panic!(
+                "vendored tree-sitter-rust grammar source not found under {}",
+                registry_dir.display()
+            )
+        });
+        for file in ["parser.c", "scanner.c", "grammar.json", "node-types.json"] {
+            std::fs::copy(src.join(file), src_dir.join(file)).unwrap();
+        }
+        std::fs::create_dir_all(src_dir.join("tree_sitter")).unwrap();
+        for entry in std::fs::read_dir(src.join("tree_sitter")).unwrap() {
+            let entry = entry.unwrap();
+            std::fs::copy(
+                entry.path(),
+                src_dir.join("tree_sitter").join(entry.file_name()),
+            )
+            .unwrap();
+        }
+        let root =
+            camino::Utf8PathBuf::from(dir.path().join("grammar").to_string_lossy().into_owned());
+        (dir, root)
+    }
+
+    #[test]
+    fn build_graph_parses_external_language_from_config() {
+        let (_grammar_dir, grammar_root) = external_rust_grammar();
+        let lib_cache = tempfile::tempdir().unwrap();
+        let external = ExternalParserConfig {
+            language_name: "rust".to_owned(),
+            extensions: vec!["myrs".to_owned()],
+            grammar_dir: Some(grammar_root.to_string()),
+            lib_path: None,
+            lib_function: None,
+            grammar_lib_dir: Some(lib_cache.path().to_string_lossy().into_owned()),
+            symbols: vec![ExternalSymbolRule {
+                tree_kind: "function_item".to_owned(),
+                node_kind: NodeKind::Function,
+                name_field: "name".to_owned(),
+            }],
+            call_node_kinds: Vec::new(),
+            call_target_field: None,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo_root = dir.path();
+        git(repo_root, &["init", "--quiet"]);
+        std::fs::write(
+            repo_root.join("main.myrs"),
+            "fn hello() -> i32 {\n    1\n}\n",
+        )
+        .unwrap();
+        git(repo_root, &["add", "main.myrs"]);
+        git(repo_root, &["commit", "--quiet", "-m", "init"]);
+
+        let db_path = repo_root.join("worldtree.db");
+        let summary = build_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &BuildOptions {
+                fail_fast: true,
+                dry_run: false,
+                batch_size: 16,
+                budget: BuildRunBudget::default(),
+                source_repo_id: None,
+                namespace_qualified_names: false,
+                external_parsers: vec![external],
+            },
+        )
+        .unwrap();
+        assert_eq!(summary.parsed, 1, "external-language file must be parsed");
+
+        let store = Store::open(db_path.to_str().unwrap()).unwrap();
+        let sigs = store.node_signatures_by_file("main.myrs").unwrap();
+        assert!(
+            sigs.contains_key("main.myrs::function::hello"),
+            "external-language symbol must be in the graph"
+        );
     }
 
     #[test]
@@ -592,6 +706,7 @@ mod tests {
                 budget: BuildRunBudget::default(),
                 source_repo_id: None,
                 namespace_qualified_names: false,
+                external_parsers: vec![],
             },
         )
         .unwrap();
@@ -645,6 +760,7 @@ mod tests {
                 budget,
                 source_repo_id: None,
                 namespace_qualified_names: false,
+                external_parsers: vec![],
             },
         )
         .unwrap();
@@ -687,6 +803,7 @@ mod tests {
                 budget,
                 source_repo_id: None,
                 namespace_qualified_names: false,
+                external_parsers: vec![],
             },
         )
         .unwrap();
@@ -734,6 +851,7 @@ mod tests {
                 budget: BuildRunBudget::default(),
                 source_repo_id: None,
                 namespace_qualified_names: false,
+                external_parsers: vec![],
             },
         )
         .unwrap();
@@ -814,6 +932,7 @@ mod tests {
                 budget: BuildRunBudget::default(),
                 source_repo_id: Some(repo_a_id.clone()),
                 namespace_qualified_names: true,
+                external_parsers: vec![],
             },
         )
         .unwrap();
@@ -827,6 +946,7 @@ mod tests {
                 budget: BuildRunBudget::default(),
                 source_repo_id: Some(repo_b_id.clone()),
                 namespace_qualified_names: true,
+                external_parsers: vec![],
             },
         )
         .unwrap();

@@ -88,8 +88,8 @@ impl CSharpSyntaxFacts {
 }
 
 impl LangParser for CSharpParser {
-    fn language_name(&self) -> &'static str {
-        "csharp"
+    fn language_name(&self) -> std::borrow::Cow<'static, str> {
+        "csharp".into()
     }
 
     fn supports(&self, path: &str) -> bool {

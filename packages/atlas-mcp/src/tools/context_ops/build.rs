@@ -296,6 +296,8 @@ fn execute_graph_operation(
                     budget: build_budget,
                     source_repo_id: Some(stable_repo_id(repo_root_path.as_path())),
                     namespace_qualified_names: false,
+
+                    external_parsers: config.parsers.external.clone(),
                 },
             )
             .map(|summary| atlas_engine::UpdateSummary {
@@ -325,6 +327,8 @@ fn execute_graph_operation(
                     budget: build_budget,
                     source_repo_id: Some(stable_repo_id(repo_root_path.as_path())),
                     namespace_qualified_names: false,
+
+                    external_parsers: config.parsers.external.clone(),
                 },
             )
         };
@@ -543,6 +547,7 @@ fn execute_graph_operation(
                 budget: build_budget,
                 source_repo_id: Some(stable_repo_id(repo_root_path.as_path())),
                 namespace_qualified_names: false,
+                external_parsers: config.parsers.external.clone(),
             },
         );
 

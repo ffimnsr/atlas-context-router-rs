@@ -91,8 +91,8 @@ impl ScalaSyntaxFacts {
 }
 
 impl LangParser for ScalaParser {
-    fn language_name(&self) -> &'static str {
-        "scala"
+    fn language_name(&self) -> std::borrow::Cow<'static, str> {
+        "scala".into()
     }
 
     fn supports(&self, path: &str) -> bool {

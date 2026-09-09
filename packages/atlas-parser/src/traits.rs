@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use atlas_core::ParsedFile;
 
 /// Input provided to a language parser.
@@ -18,7 +20,7 @@ pub struct ParseContext<'a> {
 /// Trait implemented by each per-language parser.
 pub trait LangParser: Send + Sync {
     /// Language name returned in graph nodes (e.g. `"rust"`, `"go"`).
-    fn language_name(&self) -> &'static str;
+    fn language_name(&self) -> Cow<'static, str>;
 
     /// Returns `true` if this handler supports the given file extension.
     fn supports(&self, path: &str) -> bool;

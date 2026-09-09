@@ -24,8 +24,8 @@ use crate::traits::{LangParser, ParseContext};
 pub struct MarkdownParser;
 
 impl LangParser for MarkdownParser {
-    fn language_name(&self) -> &'static str {
-        "markdown"
+    fn language_name(&self) -> std::borrow::Cow<'static, str> {
+        "markdown".into()
     }
 
     fn supports(&self, path: &str) -> bool {

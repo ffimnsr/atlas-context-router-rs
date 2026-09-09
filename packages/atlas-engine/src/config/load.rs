@@ -34,10 +34,12 @@ impl Config {
         }
         let raw =
             fs::read_to_string(&path).with_context(|| format!("cannot read {}", path.display()))?;
-        let config: Self =
+        let mut config: Self =
             toml::from_str(&raw).with_context(|| format!("cannot parse {}", path.display()))?;
+        config.parsers.resolve_from(atlas_dir);
         config.insights.validate()?;
         config.insights.validate_layer_rules_file(atlas_dir)?;
+        config.parsers.validate()?;
         config.sanitization.validate(atlas_dir)?;
         config.context.tokenizer.validate()?;
         config.memory.validate()?;

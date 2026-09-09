@@ -77,8 +77,8 @@ impl CSyntaxFacts {
 }
 
 impl LangParser for CParser {
-    fn language_name(&self) -> &'static str {
-        "c"
+    fn language_name(&self) -> std::borrow::Cow<'static, str> {
+        "c".into()
     }
 
     fn supports(&self, path: &str) -> bool {

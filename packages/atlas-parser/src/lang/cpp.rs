@@ -83,8 +83,8 @@ impl CppSyntaxFacts {
 }
 
 impl LangParser for CppParser {
-    fn language_name(&self) -> &'static str {
-        "cpp"
+    fn language_name(&self) -> std::borrow::Cow<'static, str> {
+        "cpp".into()
     }
 
     fn supports(&self, path: &str) -> bool {

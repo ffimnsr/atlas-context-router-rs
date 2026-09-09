@@ -110,7 +110,7 @@ fn graph_relevant_changed_files(
     repo_root: &Utf8Path,
     changes: &[ChangedFile],
 ) -> Vec<String> {
-    let registry = ParserRegistry::with_defaults();
+    let registry = crate::commands::parser_registry_from_config(repo_root.as_str());
     let mut files: Vec<String> = changes
         .iter()
         .filter(|change| change_is_pending_in_graph(store, &registry, repo_root, change))

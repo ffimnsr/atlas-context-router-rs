@@ -921,7 +921,7 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
     let graph_freshness = if db_exists {
         match Store::open(&db_path_str) {
             Ok(store) => {
-                let registry = atlas_parser::ParserRegistry::with_defaults();
+                let registry = super::parser_registry_from_config(&repo);
                 // Collect stored file hashes once; used to detect whether atlas
                 // update has already indexed the current on-disk state.
                 let stored_hashes = store.file_hashes().unwrap_or_default();

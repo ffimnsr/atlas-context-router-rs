@@ -21,8 +21,8 @@ use declarations::{
 
 pub struct GoParser;
 impl LangParser for GoParser {
-    fn language_name(&self) -> &'static str {
-        "go"
+    fn language_name(&self) -> std::borrow::Cow<'static, str> {
+        "go".into()
     }
 
     fn supports(&self, path: &str) -> bool {

@@ -19,8 +19,8 @@ pub struct RustParser;
 
 const RUST_DEFINITION_QUERY: &str = include_str!("../../../queries/rust.scm");
 impl LangParser for RustParser {
-    fn language_name(&self) -> &'static str {
-        "rust"
+    fn language_name(&self) -> std::borrow::Cow<'static, str> {
+        "rust".into()
     }
 
     fn supports(&self, path: &str) -> bool {

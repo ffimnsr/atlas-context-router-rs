@@ -66,8 +66,8 @@ impl CssSyntaxFacts {
 }
 
 impl LangParser for CssParser {
-    fn language_name(&self) -> &'static str {
-        "css"
+    fn language_name(&self) -> std::borrow::Cow<'static, str> {
+        "css".into()
     }
 
     fn supports(&self, path: &str) -> bool {

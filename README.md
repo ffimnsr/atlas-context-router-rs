@@ -30,6 +30,9 @@ Supported languages in current build:
 - JavaScript
 - TypeScript
 
+External languages can be registered at runtime via `[parsers.external]` in
+`.atlas/config.toml` (see [External languages](#external-languages)).
+
 ## Install
 
 ### Latest release
@@ -426,6 +429,51 @@ Show graph status:
 atlas status
 atlas status --base origin/main
 ```
+
+## External languages
+
+Extra languages can be scanned without rebuilding Atlas by registering a
+tree-sitter grammar in `.atlas/config.toml`. The grammar is compiled with a C
+compiler on first use (cached in `grammar_lib_dir` or the tree-sitter user
+cache) — or loaded from a prebuilt shared library via `lib_path`.
+
+```toml
+[[parsers.external]]
+language_name = "zig"
+extensions = ["zig"]
+grammar_dir = "/opt/grammars/tree-sitter-zig"  # checkout with src/parser.c
+
+[[parsers.external.symbols]]
+tree_kind = "function_declaration"   # tree-sitter node kind
+node_kind = "function"               # graph node kind (function, struct, ...)
+# name_field = "name"                # field holding the symbol name
+
+# optional call-edge extraction:
+# call_node_kinds = ["call_expression"]
+# call_target_field = "function"
+```
+
+Prebuilt-library form (no C compiler needed):
+
+```toml
+[[parsers.external]]
+language_name = "swift"
+extensions = ["swift"]
+lib_path = "/opt/grammars/libtree-sitter-swift.so"
+# lib_function = "tree_sitter_swift"   # default: tree_sitter_<language_name>
+```
+
+Notes:
+
+- Built-in handlers keep precedence for overlapping extensions.
+- Relative `grammar_dir` / `lib_path` / `grammar_lib_dir` paths resolve from
+  `.atlas/` (drop grammars under `.atlas/grammars/...` for repo-local setup).
+- `atlas build` / `atlas update` / `status` / `doctor` / change detection and
+  agent-hook refresh all honor `[parsers.external]`; watch mode does not yet
+  register external parsers.
+- Grammar ABI is validated at load; mismatched grammars fail with a clear error.
+- Compiling or loading a grammar executes code from configured paths — treat
+  grammar sources as trusted.
 
 Search graph nodes:
 

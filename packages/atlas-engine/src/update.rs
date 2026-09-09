@@ -10,7 +10,7 @@ use atlas_core::{
     BudgetReport, BuildUpdateBudgetCounters, PackageOwner,
     model::{ChangeType, ParsedFile},
 };
-use atlas_parser::{ParserRegistry, TreeCache};
+use atlas_parser::{ExternalParserConfig, ParserRegistry, TreeCache};
 use atlas_repo::{
     CanonicalRepoPath, DiffTarget, changed_files, discover_package_owners, hash_file, head_ref,
     stable_repo_fingerprint,
@@ -82,6 +82,8 @@ pub struct UpdateOptions {
     pub source_repo_id: Option<String>,
     /// Prefix qualified names so equal paths/symbols from separate repos cannot collide.
     pub namespace_qualified_names: bool,
+    /// External (config-driven) parsers registered before the scan.
+    pub external_parsers: Vec<ExternalParserConfig>,
 }
 
 impl Default for UpdateOptions {
@@ -94,6 +96,7 @@ impl Default for UpdateOptions {
             budget: BuildRunBudget::default(),
             source_repo_id: None,
             namespace_qualified_names: false,
+            external_parsers: Vec::new(),
         }
     }
 }
@@ -322,7 +325,10 @@ pub fn update_graph(
         }
     }
 
-    let registry = ParserRegistry::with_defaults();
+    let mut registry = ParserRegistry::with_defaults();
+    registry
+        .register_externals(&opts.external_parsers)
+        .context("cannot register external parsers")?;
     let mut parse_errors = 0usize;
     let mut skipped_unsupported = 0usize;
     // In-process tree cache: trees from this run are reused when a file is
@@ -852,6 +858,7 @@ mod tests {
                 budget: BuildRunBudget::default(),
                 source_repo_id: None,
                 namespace_qualified_names: false,
+                external_parsers: vec![],
             },
         )
         .unwrap();
@@ -878,6 +885,7 @@ mod tests {
                 budget,
                 source_repo_id: None,
                 namespace_qualified_names: false,
+                external_parsers: vec![],
             },
         )
         .unwrap();
@@ -911,6 +919,7 @@ mod tests {
                 budget: BuildRunBudget::default(),
                 source_repo_id: None,
                 namespace_qualified_names: false,
+                external_parsers: vec![],
             },
         )
         .unwrap();
@@ -932,6 +941,7 @@ mod tests {
                 budget: BuildRunBudget::default(),
                 source_repo_id: None,
                 namespace_qualified_names: false,
+                external_parsers: vec![],
             },
         )
         .unwrap();
@@ -1015,6 +1025,7 @@ mod tests {
                 budget: BuildRunBudget::default(),
                 source_repo_id: None,
                 namespace_qualified_names: false,
+                external_parsers: vec![],
             },
         )
         .unwrap();
@@ -1071,6 +1082,7 @@ mod tests {
                 budget: BuildRunBudget::default(),
                 source_repo_id: None,
                 namespace_qualified_names: false,
+                external_parsers: vec![],
             },
         )
         .unwrap();
@@ -1141,6 +1153,7 @@ mod tests {
                 budget: BuildRunBudget::default(),
                 source_repo_id: None,
                 namespace_qualified_names: false,
+                external_parsers: vec![],
             },
         )
         .unwrap();
@@ -1207,6 +1220,7 @@ mod tests {
                 budget: BuildRunBudget::default(),
                 source_repo_id: None,
                 namespace_qualified_names: false,
+                external_parsers: vec![],
             },
         )
         .unwrap();
@@ -1282,6 +1296,7 @@ mod tests {
                 budget: BuildRunBudget::default(),
                 source_repo_id: None,
                 namespace_qualified_names: false,
+                external_parsers: vec![],
             },
         )
         .unwrap();
@@ -1348,6 +1363,7 @@ mod tests {
                 budget: BuildRunBudget::default(),
                 source_repo_id: None,
                 namespace_qualified_names: false,
+                external_parsers: vec![],
             },
         )
         .unwrap();
@@ -1375,6 +1391,7 @@ mod tests {
                 budget: BuildRunBudget::default(),
                 source_repo_id: None,
                 namespace_qualified_names: false,
+                external_parsers: vec![],
             },
         )
         .unwrap();
@@ -1419,6 +1436,7 @@ mod tests {
                 budget: BuildRunBudget::default(),
                 source_repo_id: None,
                 namespace_qualified_names: false,
+                external_parsers: vec![],
             },
         )
         .unwrap();

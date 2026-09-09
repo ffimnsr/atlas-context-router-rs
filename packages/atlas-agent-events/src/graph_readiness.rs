@@ -109,7 +109,15 @@ pub fn pending_graph_relevant_changes(repo_root: &str, db_path: &str) -> Option<
     }
 
     let store = Store::open(db_path).ok()?;
-    let registry = ParserRegistry::with_defaults();
+    let mut registry = ParserRegistry::with_defaults();
+    // Honor [parsers.external] so external-language files count as
+    // graph-relevant for hook-triggered refresh decisions.
+    if let Ok(config) =
+        atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root_path.as_str()))
+        && let Err(error) = registry.register_externals(&config.parsers.external)
+    {
+        tracing::warn!("external parsers unavailable: {error:#}");
+    }
 
     Some(unique_sorted_paths(
         changes

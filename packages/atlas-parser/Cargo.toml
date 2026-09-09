@@ -9,7 +9,10 @@ publish = false
 atlas-core.workspace = true
 atlas-repo = { path = "../atlas-repo", version = "1.7.5" }
 tracing.workspace = true
+anyhow.workspace = true
+serde.workspace = true
 tree-sitter.workspace = true
+tree-sitter-loader = "0.26.8"
 tree-sitter-rust.workspace = true
 tree-sitter-go.workspace = true
 tree-sitter-python.workspace = true
@@ -33,6 +36,7 @@ regex.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+tempfile = "3"
 
 [[bench]]
 name = "parse_bench"

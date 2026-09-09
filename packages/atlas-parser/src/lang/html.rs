@@ -58,8 +58,8 @@ impl HtmlSyntaxFacts {
 }
 
 impl LangParser for HtmlParser {
-    fn language_name(&self) -> &'static str {
-        "html"
+    fn language_name(&self) -> std::borrow::Cow<'static, str> {
+        "html".into()
     }
 
     fn supports(&self, path: &str) -> bool {

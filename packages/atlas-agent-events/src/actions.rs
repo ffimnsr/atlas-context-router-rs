@@ -362,6 +362,7 @@ fn execute_graph_refresh_action(
             budget: build_budget,
             source_repo_id: Some(source_repo_id.clone()),
             namespace_qualified_names: false,
+            external_parsers: config.parsers.external.clone(),
         },
     );
 

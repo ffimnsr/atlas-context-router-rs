@@ -2,7 +2,96 @@
 
 use super::super::*;
 use super::*;
+use atlas_core::NodeKind;
 use std::fs;
+
+#[test]
+fn parsers_external_section_loads_and_validates() {
+    let dir = tempdir().expect("tempdir");
+    let atlas_dir = dir.path();
+    fs::write(
+        atlas_dir.join(crate::paths::ATLAS_CONFIG),
+        r#"
+[[parsers.external]]
+language_name = "zig"
+extensions = ["zig"]
+grammar_dir = "grammars/tree-sitter-zig"
+
+[[parsers.external.symbols]]
+tree_kind = "function_declaration"
+node_kind = "function"
+"#,
+    )
+    .expect("write config");
+
+    let config = Config::load(atlas_dir).expect("load config");
+    assert_eq!(config.parsers.external.len(), 1);
+    assert_eq!(config.parsers.external[0].language_name, "zig");
+    assert_eq!(config.parsers.external[0].extensions, ["zig"]);
+    assert_eq!(config.parsers.external[0].symbols.len(), 1);
+    assert_eq!(
+        config.parsers.external[0].symbols[0].node_kind,
+        NodeKind::Function
+    );
+    // symbol name_field defaults to "name".
+    assert_eq!(config.parsers.external[0].symbols[0].name_field, "name");
+    // relative grammar paths resolve from the atlas dir (like tokenizer files).
+    assert_eq!(
+        config.parsers.external[0].grammar_dir.as_deref(),
+        Some(atlas_dir.join("grammars/tree-sitter-zig").to_str().unwrap())
+    );
+}
+
+#[test]
+fn parsers_external_rejects_ambiguous_source_and_duplicate_extensions() {
+    let dir = tempdir().expect("tempdir");
+    let atlas_dir = dir.path();
+    fs::write(
+        atlas_dir.join(crate::paths::ATLAS_CONFIG),
+        r#"
+[[parsers.external]]
+language_name = "zig"
+extensions = ["zig"]
+grammar_dir = "/opt/grammars/a"
+lib_path = "/opt/grammars/libtree-sitter-zig.so"
+
+[[parsers.external.symbols]]
+tree_kind = "function_declaration"
+node_kind = "function"
+"#,
+    )
+    .expect("write config");
+    let error = Config::load(atlas_dir).expect_err("must reject grammar_dir + lib_path");
+    assert!(
+        error
+            .to_string()
+            .contains("exactly one of grammar_dir or lib_path")
+    );
+
+    fs::write(
+        atlas_dir.join(crate::paths::ATLAS_CONFIG),
+        r#"
+[[parsers.external]]
+language_name = "a"
+extensions = ["zig"]
+grammar_dir = "/opt/grammars/a"
+[[parsers.external.symbols]]
+tree_kind = "x"
+node_kind = "function"
+
+[[parsers.external]]
+language_name = "b"
+extensions = ["zig"]
+grammar_dir = "/opt/grammars/b"
+[[parsers.external.symbols]]
+tree_kind = "x"
+node_kind = "function"
+"#,
+    )
+    .expect("write config");
+    let error = Config::load(atlas_dir).expect_err("must reject duplicate extension");
+    assert!(error.to_string().contains("registered more than once"));
+}
 
 #[test]
 fn budget_policy_maps_payload_budget_fields() {

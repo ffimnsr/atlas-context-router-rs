@@ -88,8 +88,8 @@ impl JavaSyntaxFacts {
 }
 
 impl LangParser for JavaParser {
-    fn language_name(&self) -> &'static str {
-        "java"
+    fn language_name(&self) -> std::borrow::Cow<'static, str> {
+        "java".into()
     }
 
     fn supports(&self, path: &str) -> bool {

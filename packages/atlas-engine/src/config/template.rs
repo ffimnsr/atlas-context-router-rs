@@ -505,6 +505,23 @@ impl Config {
             profile == ConfigTemplateProfile::Full,
         ));
 
+        lines.push(String::new());
+        lines.push(
+            "# External (runtime) language parsers — uncomment to scan extra languages.".to_owned(),
+        );
+        lines.push("# [[parsers.external]]".to_owned());
+        lines.push("# language_name = \"zig\"".to_owned());
+        lines.push("# extensions = [\"zig\"]".to_owned());
+        lines.push(
+            "# # grammar checkout dir (compiled on first use) or a prebuilt .so via lib_path"
+                .to_owned(),
+        );
+        lines.push("# grammar_dir = \"/opt/grammars/tree-sitter-zig\"".to_owned());
+        lines.push("# [[parsers.external.symbols]]".to_owned());
+        lines.push("# tree_kind = \"function_declaration\"".to_owned());
+        lines.push("# node_kind = \"function\"".to_owned());
+        lines.push(String::new());
+
         lines.extend(render_section(
             "memory",
             &[(

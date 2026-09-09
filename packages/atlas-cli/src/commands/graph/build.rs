@@ -152,6 +152,7 @@ pub fn run_build(cli: &Cli) -> Result<()> {
                 budget: build_budget,
                 source_repo_id: Some(source_repo_id.clone()),
                 namespace_qualified_names: false,
+                external_parsers: config.parsers.external.clone(),
             },
         );
 
@@ -415,6 +416,7 @@ fn run_registered_builds(
                 source_repo_id: Some(registration.repo_id.clone()),
                 namespace_qualified_names: registration.relationship.kind
                     != RepoRelationshipKind::Root,
+                external_parsers: config.parsers.external.clone(),
             },
         );
         match result {

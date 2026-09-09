@@ -17,8 +17,8 @@ use crate::traits::{LangParser, ParseContext};
 pub struct TomlParser;
 
 impl LangParser for TomlParser {
-    fn language_name(&self) -> &'static str {
-        "toml"
+    fn language_name(&self) -> std::borrow::Cow<'static, str> {
+        "toml".into()
     }
 
     fn supports(&self, path: &str) -> bool {

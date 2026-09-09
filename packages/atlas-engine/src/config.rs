@@ -13,6 +13,7 @@ mod context;
 mod insights;
 mod load;
 mod mcp;
+mod parsers;
 mod sanitization;
 mod search;
 mod template;
@@ -34,6 +35,7 @@ pub use mcp::{
     DEFAULT_MCP_TOOL_TIMEOUT_MS, DEFAULT_MCP_WORKER_THREADS, McpConfig, McpHttpAuthConfig,
     ValidatedMcpHttpAuthConfig,
 };
+pub use parsers::ParsersConfig;
 pub use sanitization::SanitizationConfig;
 pub use search::{
     DEFAULT_EMBED_MAX_RETRIES, DEFAULT_EMBED_MODEL, DEFAULT_EMBED_RETRY_BACKOFF_MS,
@@ -58,6 +60,8 @@ pub struct Config {
     pub context: ContextConfig,
     #[serde(default)]
     pub mcp: McpConfig,
+    #[serde(default)]
+    pub parsers: ParsersConfig,
     #[serde(default)]
     pub memory: MemoryConfig,
 }

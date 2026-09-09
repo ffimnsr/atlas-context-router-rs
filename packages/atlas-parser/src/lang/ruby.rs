@@ -76,8 +76,8 @@ impl RubySyntaxFacts {
 }
 
 impl LangParser for RubyParser {
-    fn language_name(&self) -> &'static str {
-        "ruby"
+    fn language_name(&self) -> std::borrow::Cow<'static, str> {
+        "ruby".into()
     }
 
     fn supports(&self, path: &str) -> bool {

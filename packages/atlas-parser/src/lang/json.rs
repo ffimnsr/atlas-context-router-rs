@@ -16,8 +16,8 @@ use crate::traits::{LangParser, ParseContext};
 pub struct JsonParser;
 
 impl LangParser for JsonParser {
-    fn language_name(&self) -> &'static str {
-        "json"
+    fn language_name(&self) -> std::borrow::Cow<'static, str> {
+        "json".into()
     }
 
     fn supports(&self, path: &str) -> bool {

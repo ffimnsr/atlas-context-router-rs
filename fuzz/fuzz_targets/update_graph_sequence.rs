@@ -124,6 +124,7 @@ fn run_working_tree_case(case: &UpdateGraphCase) {
             budget: BuildRunBudget::default(),
             source_repo_id: None,
             namespace_qualified_names: false,
+        external_parsers: vec![],
         },
     )
     .expect("working-tree update must stay bounded for benign malformed input");
@@ -195,6 +196,7 @@ fn run_explicit_file_case(case: &UpdateGraphCase) {
             budget: BuildRunBudget::default(),
             source_repo_id: None,
             namespace_qualified_names: false,
+        external_parsers: vec![],
         },
     )
     .expect("explicit-file update must stay bounded for benign malformed input");
@@ -260,6 +262,7 @@ fn prepare_fixture(case: &UpdateGraphCase) -> Fixture {
             budget: BuildRunBudget::default(),
             source_repo_id: None,
             namespace_qualified_names: false,
+        external_parsers: vec![],
         },
     )
     .expect("initial build must succeed");

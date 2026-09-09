@@ -224,6 +224,22 @@ pub(crate) fn detect_changes_target(base: &Option<String>, staged: bool) -> Diff
     }
 }
 
+/// Build the parser registry including `[parsers.external]` languages from
+/// `<repo_root>/.atlas/config.toml`.
+///
+/// Best-effort: a misconfigured external parser is reported as a warning here
+/// (build/update surface it as a hard error) so read-only surfaces such as
+/// `status` and `doctor` can keep answering.
+pub(crate) fn parser_registry_from_config(repo_root: &str) -> ParserRegistry {
+    let config =
+        atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root)).unwrap_or_default();
+    let mut registry = ParserRegistry::with_defaults();
+    if let Err(error) = registry.register_externals(&config.parsers.external) {
+        tracing::warn!("external parsers unavailable for status checks: {error:#}");
+    }
+    registry
+}
+
 pub(crate) fn change_tag(change_type: ChangeType) -> &'static str {
     match change_type {
         ChangeType::Added => "A",
@@ -444,7 +460,7 @@ fn pending_graph_changes(store: &Store, repo_root: &str) -> Vec<String> {
         return Vec::new();
     }
 
-    let registry = ParserRegistry::with_defaults();
+    let registry = parser_registry_from_config(repo_root);
     let mut files: Vec<String> = changes
         .iter()
         .filter(|c| change_affects_graph(store, &registry, c))

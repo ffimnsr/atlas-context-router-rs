@@ -132,6 +132,7 @@ fn run_registered_updates(
                 source_repo_id: Some(registration.repo_id.clone()),
                 namespace_qualified_names: registration.relationship.kind
                     != RepoRelationshipKind::Root,
+                external_parsers: config.parsers.external.clone(),
             },
         );
         match result {
@@ -373,6 +374,7 @@ pub fn run_update(cli: &Cli) -> Result<()> {
                     budget: build_budget,
                     source_repo_id: Some(source_repo_id.clone()),
                     namespace_qualified_names: false,
+                    external_parsers: config.parsers.external.clone(),
                 },
             )
             .map(|summary| atlas_engine::UpdateSummary {
@@ -402,6 +404,7 @@ pub fn run_update(cli: &Cli) -> Result<()> {
                     budget: build_budget,
                     source_repo_id: Some(source_repo_id.clone()),
                     namespace_qualified_names: false,
+                    external_parsers: config.parsers.external.clone(),
                 },
             )
         };

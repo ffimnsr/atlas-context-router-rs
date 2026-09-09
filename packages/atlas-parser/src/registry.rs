@@ -1,5 +1,9 @@
+use std::borrow::Cow;
 use std::path::Path;
 
+use anyhow::{Context, Result};
+
+use crate::external::{ExternalLangParser, ExternalParserConfig};
 use crate::lang::{
     bash::BashParser,
     c::CParser,
@@ -61,8 +65,24 @@ impl ParserRegistry {
     }
 
     /// Returns the names of all registered languages.
-    pub fn supported_languages(&self) -> Vec<&'static str> {
+    pub fn supported_languages(&self) -> Vec<Cow<'static, str>> {
         self.handlers.iter().map(|h| h.language_name()).collect()
+    }
+
+    /// Register external config-driven parsers on top of the built-ins.
+    ///
+    /// External grammars are loaded eagerly so misconfiguration surfaces at
+    /// registry construction (build/update start) instead of mid-scan.
+    /// Built-in handlers keep precedence for overlapping extensions because
+    /// they are registered first.
+    pub fn register_externals(&mut self, configs: &[ExternalParserConfig]) -> Result<()> {
+        for config in configs {
+            let parser = ExternalLangParser::new(config).with_context(|| {
+                format!("cannot build external parser '{}'", config.language_name)
+            })?;
+            self.register(Box::new(parser));
+        }
+        Ok(())
     }
 
     /// Parse a file, optionally supplying a previous tree-sitter tree to

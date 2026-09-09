@@ -555,6 +555,7 @@ impl WatchRunner {
             budget: crate::config::BuildRunBudget::default(),
             source_repo_id: None,
             namespace_qualified_names: false,
+            external_parsers: Vec::new(),
         };
 
         let (nodes_updated, errors) =

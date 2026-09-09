@@ -104,8 +104,8 @@ impl JsTsSyntaxFacts {
 }
 
 impl LangParser for JsParser {
-    fn language_name(&self) -> &'static str {
-        "javascript"
+    fn language_name(&self) -> std::borrow::Cow<'static, str> {
+        "javascript".into()
     }
 
     fn supports(&self, path: &str) -> bool {
@@ -134,8 +134,8 @@ impl LangParser for JsParser {
 }
 
 impl LangParser for TsParser {
-    fn language_name(&self) -> &'static str {
-        "typescript"
+    fn language_name(&self) -> std::borrow::Cow<'static, str> {
+        "typescript".into()
     }
 
     fn supports(&self, path: &str) -> bool {

@@ -88,8 +88,8 @@ impl PhpSyntaxFacts {
 }
 
 impl LangParser for PhpParser {
-    fn language_name(&self) -> &'static str {
-        "php"
+    fn language_name(&self) -> std::borrow::Cow<'static, str> {
+        "php".into()
     }
 
     fn supports(&self, path: &str) -> bool {

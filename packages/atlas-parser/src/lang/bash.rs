@@ -63,8 +63,8 @@ impl BashSyntaxFacts {
 }
 
 impl LangParser for BashParser {
-    fn language_name(&self) -> &'static str {
-        "bash"
+    fn language_name(&self) -> std::borrow::Cow<'static, str> {
+        "bash".into()
     }
 
     fn supports(&self, path: &str) -> bool {
