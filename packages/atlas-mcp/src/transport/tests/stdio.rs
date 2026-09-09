@@ -197,7 +197,10 @@ fn rmcp_stdio_cancellation_sets_tool_cancel_flag() {
             break message;
         }
     };
-    assert_eq!(ping["result"], serde_json::Value::Null);
+    assert_eq!(
+        ping["result"],
+        serde_json::Value::Object(Default::default())
+    );
     let _ = session.finish().unwrap();
 }
 
@@ -233,7 +236,12 @@ fn stdio_transport_handles_initialize_list_and_tool_calls() {
         .collect();
 
     let initialize_result = &by_id[&serde_json::json!(1)]["result"];
-    assert_eq!(initialize_result["protocolVersion"], MCP_PROTOCOL_VERSION);
+    assert_eq!(
+        initialize_result["protocolVersion"],
+        // rmcp 3.2+ negotiates initialize down to the newest legacy revision
+        // (2026-07-28 is lifecycle-negotiated, not handshake).
+        serde_json::json!(crate::spec::MCP_PREVIOUS_PROTOCOL_VERSION)
+    );
     assert_eq!(
         initialize_result["serverInfo"]["description"],
         serde_json::json!(env!("CARGO_PKG_DESCRIPTION"))
@@ -254,9 +262,11 @@ fn stdio_transport_handles_initialize_list_and_tool_calls() {
         .filter_map(|tool| tool["name"].as_str())
         .collect();
     assert_eq!(response_tool_names, registry_tool_names);
+    // SEP-2322 resultType only exists from protocol 2026-07-28, which is
+    // lifecycle-negotiated; the legacy initialize session omits it.
     assert_eq!(
         by_id[&serde_json::json!(2)]["result"]["resultType"],
-        serde_json::json!("complete")
+        serde_json::Value::Null
     );
     let tools = by_id[&serde_json::json!(2)]["result"]["tools"]
         .as_array()

@@ -160,7 +160,10 @@ fn serve_command_handles_stdio_jsonrpc_flow_end_to_end() {
 
     assert_eq!(
         by_id[&json!(1)]["result"]["protocolVersion"],
-        json!(atlas_mcp::MCP_PROTOCOL_VERSION)
+        // rmcp 3.2+: the 2026-07-28 revision is lifecycle-negotiated (server/
+        // discover + per-request _meta); an initialize handshake answers with
+        // the newest legacy revision that still has one.
+        json!(atlas_mcp::spec::MCP_PREVIOUS_PROTOCOL_VERSION)
     );
     assert!(
         by_id[&json!(1)]["result"].get("_meta").is_none(),

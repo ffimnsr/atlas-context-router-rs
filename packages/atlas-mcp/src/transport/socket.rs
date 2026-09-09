@@ -755,7 +755,9 @@ mod tests {
         assert_eq!(initialize["id"], json!(1));
         assert_eq!(
             initialize["result"]["protocolVersion"],
-            json!(crate::MCP_PROTOCOL_VERSION)
+            // rmcp 3.2+ negotiates initialize down to the newest legacy
+            // revision (2026-07-28 is lifecycle-negotiated, not handshake).
+            json!(crate::spec::MCP_PREVIOUS_PROTOCOL_VERSION)
         );
 
         writeln!(

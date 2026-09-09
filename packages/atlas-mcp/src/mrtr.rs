@@ -114,7 +114,7 @@ fn issue_request_state_with_clock(
         ),
     };
     let associated_data = request_state_associated_data_bytes(binding)?;
-    request_state_codec()
+    request_state_codec()?
         .seal_json_with(
             &payload,
             &rmcp::model::SealOptions::new().associated_data(&associated_data),
@@ -128,7 +128,7 @@ fn validate_request_state_with_clock(
     now: SystemTime,
 ) -> Result<()> {
     let associated_data = request_state_associated_data_bytes(binding)?;
-    let payload: RequestStatePayload = request_state_codec()
+    let payload: RequestStatePayload = request_state_codec()?
         .open_json_with(request_state, &associated_data)
         .map_err(map_request_state_codec_error)?;
     if payload.version != REQUEST_STATE_VERSION {
@@ -145,8 +145,10 @@ fn validate_request_state_with_clock(
     Ok(())
 }
 
-fn request_state_codec() -> RequestStateCodec {
-    RequestStateCodec::new(request_state_secret().clone())
+fn request_state_codec() -> Result<RequestStateCodec> {
+    // try_new enforces the minimum signing-key length and zeroizes the key.
+    rmcp::model::RequestStateCodec::try_new(request_state_secret().clone())
+        .map_err(|error| anyhow!("requestState signing key invalid: {error}"))
 }
 
 fn request_state_secret() -> &'static Vec<u8> {
