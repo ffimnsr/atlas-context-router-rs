@@ -7,7 +7,7 @@ fn status_healthy_repo_returns_ok() {
     let store = Store::open(&fixture.db_path).expect("open");
     store
         .finish_build(
-            "/repo",
+            &fixture.repo_root,
             atlas_store_sqlite::BuildFinishStats {
                 state: atlas_store_sqlite::GraphBuildState::Built,
                 files_discovered: 3,
@@ -25,7 +25,8 @@ fn status_healthy_repo_returns_ok() {
         .expect("finish_build");
 
     let args = serde_json::json!({ "output_format": "json" });
-    let resp = call("status", Some(&args), "/repo", &fixture.db_path).expect("status call");
+    let resp =
+        call("status", Some(&args), &fixture.repo_root, &fixture.db_path).expect("status call");
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 

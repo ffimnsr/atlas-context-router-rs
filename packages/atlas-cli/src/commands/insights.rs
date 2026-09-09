@@ -6,7 +6,9 @@ use atlas_reasoning::{
     ComponentLabelRequest, DuplicateDetectionRequest, InsightsEngine, LargeFunctionMode,
     LargeFunctionRequest, RiskAssessmentTarget, SimilarFunctionRequest,
 };
+use atlas_repo::find_repo_root;
 use atlas_store_sqlite::Store;
+use camino::Utf8Path;
 
 use crate::cli::{Cli, Command, InsightsCommand};
 
@@ -53,6 +55,24 @@ fn print_compact_report(title: &str, findings: &[InsightFinding]) {
         println!("  - [{}] {}", finding.severity, finding.title);
         println!("    {}", finding.message);
     }
+}
+
+/// Resolve `--files` boundary inputs (repo-relative, root-prefixed, or
+/// absolute-under-root) to canonical repo-relative identity before engine
+/// requests, mirroring the MCP analysis tools.
+fn normalize_insights_files(repo: &str, files: &[String]) -> Result<Vec<String>> {
+    if files.is_empty() {
+        return Ok(Vec::new());
+    }
+    let repo_root = find_repo_root(Utf8Path::new(repo)).context("cannot find git repo root")?;
+    files
+        .iter()
+        .map(|path| {
+            atlas_repo::normalize_repo_file_path(repo_root.as_path(), path)
+                .map(|resolved| resolved.canonical)
+                .with_context(|| format!("invalid explicit file path '{path}'"))
+        })
+        .collect()
 }
 
 pub fn run_insights(cli: &Cli) -> Result<()> {
@@ -201,6 +221,7 @@ pub fn run_insights(cli: &Cli) -> Result<()> {
                 limit,
                 include_tests,
             } => {
+                let files = normalize_insights_files(&repo, files)?;
                 let analysis = engine
                     .find_large_functions(
                         &repo,
@@ -253,6 +274,7 @@ pub fn run_insights(cli: &Cli) -> Result<()> {
                 limit,
                 include_tests,
             } => {
+                let files = normalize_insights_files(&repo, files)?;
                 let analysis = engine
                     .find_large_functions(
                         &repo,
@@ -344,6 +366,7 @@ pub fn run_insights(cli: &Cli) -> Result<()> {
                 include_tests,
                 suppressions,
             } => {
+                let files = normalize_insights_files(&repo, files)?;
                 let analysis = engine
                     .find_duplicates(
                         &repo,
@@ -413,6 +436,7 @@ pub fn run_insights(cli: &Cli) -> Result<()> {
                 symbols,
                 limit,
             } => {
+                let files = normalize_insights_files(&repo, files)?;
                 let analysis = engine
                     .label_components(
                         &repo,
@@ -455,4 +479,69 @@ pub fn run_insights(cli: &Cli) -> Result<()> {
         active.after_command(command_label, result.is_ok());
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::process::Command;
+
+    use super::normalize_insights_files;
+
+    fn git(repo: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .status()
+            .expect("git command");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    fn write_file(repo: &Path, rel_path: &str, contents: &str) {
+        let path = repo.join(rel_path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+
+    #[test]
+    fn normalize_insights_files_accepts_three_boundary_forms() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        git(repo, &["init", "--quiet"]);
+        write_file(repo, "src/lib.rs", "pub fn helper() {}\n");
+
+        let repo_name = repo
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("repo name");
+        let absolute = repo.join("src/lib.rs").to_string_lossy().into_owned();
+        let repo_str = repo.to_string_lossy().into_owned();
+
+        for (input, expected) in [
+            ("src/lib.rs".to_owned(), "src/lib.rs".to_owned()),
+            (format!("{repo_name}/src/lib.rs"), "src/lib.rs".to_owned()),
+            (absolute, "src/lib.rs".to_owned()),
+        ] {
+            let resolved =
+                normalize_insights_files(&repo_str, std::slice::from_ref(&input)).unwrap();
+            assert_eq!(resolved, vec![expected], "input '{input}'");
+        }
+    }
+
+    #[test]
+    fn normalize_insights_files_rejects_missing_and_foreign_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        git(repo, &["init", "--quiet"]);
+        write_file(repo, "src/lib.rs", "pub fn helper() {}\n");
+        let repo_str = repo.to_string_lossy().into_owned();
+
+        for bad in ["src/missing.rs", "../etc/passwd", "/outside/repo.rs"] {
+            let error = normalize_insights_files(&repo_str, &[bad.to_owned()]).unwrap_err();
+            assert!(
+                error.to_string().contains("invalid explicit file path"),
+                "unexpected error for '{bad}': {error}"
+            );
+        }
+    }
 }

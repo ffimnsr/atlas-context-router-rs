@@ -166,6 +166,17 @@ pub(super) fn tool_analyze_patterns(
     insight_report_response(&report, compact, output_format, verbose)
 }
 
+fn normalize_files_arg(repo_root: &str, files: &[String]) -> Result<Vec<String>> {
+    files
+        .iter()
+        .map(|path| {
+            atlas_repo::normalize_repo_file_path(camino::Utf8Path::new(repo_root), path)
+                .map(|resolved| resolved.canonical)
+                .map_err(|error| anyhow::anyhow!("invalid file path '{path}': {error}"))
+        })
+        .collect()
+}
+
 fn tool_find_large_functions_impl(
     args: Option<&serde_json::Value>,
     repo_root: &str,
@@ -174,7 +185,7 @@ fn tool_find_large_functions_impl(
     forced_mode: Option<LargeFunctionMode>,
     result_kind: &str,
 ) -> Result<serde_json::Value> {
-    let files = string_array_arg(args, "files")?;
+    let files = normalize_files_arg(repo_root, &string_array_arg(args, "files")?)?;
     let threshold = u64_arg(args, "threshold").map(|value| value as usize);
     let complexity_threshold = u64_arg(args, "complexity_threshold").map(|value| value as usize);
     let cognitive_threshold = u64_arg(args, "cognitive_threshold").map(|value| value as usize);
@@ -306,7 +317,7 @@ pub(super) fn tool_find_duplicates(
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
-    let files = string_array_arg(args, "files")?;
+    let files = normalize_files_arg(repo_root, &string_array_arg(args, "files")?)?;
     let min_score = args
         .and_then(|value| value.get("min_score"))
         .and_then(|value| value.as_f64());
@@ -381,7 +392,7 @@ pub(super) fn tool_label_components(
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
-    let files = string_array_arg(args, "files")?;
+    let files = normalize_files_arg(repo_root, &string_array_arg(args, "files")?)?;
     let symbols = string_array_arg(args, "symbols")?;
     let limit = u64_arg(args, "limit").map(|value| value as usize);
     let verbose = bool_arg(args, "verbose").unwrap_or(false);
@@ -602,11 +613,20 @@ pub(super) fn tool_analyze_remove(
 
 pub(super) fn tool_analyze_dead_code(
     args: Option<&serde_json::Value>,
+    repo_root: &str,
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
     let allowlist = string_array_arg(args, "allowlist").unwrap_or_default();
     let subpath = str_arg(args, "subpath")?.map(str::to_owned);
+    // Best-effort normalization: root-prefixed and absolute-under-root forms
+    // collapse to canonical repo-relative prefixes; unmatched inputs stay as
+    // typed so the prefix filter can still match literally.
+    let subpath = subpath.map(|raw| {
+        atlas_repo::normalize_repo_file_path(camino::Utf8Path::new(repo_root), &raw)
+            .map(|resolved| resolved.canonical)
+            .unwrap_or(raw)
+    });
     // Compact default: 50 candidates. Caller may raise with `limit`.
     let requested_limit = u64_arg(args, "limit").unwrap_or(50) as usize;
     let summary = bool_arg(args, "summary").unwrap_or(false);

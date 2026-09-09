@@ -6,7 +6,8 @@ pub(crate) fn tool_get_review_context(
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
-    let request = match validate_change_source_request("get_review_context", args, true) {
+    let request = match validate_change_source_request("get_review_context", repo_root, args, true)
+    {
         Ok(request) => request,
         Err(payload) => return tool_execution_error_value(output_format, &payload),
     };

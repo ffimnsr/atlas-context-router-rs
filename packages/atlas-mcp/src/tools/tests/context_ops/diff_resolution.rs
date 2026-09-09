@@ -8,8 +8,13 @@ fn get_impact_radius_accepts_explicit_files_and_reports_change_source_metadata()
         "output_format": "json"
     });
 
-    let resp = call("get_impact_radius", Some(&args), "/repo", &fixture.db_path)
-        .expect("get_impact_radius");
+    let resp = call(
+        "get_impact_radius",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("get_impact_radius");
     let text = unwrap_tool_text(resp.clone());
     let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
@@ -39,8 +44,13 @@ fn get_review_context_accepts_explicit_files_and_reports_change_source_metadata(
         "output_format": "json"
     });
 
-    let resp = call("get_review_context", Some(&args), "/repo", &fixture.db_path)
-        .expect("get_review_context");
+    let resp = call(
+        "get_review_context",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("get_review_context");
     let text = unwrap_tool_text(resp.clone());
     let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 

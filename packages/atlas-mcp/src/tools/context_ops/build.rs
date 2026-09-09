@@ -85,7 +85,8 @@ pub(crate) fn tool_update_graph(
         );
         return tool_execution_error_value(output_format, &payload);
     }
-    let change_source = match validate_change_source_request("update_graph", args, true) {
+    let change_source = match validate_change_source_request("update_graph", repo_root, args, true)
+    {
         Ok(change_source) => change_source,
         Err(payload) => return tool_execution_error_value(output_format, &payload),
     };

@@ -298,6 +298,14 @@ pub(super) fn tool_query_graph(
     let had_regex_input = raw_regex.is_some();
     let regex = normalized_optional_query_regex(raw_regex);
     let subpath = str_arg(args, "subpath")?.map(str::to_owned);
+    // Best-effort normalization: root-prefixed and absolute-under-root forms
+    // collapse to canonical repo-relative prefixes; unmatched inputs stay as
+    // typed so the prefix filter can still match literally.
+    let subpath = subpath.map(|raw| {
+        atlas_repo::normalize_repo_file_path(camino::Utf8Path::new(repo_root), &raw)
+            .map(|resolved| resolved.canonical)
+            .unwrap_or(raw)
+    });
     let fuzzy = bool_arg(args, "fuzzy").unwrap_or(false);
     let hybrid = bool_arg(args, "hybrid").unwrap_or(false);
     let include_files = bool_arg(args, "include_files").unwrap_or(false);
@@ -937,6 +945,9 @@ pub(super) fn tool_cross_file_links(
     let file = str_arg(args, "file")?
         .ok_or_else(|| anyhow::anyhow!("missing required argument: file"))?
         .to_owned();
+    let file = atlas_repo::normalize_repo_file_path(camino::Utf8Path::new(repo_root), &file)
+        .map_err(|error| anyhow::anyhow!("invalid file path: {error}"))?
+        .canonical;
     let requested_limit = u64_arg(args, "limit").unwrap_or(20) as usize;
     let limit = budgets.resolve_limit(
         policy.review_context_extraction.files,
@@ -1009,6 +1020,14 @@ pub(super) fn tool_concept_clusters(
     if files.is_empty() {
         return Err(anyhow::anyhow!("missing required argument: files"));
     }
+    let files = files
+        .iter()
+        .map(|path| {
+            atlas_repo::normalize_repo_file_path(camino::Utf8Path::new(repo_root), path)
+                .map(|resolved| resolved.canonical)
+                .map_err(|error| anyhow::anyhow!("invalid file path '{path}': {error}"))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let requested_limit = u64_arg(args, "limit").unwrap_or(10) as usize;
     let limit = budgets.resolve_limit(
         policy.review_context_extraction.files,
@@ -1087,6 +1106,14 @@ pub(super) fn tool_explain_query(
     let had_regex_input = raw_regex.is_some();
     let regex = normalized_optional_query_regex(raw_regex);
     let subpath = str_arg(args, "subpath")?.map(str::to_owned);
+    // Best-effort normalization: root-prefixed and absolute-under-root forms
+    // collapse to canonical repo-relative prefixes; unmatched inputs stay as
+    // typed so the prefix filter can still match literally.
+    let subpath = subpath.map(|raw| {
+        atlas_repo::normalize_repo_file_path(camino::Utf8Path::new(repo_root), &raw)
+            .map(|resolved| resolved.canonical)
+            .unwrap_or(raw)
+    });
     let fuzzy = bool_arg(args, "fuzzy").unwrap_or(false);
     let hybrid = bool_arg(args, "hybrid").unwrap_or(false);
     let include_files = bool_arg(args, "include_files").unwrap_or(false);
@@ -1210,6 +1237,14 @@ pub(super) fn tool_resolve_symbol(
         .to_owned();
     let kind_input = str_arg(args, "kind")?.map(str::to_owned);
     let file_filter = str_arg(args, "file")?.map(str::to_owned);
+    // Best-effort normalization: root-prefixed and absolute-under-root forms
+    // collapse to canonical repo-relative identity; unmatched inputs stay as
+    // typed so the contains-filter can still match literally.
+    let file_filter = file_filter.map(|raw| {
+        atlas_repo::normalize_repo_file_path(camino::Utf8Path::new(repo_root), &raw)
+            .map(|resolved| resolved.canonical)
+            .unwrap_or(raw)
+    });
     let language = str_arg(args, "language")?.map(str::to_owned);
     let requested_limit = u64_arg(args, "limit").unwrap_or(DEFAULT_LIMIT as u64) as usize;
     let limit = budgets.resolve_limit(

@@ -275,7 +275,7 @@ fn read_file_excerpt_path_traversal_is_rejected() {
 }
 
 #[test]
-fn read_file_excerpt_duplicate_root_prefix_returns_repo_relative_hint() {
+fn read_file_excerpt_duplicate_root_prefix_auto_resolves() {
     let (_dir, root) = make_repo(&[("src/lib.rs", "fn x() {}\n")]);
     let repo_name = Path::new(&root)
         .file_name()
@@ -286,55 +286,28 @@ fn read_file_excerpt_duplicate_root_prefix_returns_repo_relative_hint() {
         "selector": { "kind": "range", "start_line": 1, "end_line": 1 },
     });
     let result = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json)
-        .expect("duplicate root prefix should return tool error result");
-    let details = &result["structuredContent"]["details"];
+        .expect("duplicate root prefix should auto-resolve");
 
-    assert_eq!(result["isError"], serde_json::json!(true));
-    assert_eq!(
-        result["structuredContent"]["code"],
-        serde_json::json!("invalid_input")
-    );
-    assert_eq!(details["repo_root"], serde_json::json!(root));
-    assert_eq!(
-        details["workspace_root_prefix"],
-        serde_json::json!(format!("{repo_name}/"))
-    );
-    assert_eq!(
-        details["suggested_repo_relative_path"],
-        serde_json::json!("src/lib.rs")
-    );
-    assert_eq!(
-        details["suggestion_reason"],
-        serde_json::json!("duplicated_root_prefix")
-    );
-    assert_eq!(details["accepted_root_prefixes"], serde_json::json!([""]));
+    assert_eq!(result["isError"], serde_json::Value::Null);
+    let body: serde_json::Value =
+        serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(body["file"], serde_json::json!("src/lib.rs"));
 }
 
 #[test]
-fn read_file_excerpt_nested_root_prefix_returns_repo_relative_hint() {
+fn read_file_excerpt_nested_root_prefix_auto_resolves() {
     let (_dir, root) = make_repo(&[("src/lib.rs", "fn x() {}\n")]);
     let args = serde_json::json!({
         "file": "clients/mach-one/src/lib.rs",
         "selector": { "kind": "range", "start_line": 1, "end_line": 1 },
     });
     let result = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json)
-        .expect("nested root prefix should return tool error result");
-    let details = &result["structuredContent"]["details"];
+        .expect("nested root prefix should auto-resolve");
 
-    assert_eq!(result["isError"], serde_json::json!(true));
-    assert_eq!(
-        details["suggested_repo_relative_path"],
-        serde_json::json!("src/lib.rs")
-    );
-    assert_eq!(
-        details["suggestion_reason"],
-        serde_json::json!("nested_subdir_root_prefix")
-    );
-    assert!(
-        details["canonical_path_guidance"]
-            .as_str()
-            .is_some_and(|value| value.contains("repo-relative paths under current repo root"))
-    );
+    assert_eq!(result["isError"], serde_json::Value::Null);
+    let body: serde_json::Value =
+        serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(body["file"], serde_json::json!("src/lib.rs"));
 }
 
 #[test]
@@ -351,6 +324,49 @@ fn read_file_excerpt_valid_repo_relative_path_under_current_root_succeeds() {
     let body: serde_json::Value =
         serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(body["file"], serde_json::json!("src/lib.rs"));
+}
+
+#[test]
+fn read_file_excerpt_absolute_under_root_auto_resolves() {
+    let (_dir, root) = make_repo(&[("src/lib.rs", "fn x() {}\n")]);
+    let absolute = Path::new(&root)
+        .join("src/lib.rs")
+        .to_string_lossy()
+        .into_owned();
+    let args = serde_json::json!({
+        "file": absolute,
+        "selector": { "kind": "range", "start_line": 1, "end_line": 1 },
+    });
+    let result = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json)
+        .expect("absolute-under-root should auto-resolve");
+
+    assert_eq!(result["isError"], serde_json::Value::Null);
+    let body: serde_json::Value =
+        serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(body["file"], serde_json::json!("src/lib.rs"));
+}
+
+#[test]
+fn read_file_excerpt_absolute_outside_root_is_rejected() {
+    let (_dir, root) = make_repo(&[("src/lib.rs", "fn x() {}\n")]);
+    let outside = tempfile::tempdir().unwrap();
+    let absolute = outside
+        .path()
+        .join("elsewhere.rs")
+        .to_string_lossy()
+        .into_owned();
+    let args = serde_json::json!({
+        "file": absolute,
+        "selector": { "kind": "range", "start_line": 1, "end_line": 1 },
+    });
+    let result = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json)
+        .expect("absolute-outside-root should return tool error result");
+
+    assert_eq!(result["isError"], serde_json::json!(true));
+    assert_eq!(
+        result["structuredContent"]["code"],
+        serde_json::json!("invalid_input")
+    );
 }
 
 #[test]

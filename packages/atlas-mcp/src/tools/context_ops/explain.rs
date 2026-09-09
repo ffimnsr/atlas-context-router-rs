@@ -10,7 +10,7 @@ pub(crate) fn tool_explain_change(
     let max_depth = u64_arg(args, "max_depth").unwrap_or(5) as u32;
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(200) as usize;
 
-    let request = match validate_change_source_request("explain_change", args, true) {
+    let request = match validate_change_source_request("explain_change", repo_root, args, true) {
         Ok(request) => request,
         Err(payload) => return tool_execution_error_value(output_format, &payload),
     };

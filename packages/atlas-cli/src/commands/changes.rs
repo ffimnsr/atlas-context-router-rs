@@ -9,8 +9,8 @@ use atlas_core::model::{
 };
 use atlas_impact::analyze as advanced_impact;
 use atlas_repo::{
-    CanonicalRepoPath, DiffTarget, RepoRegistry, changed_files, find_repo_root,
-    phase1_multi_repo_supported, stable_repo_id,
+    DiffTarget, RepoRegistry, changed_files, find_repo_root, phase1_multi_repo_supported,
+    stable_repo_id,
 };
 use atlas_review::{ContextEngine, build_explain_change_summary, empty_explain_change_summary};
 use atlas_store_sqlite::Store;
@@ -37,9 +37,9 @@ fn normalize_explicit_files(
     explicit_files
         .iter()
         .map(|path| {
-            CanonicalRepoPath::from_cli_argument(repo_root, Utf8Path::new(path))
+            atlas_repo::normalize_repo_file_path(repo_root, path)
+                .map(|resolved| resolved.canonical)
                 .with_context(|| format!("invalid explicit file path '{path}'"))
-                .map(|path| path.as_str().to_owned())
         })
         .collect()
 }

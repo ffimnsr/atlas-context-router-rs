@@ -8,7 +8,7 @@ pub(crate) fn tool_get_context(
 ) -> Result<serde_json::Value> {
     use atlas_contentstore::ContentStore;
 
-    let target = match parse_get_context_target(args) {
+    let target = match parse_get_context_target(repo_root, args) {
         Ok(target) => target,
         Err(payload) => return tool_execution_error_value(output_format, &payload),
     };

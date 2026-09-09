@@ -3,9 +3,7 @@ use atlas_adapters::derive_content_db_path;
 use atlas_core::SearchQuery;
 use atlas_core::model::{ChangeType, ChangedFile, ContextIntent, ContextRequest, ContextTarget};
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
-use atlas_repo::{
-    CanonicalRepoPath, DiffTarget, RepoRegistration, changed_files, find_repo_root, stable_repo_id,
-};
+use atlas_repo::{DiffTarget, RepoRegistration, changed_files, find_repo_root, stable_repo_id};
 use atlas_review::ContextEngine;
 use atlas_search::semantic as sem;
 use atlas_store_sqlite::{BuildFinishStats, GraphBuildState, Store};

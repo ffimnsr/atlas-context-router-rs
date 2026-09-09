@@ -1100,7 +1100,7 @@ fn cross_file_links_returns_stable_shape_for_linked_and_isolated_files() {
     let linked_resp = call(
         "cross_file_links",
         Some(&linked_args),
-        "/repo",
+        &fixture.repo_root,
         &fixture.db_path,
     )
     .expect("cross_file_links linked");
@@ -1116,7 +1116,7 @@ fn cross_file_links_returns_stable_shape_for_linked_and_isolated_files() {
     let isolated_resp = call(
         "cross_file_links",
         Some(&isolated_args),
-        "/repo",
+        &fixture.repo_root,
         &fixture.db_path,
     )
     .expect("cross_file_links isolated");
@@ -1130,17 +1130,27 @@ fn cross_file_links_returns_stable_shape_for_linked_and_isolated_files() {
 fn cross_file_links_includes_provenance() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "file": "src/service.rs", "output_format": "json" });
-    let resp =
-        call("cross_file_links", Some(&args), "/repo", &fixture.db_path).expect("cross_file_links");
-    assert_provenance(&resp, "/repo", &fixture.db_path);
+    let resp = call(
+        "cross_file_links",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("cross_file_links");
+    assert_provenance(&resp, &fixture.repo_root, &fixture.db_path);
 }
 
 #[test]
 fn concept_clusters_returns_stable_shape_for_present_and_empty_clusters() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "files": ["src/service.rs"], "output_format": "json" });
-    let resp =
-        call("concept_clusters", Some(&args), "/repo", &fixture.db_path).expect("concept_clusters");
+    let resp = call(
+        "concept_clusters",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("concept_clusters");
     let value: serde_json::Value =
         serde_json::from_str(&unwrap_tool_text(resp)).expect("parse json");
     assert_eq!(value["seed_files"], json!(["src/service.rs"]));
@@ -1153,7 +1163,7 @@ fn concept_clusters_returns_stable_shape_for_present_and_empty_clusters() {
     let empty_resp = call(
         "concept_clusters",
         Some(&empty_args),
-        "/repo",
+        &fixture.repo_root,
         &fixture.db_path,
     )
     .expect("concept_clusters empty");
@@ -1167,9 +1177,14 @@ fn concept_clusters_returns_stable_shape_for_present_and_empty_clusters() {
 fn concept_clusters_includes_provenance() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "files": ["src/service.rs"], "output_format": "json" });
-    let resp =
-        call("concept_clusters", Some(&args), "/repo", &fixture.db_path).expect("concept_clusters");
-    assert_provenance(&resp, "/repo", &fixture.db_path);
+    let resp = call(
+        "concept_clusters",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("concept_clusters");
+    assert_provenance(&resp, &fixture.repo_root, &fixture.db_path);
 }
 
 #[test]

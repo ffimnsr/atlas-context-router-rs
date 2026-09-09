@@ -4,18 +4,28 @@ use super::*;
 fn get_impact_radius_includes_provenance() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "change_source": { "kind": "files", "files": ["src/service.rs"] }, "output_format": "json" });
-    let resp = call("get_impact_radius", Some(&args), "/repo", &fixture.db_path)
-        .expect("get_impact_radius");
-    assert_provenance(&resp, "/repo", &fixture.db_path);
+    let resp = call(
+        "get_impact_radius",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("get_impact_radius");
+    assert_provenance(&resp, &fixture.repo_root, &fixture.db_path);
 }
 
 #[test]
 fn get_review_context_includes_provenance() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "change_source": { "kind": "files", "files": ["src/service.rs"] }, "output_format": "json" });
-    let resp = call("get_review_context", Some(&args), "/repo", &fixture.db_path)
-        .expect("get_review_context");
-    assert_provenance(&resp, "/repo", &fixture.db_path);
+    let resp = call(
+        "get_review_context",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("get_review_context");
+    assert_provenance(&resp, &fixture.repo_root, &fixture.db_path);
     assert!(
         resp["structuredContent"]
             .get("ranking_evidence_legend")
@@ -27,8 +37,13 @@ fn get_review_context_includes_provenance() {
 fn get_review_context_json_includes_changed_symbol_evidence() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "change_source": { "kind": "files", "files": ["src/service.rs"] }, "output_format": "json" });
-    let resp = call("get_review_context", Some(&args), "/repo", &fixture.db_path)
-        .expect("get_review_context");
+    let resp = call(
+        "get_review_context",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("get_review_context");
     let text = unwrap_tool_text(resp.clone());
     let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
     let direct_target = value["nodes"]

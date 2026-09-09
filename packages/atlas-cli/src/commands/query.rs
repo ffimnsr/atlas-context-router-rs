@@ -3,10 +3,11 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 use atlas_contentstore::ContentStore;
 use atlas_core::{BudgetManager, GraphToolRequirement, RankingEvidence, SearchQuery};
-use atlas_repo::{RepoRegistry, phase1_multi_repo_supported};
+use atlas_repo::{RepoRegistry, find_repo_root, phase1_multi_repo_supported};
 use atlas_search as search;
 use atlas_search::QueryExplanation;
 use atlas_store_sqlite::Store;
+use camino::Utf8Path;
 
 use crate::cli::{Cli, Command};
 
@@ -229,6 +230,19 @@ pub fn run_query(cli: &Cli) -> Result<()> {
     let mut budgets = BudgetManager::new();
     let selected_repo_ids = selected_repo_ids(&repo, &repo_id, all_repos)?;
     let aliases = repo_aliases(&repo);
+    // Best-effort subpath normalization: root-prefixed and absolute-under-root
+    // forms collapse to canonical repo-relative prefixes; unmatched inputs stay
+    // as typed so the prefix filter can still match literally.
+    let subpath = subpath.map(|raw| {
+        find_repo_root(Utf8Path::new(&repo))
+            .ok()
+            .and_then(|root| {
+                atlas_repo::normalize_repo_file_path(root.as_path(), &raw)
+                    .ok()
+                    .map(|resolved| resolved.canonical)
+            })
+            .unwrap_or(raw)
+    });
     let effective_limit = budgets.resolve_limit(
         policy.query_candidates_and_seeds.candidates,
         "query_candidates_and_seeds.max_candidates",
@@ -439,7 +453,18 @@ pub fn run_explain_query(cli: &Cli) -> Result<()> {
 
     let repo = resolve_repo(cli)?;
     let db_path = db_path(cli, &repo);
+    let subpath = subpath.map(|raw| {
+        find_repo_root(Utf8Path::new(&repo))
+            .ok()
+            .and_then(|root| {
+                atlas_repo::normalize_repo_file_path(root.as_path(), &raw)
+                    .ok()
+                    .map(|resolved| resolved.canonical)
+            })
+            .unwrap_or(raw)
+    });
     let embed_cfg = load_embedding_config(&repo)?;
+
     let store = match Store::open(&db_path) {
         Err(e) => {
             let readiness = derive_graph_readiness_open_failed(&repo, &db_path, &e.to_string());

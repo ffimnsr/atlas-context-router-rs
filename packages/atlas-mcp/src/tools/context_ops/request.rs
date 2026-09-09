@@ -13,10 +13,12 @@ pub(super) fn resolve_diff_target(request: &ChangeSourceRequest) -> DiffTarget {
 
 pub(super) fn validate_change_source_request(
     tool_name: &str,
+    repo_root: &str,
     args: Option<&serde_json::Value>,
     allow_explicit_files: bool,
 ) -> std::result::Result<ChangeSourceRequest, Box<ToolErrorPayload>> {
-    let resolved = resolve_change_source_selection(tool_name, args, allow_explicit_files)?;
+    let resolved =
+        resolve_change_source_selection(tool_name, repo_root, args, allow_explicit_files)?;
     Ok(ChangeSourceRequest {
         kind: resolved.kind,
         files: resolved.files,

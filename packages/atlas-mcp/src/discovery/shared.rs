@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use atlas_core::{BudgetPolicy, BudgetReport};
-use atlas_repo::CanonicalRepoPath;
+use atlas_repo::{CanonicalRepoPath, normalize_repo_file_path};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::Serialize;
 
@@ -72,8 +72,11 @@ impl RepoPathIdentity {
 ///
 /// Falls back to `repo_root` when the resolved candidate is not a directory.
 pub(super) fn resolve_subpath_walk_root(repo_root: &str, subpath: &str) -> Result<String> {
-    let canonical = CanonicalRepoPath::from_repo_relative(subpath)
-        .map_err(|e| anyhow::anyhow!("invalid subpath '{subpath}': {e}"))?;
+    let canonical = match normalize_repo_file_path(camino::Utf8Path::new(repo_root), subpath) {
+        Ok(resolved) => CanonicalRepoPath::from_repo_relative(&resolved.canonical)
+            .map_err(|error| anyhow::anyhow!("invalid subpath '{subpath}': {error}"))?,
+        Err(error) => return Err(anyhow::anyhow!("invalid subpath '{subpath}': {error}")),
+    };
     let candidate = Path::new(repo_root).join(canonical.as_str());
     if candidate.is_dir() {
         Ok(candidate.to_string_lossy().into_owned())
@@ -236,11 +239,13 @@ pub(super) fn build_repo_path_error_payload(
         .with_details(details)
 }
 
-pub(super) fn resolve_repo_file_path(repo_root: &str, path: &str) -> Result<(String, PathBuf)> {
-    let canonical = CanonicalRepoPath::from_repo_relative(path)
-        .map_err(|error| anyhow::anyhow!("invalid file path '{path}': {error}"))?;
-    let absolute = Path::new(repo_root).join(canonical.as_str());
-    Ok((canonical.as_str().to_owned(), absolute))
+pub(super) fn resolve_repo_file_path(
+    repo_root: &str,
+    path: &str,
+) -> std::result::Result<(String, PathBuf), atlas_repo::RepoPathError> {
+    let normalized = normalize_repo_file_path(camino::Utf8Path::new(repo_root), path)?;
+    let absolute = Path::new(repo_root).join(&normalized.canonical);
+    Ok((normalized.canonical, absolute))
 }
 
 pub(super) fn resolve_repo_file_path_or_error(
@@ -263,15 +268,34 @@ pub(super) fn resolve_repo_file_path_or_error(
         Ok(resolved) => resolved,
         Err(_) => {
             let candidates = build_candidates();
+            // A clean repo-relative spelling that is merely absent from disk
+            // is "not found"; traversal, absolute-outside-root, trailing-slash,
+            // and ambiguous inputs stay invalid_input and fail closed.
+            let clean_relative_spelling =
+                CanonicalRepoPath::from_repo_relative(path.trim().replace('\\', "/")).is_ok();
+            let code = if clean_relative_spelling && recovered_candidates.is_empty() {
+                ToolErrorCode::FileNotFound
+            } else {
+                ToolErrorCode::InvalidInput
+            };
             let message = if candidates.len() > 1 {
                 format!(
                     "invalid file path '{path}': Atlas found multiple repo-relative candidates after removing root-like prefixes"
                 )
             } else if let Some(candidate) = candidates.first() {
-                format!(
-                    "invalid file path '{path}': Atlas file tools expect repo-relative paths. Retry with '{}'",
-                    candidate.path
-                )
+                if code == ToolErrorCode::FileNotFound {
+                    format!(
+                        "file not found: {path}. Retry with repo-relative path '{}'",
+                        candidate.path
+                    )
+                } else {
+                    format!(
+                        "invalid file path '{path}': Atlas file tools expect repo-relative paths. Retry with '{}'",
+                        candidate.path
+                    )
+                }
+            } else if code == ToolErrorCode::FileNotFound {
+                format!("file not found: {path}")
             } else {
                 format!("invalid file path '{path}': Atlas file tools expect repo-relative paths")
             };
@@ -279,7 +303,7 @@ pub(super) fn resolve_repo_file_path_or_error(
                 tool_name,
                 repo_root,
                 path,
-                ToolErrorCode::InvalidInput,
+                code,
                 message,
                 "Use exact repo-relative file path inside current Atlas repo, then retry.",
                 candidates,

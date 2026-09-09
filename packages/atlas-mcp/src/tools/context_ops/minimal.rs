@@ -6,10 +6,11 @@ pub(crate) fn tool_get_minimal_context(
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
-    let request = match validate_change_source_request("get_minimal_context", args, false) {
-        Ok(request) => request,
-        Err(payload) => return tool_execution_error_value(output_format, &payload),
-    };
+    let request =
+        match validate_change_source_request("get_minimal_context", repo_root, args, false) {
+            Ok(request) => request,
+            Err(payload) => return tool_execution_error_value(output_format, &payload),
+        };
     let max_depth = u64_arg(args, "max_depth").unwrap_or(2) as u32;
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(50) as usize;
 

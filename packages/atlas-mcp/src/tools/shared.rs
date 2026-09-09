@@ -5,7 +5,7 @@ use atlas_core::{
     classify_graph_store_error, error_code_docs_ref, graph_health_error_message,
     graph_health_error_suggestions, select_graph_health_error_code,
 };
-use atlas_repo::{CanonicalRepoPath, RepoRegistration, RepoRegistry, phase1_multi_repo_supported};
+use atlas_repo::{RepoRegistration, RepoRegistry, phase1_multi_repo_supported};
 use atlas_review::query_parser;
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
@@ -695,6 +695,7 @@ fn change_source_error_payload(
 }
 
 fn canonicalize_change_source_files(
+    repo_root: &str,
     files: &[String],
     tool_name: &str,
     field_name: &str,
@@ -703,9 +704,10 @@ fn canonicalize_change_source_files(
     files
         .iter()
         .map(|path| {
-            CanonicalRepoPath::from_repo_relative(path)
+            let repo_root_path = camino::Utf8Path::new(repo_root);
+            atlas_repo::normalize_repo_file_path(repo_root_path, path)
+                .map(|resolved| resolved.canonical)
                 .with_context(|| format!("invalid explicit file path '{path}'"))
-                .map(|path| path.as_str().to_owned())
                 .map_err(|error| {
                     change_source_error_payload(
                         tool_name,
@@ -722,6 +724,7 @@ fn canonicalize_change_source_files(
 
 pub(crate) fn resolve_change_source_selection(
     tool_name: &str,
+    repo_root: &str,
     args: Option<&serde_json::Value>,
     allow_explicit_files: bool,
 ) -> std::result::Result<ResolvedChangeSourceSelection, Box<ToolErrorPayload>> {
@@ -866,6 +869,7 @@ pub(crate) fn resolve_change_source_selection(
                     ));
                 }
                 let files = canonicalize_change_source_files(
+                    repo_root,
                     &raw_files,
                     tool_name,
                     "change_source.files",
@@ -1087,8 +1091,15 @@ mod tests {
 
     #[test]
     fn resolve_change_source_selection_supports_change_source_object_files() {
+        // Direct-relative candidates must exist on disk for the normalizer.
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(temp.path()).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "// placeholder").unwrap();
+
         let resolved = resolve_change_source_selection(
             "test_tool",
+            root.as_str(),
             Some(&json!({
                 "change_source": {
                     "kind": "files",
@@ -1108,6 +1119,7 @@ mod tests {
     fn resolve_change_source_selection_rejects_legacy_mode() {
         let error = resolve_change_source_selection(
             "test_tool",
+            "/repo",
             Some(&json!({"mode": "working_tree"})),
             false,
         )
@@ -1123,6 +1135,7 @@ mod tests {
     fn resolve_change_source_selection_rejects_missing_base_for_base_kind() {
         let error = resolve_change_source_selection(
             "test_tool",
+            "/repo",
             Some(&json!({
                 "change_source": {
                     "kind": "base"
@@ -1142,6 +1155,7 @@ mod tests {
     fn resolve_change_source_selection_rejects_mixed_change_source_and_legacy_fields() {
         let error = resolve_change_source_selection(
             "test_tool",
+            "/repo",
             Some(&json!({
                 "change_source": {"kind": "staged"},
                 "staged": true

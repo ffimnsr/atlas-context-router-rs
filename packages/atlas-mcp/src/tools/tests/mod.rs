@@ -23,6 +23,7 @@ mod registry;
 
 pub(super) struct McpFixture {
     pub(super) _dir: TempDir,
+    pub(super) repo_root: String,
     pub(super) db_path: String,
 }
 
@@ -109,6 +110,32 @@ pub(super) fn make_edge(kind: EdgeKind, source_qn: &str, target_qn: &str, file_p
 
 pub(super) fn setup_mcp_fixture() -> McpFixture {
     let dir = tempfile::tempdir().expect("tempdir");
+    // Boundary path normalization requires the fixture files to exist on disk
+    // under the repo root, mirroring a real checked-out worktree.
+    write_repo_file(
+        dir.path(),
+        "README.md",
+        "# Overview\nfixture docs\n## Install\nstep\n",
+    );
+    write_repo_file(
+        dir.path(),
+        "src/service.rs",
+        "pub fn compute() -> i32 { 1 }\n",
+    );
+    write_repo_file(
+        dir.path(),
+        "src/api.rs",
+        "pub fn handle_request() -> i32 { crate::service::compute() }\n",
+    );
+    write_repo_file(
+        dir.path(),
+        "tests/service_test.rs",
+        "#[test]\nfn compute_test() { assert_eq!(1, 1); }\n",
+    );
+
+    let canonical_root = canonical_filesystem_path(Utf8Path::from_path(dir.path()).unwrap())
+        .expect("canonical root");
+    let canonical_root_str = canonical_root.as_str().to_owned();
     let db_path = dir.path().join("atlas.db");
     let db_path = db_path.to_string_lossy().to_string();
 
@@ -181,20 +208,24 @@ pub(super) fn setup_mcp_fixture() -> McpFixture {
     let mut content_store = ContentStore::open(&content_db_path).expect("open content store");
     content_store.migrate().expect("migrate content store");
     content_store
-        .begin_indexing("/repo", 3)
+        .begin_indexing(&canonical_root_str, 4)
         .expect("begin indexing");
     content_store
         .finish_indexing(
-            "/repo",
+            &canonical_root_str,
             &IndexingStats {
-                files_indexed: 3,
-                chunks_written: 3,
+                files_indexed: 4,
+                chunks_written: 4,
                 chunks_reused: 0,
             },
         )
         .expect("finish indexing");
 
-    McpFixture { _dir: dir, db_path }
+    McpFixture {
+        _dir: dir,
+        repo_root: canonical_root_str,
+        db_path,
+    }
 }
 
 pub(super) fn setup_git_mcp_fixture() -> GitMcpFixture {

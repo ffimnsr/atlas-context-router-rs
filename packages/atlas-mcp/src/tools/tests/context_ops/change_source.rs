@@ -104,6 +104,10 @@ fn review_impact_and_explain_change_accept_canonical_change_source() {
 #[test]
 fn review_and_impact_context_report_cross_repo_hops() {
     let dir = tempfile::tempdir().expect("tempdir");
+    // Boundary path normalization requires the input files to exist on disk.
+    write_repo_file(dir.path(), "src/app.rs", "pub fn call_dep() {}\n");
+    write_repo_file(dir.path(), "src/lib.rs", "pub fn dep_helper() {}\n");
+    let root = dir.path().to_string_lossy().into_owned();
     let db_path = dir.path().join("atlas.db").to_string_lossy().to_string();
     let mut store = Store::open(&db_path).expect("open store");
 
@@ -179,7 +183,7 @@ fn review_and_impact_context_report_cross_repo_hops() {
     let review = call(
         "get_review_context",
         Some(&serde_json::json!({ "change_source": { "kind": "files", "files": ["src/app.rs"] }, "output_format": "json" })),
-        "/ignored",
+        &root,
         &db_path,
     )
     .expect("review context call");
@@ -203,7 +207,7 @@ fn review_and_impact_context_report_cross_repo_hops() {
     let impact = call(
         "get_impact_radius",
         Some(&serde_json::json!({ "change_source": { "kind": "files", "files": ["src/app.rs"] }, "output_format": "json" })),
-        "/ignored",
+        &root,
         &db_path,
     )
     .expect("impact call");
@@ -228,6 +232,9 @@ fn review_and_impact_context_report_cross_repo_hops() {
 #[test]
 fn explain_change_reports_change_kind_counts() {
     let dir = tempfile::tempdir().expect("tempdir");
+    // Boundary path normalization requires the input file to exist on disk.
+    write_repo_file(dir.path(), "src/a.rs", "pub fn foo(x: i32) -> i32 { x }\n");
+    let root = dir.path().to_string_lossy().into_owned();
     let db_path = dir.path().join("atlas.db");
     let db_path = db_path.to_string_lossy().to_string();
 
@@ -260,7 +267,7 @@ fn explain_change_reports_change_kind_counts() {
         "max_nodes": 200,
         "output_format": "json",
     });
-    let resp = call("explain_change", Some(&args), "/ignored", &db_path).expect("call");
+    let resp = call("explain_change", Some(&args), &root, &db_path).expect("call");
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
@@ -298,7 +305,7 @@ fn mcp_agent_facing_flows_pass_usability_acceptance_gate() {
     let query_resp = call(
         "query_graph",
         Some(&query_args),
-        "/ignored",
+        &fixture.repo_root,
         &fixture.db_path,
     )
     .expect("query_graph call");
@@ -330,7 +337,7 @@ fn mcp_agent_facing_flows_pass_usability_acceptance_gate() {
     let impact_resp = call(
         "get_impact_radius",
         Some(&impact_args),
-        "/ignored",
+        &fixture.repo_root,
         &fixture.db_path,
     )
     .expect("get_impact_radius call");
@@ -366,7 +373,7 @@ fn mcp_agent_facing_flows_pass_usability_acceptance_gate() {
     let review_resp = call(
         "get_review_context",
         Some(&review_args),
-        "/ignored",
+        &fixture.repo_root,
         &fixture.db_path,
     )
     .expect("get_review_context call");
@@ -391,7 +398,7 @@ fn mcp_agent_facing_flows_pass_usability_acceptance_gate() {
     let context_resp = call(
         "get_context",
         Some(&context_args),
-        "/ignored",
+        &fixture.repo_root,
         &fixture.db_path,
     )
     .expect("get_context call");

@@ -13,7 +13,7 @@ use atlas_core::model::{
     ContextIntent, ContextRequest, ContextResult, ContextTarget, SelectionReason,
 };
 use atlas_impact::analyze as advanced_impact;
-use atlas_repo::{CanonicalRepoPath, DiffTarget, changed_files, find_repo_root};
+use atlas_repo::{DiffTarget, changed_files, find_repo_root};
 use atlas_review::{ContextEngine, normalize_qn_kind_tokens, query_parser};
 use atlas_search as search;
 use atlas_search::semantic as sem;
@@ -424,15 +424,33 @@ pub fn run_context(cli: &Cli) -> Result<()> {
 
         // Build the base request: parse from free-text query or structured flags.
         let mut request = if !files.is_empty() {
-            // Explicit changed-file list → review/impact.
+            // Explicit changed-file list → review/impact. Accept repo-relative,
+            // repo-dir-prefixed, and absolute-under-root forms.
+            let repo_root_path =
+                find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
+            let normalized_files = files
+                .iter()
+                .map(|path| {
+                    atlas_repo::normalize_repo_file_path(repo_root_path.as_path(), path)
+                        .map(|resolved| resolved.canonical)
+                        .with_context(|| format!("invalid file path '{path}'"))
+                })
+                .collect::<Result<Vec<_>>>()?;
             let intent = parse_intent_override(intent_override.as_deref(), ContextIntent::Review);
             ContextRequest {
                 intent,
-                target: ContextTarget::ChangedFiles { paths: files },
+                target: ContextTarget::ChangedFiles {
+                    paths: normalized_files,
+                },
                 ..ContextRequest::default()
             }
         } else if let Some(path) = file {
             // Explicit file target.
+            let repo_root_path =
+                find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
+            let path = atlas_repo::normalize_repo_file_path(repo_root_path.as_path(), &path)
+                .with_context(|| format!("invalid file path '{path}'"))?
+                .canonical;
             let intent = parse_intent_override(intent_override.as_deref(), ContextIntent::File);
             ContextRequest {
                 intent,
@@ -720,9 +738,9 @@ fn resolve_shell_files(repo: &str, args: &ShellArgs) -> Result<Vec<String>> {
             .positionals
             .iter()
             .map(|path| {
-                CanonicalRepoPath::from_cli_argument(repo_root, Utf8Path::new(path))
+                atlas_repo::normalize_repo_file_path(repo_root, path)
+                    .map(|resolved| resolved.canonical)
                     .with_context(|| format!("invalid explicit file path '{path}'"))
-                    .map(|path| path.as_str().to_owned())
             })
             .collect();
     }

@@ -9,6 +9,7 @@ use atlas_reasoning::{
     sort_dead_code_candidates, sort_dependency_result, sort_refactor_safety_result,
     sort_removal_result,
 };
+use atlas_repo::find_repo_root;
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 
@@ -219,6 +220,19 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                 max_edges: _,
                 code_only: _,
             } => {
+                // Best-effort subpath normalization: root-prefixed and
+                // absolute-under-root forms collapse to canonical repo-relative
+                // prefixes; unmatched inputs stay as typed (mirrors `query`).
+                let subpath = subpath.as_deref().map(|raw| {
+                    find_repo_root(Utf8Path::new(&repo))
+                        .ok()
+                        .and_then(|root| {
+                            atlas_repo::normalize_repo_file_path(root.as_path(), raw)
+                                .ok()
+                                .map(|resolved| resolved.canonical)
+                        })
+                        .unwrap_or_else(|| raw.to_owned())
+                });
                 let allowlist_refs: Vec<&str> = allowlist.iter().map(String::as_str).collect();
                 let exclude_kinds: Vec<atlas_core::NodeKind> =
                     exclude_kind.iter().filter_map(|k| k.parse().ok()).collect();

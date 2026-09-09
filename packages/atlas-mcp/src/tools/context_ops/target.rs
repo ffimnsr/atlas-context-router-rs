@@ -69,6 +69,7 @@ pub(super) fn context_query_looks_like_unstructured_description(query: &str) -> 
 }
 
 pub(super) fn parse_get_context_target(
+    repo_root: &str,
     args: Option<&Value>,
 ) -> std::result::Result<ParsedGetContextTarget, Box<ToolErrorPayload>> {
     if args.is_some_and(|value| {
@@ -160,17 +161,17 @@ pub(super) fn parse_get_context_target(
                             json!({ "target": { "kind": "file", "file": "src/lib.rs" } }),
                         )
                     })?;
-                let file = CanonicalRepoPath::from_repo_relative(file)
-                    .map_err(|error| {
-                        get_context_target_error(
-                            "invalid target.file path",
-                            error.to_string(),
-                            vec!["target.file"],
-                            json!({ "target": { "kind": "file", "file": "src/lib.rs" } }),
-                        )
-                    })?
-                    .as_str()
-                    .to_owned();
+                let file =
+                    atlas_repo::normalize_repo_file_path(camino::Utf8Path::new(repo_root), file)
+                        .map_err(|error| {
+                            get_context_target_error(
+                                "invalid target.file path",
+                                error.to_string(),
+                                vec!["target.file"],
+                                json!({ "target": { "kind": "file", "file": "src/lib.rs" } }),
+                            )
+                        })?
+                        .canonical;
                 Ok(ParsedGetContextTarget {
                     kind: GetContextTargetKind::File,
                     target: ContextTarget::FilePath { path: file.clone() },
@@ -198,16 +199,19 @@ pub(super) fn parse_get_context_target(
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(|path| {
-                        CanonicalRepoPath::from_repo_relative(path)
-                            .map(|path| path.as_str().to_owned())
-                            .map_err(|error| {
-                                get_context_target_error(
-                                    "invalid target.files path",
-                                    error.to_string(),
-                                    vec!["target.files"],
-                                    json!({ "target": { "kind": "files", "files": ["src/lib.rs"] } }),
-                                )
-                            })
+                        atlas_repo::normalize_repo_file_path(
+                            camino::Utf8Path::new(repo_root),
+                            path,
+                        )
+                        .map(|resolved| resolved.canonical)
+                        .map_err(|error| {
+                            get_context_target_error(
+                                "invalid target.files path",
+                                error.to_string(),
+                                vec!["target.files"],
+                                json!({ "target": { "kind": "files", "files": ["src/lib.rs"] } }),
+                            )
+                        })
                     })
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 if files.is_empty() {

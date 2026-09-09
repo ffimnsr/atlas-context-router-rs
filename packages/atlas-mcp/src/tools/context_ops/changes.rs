@@ -6,7 +6,7 @@ pub(crate) fn tool_detect_changes(
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
-    let request = match validate_change_source_request("detect_changes", args, false) {
+    let request = match validate_change_source_request("detect_changes", repo_root, args, false) {
         Ok(request) => request,
         Err(payload) => return tool_execution_error_value(output_format, &payload),
     };

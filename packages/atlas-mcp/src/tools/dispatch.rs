@@ -625,7 +625,7 @@ fn call_inner(
         "resolve_symbol" => tool_resolve_symbol(args, repo_root, db_path, output_format),
         "analyze_safety" => tool_analyze_safety(args, db_path, output_format),
         "analyze_remove" => tool_analyze_remove(args, db_path, output_format),
-        "analyze_dead_code" => tool_analyze_dead_code(args, db_path, output_format),
+        "analyze_dead_code" => tool_analyze_dead_code(args, repo_root, db_path, output_format),
         "analyze_dependency" => tool_analyze_dependency(args, db_path, output_format),
         _ => unreachable!("known tool set checked before dispatch"),
     };

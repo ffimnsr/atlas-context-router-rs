@@ -157,6 +157,123 @@ pub enum RepoPathError {
     FilesystemCanonicalize { path: String, message: String },
     #[error("path '{0}' is not valid UTF-8 after filesystem canonicalization")]
     NonUtf8Path(String),
+    #[error(
+        "file path '{requested}' does not exist in this repo and no unambiguous root-prefix was stripped"
+    )]
+    PathNotFound { requested: String },
+    #[error(
+        "file path '{requested}' is ambiguous after removing root-like prefixes; candidates: {candidates:?}"
+    )]
+    AmbiguousPath {
+        requested: String,
+        candidates: Vec<String>,
+    },
+}
+
+/// Outcome of resolving a user-supplied file path against one repo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NormalizedRepoPath {
+    /// Canonical repo-relative path identity.
+    pub canonical: String,
+    /// How the input was resolved.
+    pub reason: &'static str,
+}
+
+/// Resolve a boundary file-path input (repo-relative, repo-dir-prefixed, or
+/// absolute under the repo root) to canonical repo-relative identity.
+///
+/// Resolution order:
+/// 1. absolute path that canonicalizes under `repo_root`;
+/// 2. repo-relative path whose joined candidate exists on disk;
+/// 3. leading-segment stripping (foreign root dirs, duplicated repo-name
+///    prefixes, nested subdir prefixes) — accepted only when exactly one
+///    stripped candidate exists;
+///
+/// else [`RepoPathError`] with ambiguity/not-found detail.
+///
+/// This is the single boundary normalizer for MCP + CLI file-path inputs so
+/// every surface accepts the same three path forms with consistent errors.
+pub fn normalize_repo_file_path(
+    repo_root: &Utf8Path,
+    raw: &str,
+) -> std::result::Result<NormalizedRepoPath, RepoPathError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(RepoPathError::Empty);
+    }
+    let normalized = trimmed.replace('\\', "/");
+    let input = Utf8Path::new(&normalized);
+
+    // Absolute input: must canonicalize under the repo root.
+    if input.is_absolute() {
+        let canonical = CanonicalRepoPath::from_cli_argument(repo_root, input)?;
+        return Ok(NormalizedRepoPath {
+            canonical: canonical.as_str().to_owned(),
+            reason: "absolute",
+        });
+    }
+
+    // Direct repo-relative: accept when the candidate exists on disk.
+    if let Ok(canonical) = CanonicalRepoPath::from_repo_relative(&normalized)
+        && repo_root.join(canonical.as_str()).exists()
+    {
+        return Ok(NormalizedRepoPath {
+            canonical: canonical.as_str().to_owned(),
+            reason: "direct",
+        });
+    }
+
+    // Root-like prefix stripping: exactly one existing candidate wins.
+    let repo_name = repo_root
+        .file_name()
+        .map(|name| name.to_owned())
+        .unwrap_or_default();
+    let segments = normalized
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let mut candidates: Vec<(String, &'static str)> = Vec::new();
+    for strip_count in 1..segments.len() {
+        let tail = segments[strip_count..].join("/");
+        if tail.is_empty() {
+            continue;
+        }
+        let Ok(canonical) = CanonicalRepoPath::from_repo_relative(&tail) else {
+            continue;
+        };
+        if !repo_root.join(canonical.as_str()).exists() {
+            continue;
+        }
+        let reason = if strip_count == 1 && segments[0] == repo_name {
+            "stripped_duplicated_root_prefix"
+        } else if strip_count == 1 {
+            "stripped_foreign_root_prefix"
+        } else {
+            "stripped_nested_subdir_prefix"
+        };
+        if !candidates
+            .iter()
+            .any(|(path, _)| path == canonical.as_str())
+        {
+            candidates.push((canonical.as_str().to_owned(), reason));
+        }
+    }
+    match candidates.len() {
+        1 => Ok(NormalizedRepoPath {
+            canonical: candidates[0].0.clone(),
+            reason: candidates[0].1,
+        }),
+        0 => Err(RepoPathError::PathNotFound {
+            requested: trimmed.to_owned(),
+        }),
+        _ => {
+            candidates.sort();
+            Err(RepoPathError::AmbiguousPath {
+                requested: trimmed.to_owned(),
+                candidates: candidates.into_iter().map(|(path, _)| path).collect(),
+            })
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -592,6 +709,87 @@ mod tests {
     fn synthetic_path_constructor_reuses_relative_rules() {
         let path = CanonicalRepoPath::from_synthetic_path("generated/schema.graph.json").unwrap();
         assert_eq!(path.as_str(), "generated/schema.graph.json");
+    }
+
+    // --- normalize_repo_file_path (boundary path normalizer) ----------------
+
+    #[test]
+    fn normalize_repo_file_path_accepts_all_three_boundary_forms() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join("src").as_std_path()).unwrap();
+        std::fs::write(root.join("src/lib.rs").as_std_path(), "fn main() {}\n").unwrap();
+        let repo_name = root.file_name().unwrap().to_string();
+
+        // 1. repo-relative.
+        let direct = normalize_repo_file_path(root, "src/lib.rs").unwrap();
+        assert_eq!(direct.canonical, "src/lib.rs");
+        assert_eq!(direct.reason, "direct");
+
+        // 2. repo-dir-prefixed (with and without backslash separators).
+        let prefixed = normalize_repo_file_path(root, &format!("{repo_name}/src/lib.rs")).unwrap();
+        assert_eq!(prefixed.canonical, "src/lib.rs");
+        assert_eq!(prefixed.reason, "stripped_duplicated_root_prefix");
+        let forward = normalize_repo_file_path(root, &format!("{repo_name}\\src\\lib.rs")).unwrap();
+        assert_eq!(forward.canonical, "src/lib.rs");
+
+        // 3. absolute under the repo root.
+        let absolute = normalize_repo_file_path(root, root.join("src/lib.rs").as_str()).unwrap();
+        assert_eq!(absolute.canonical, "src/lib.rs");
+        assert_eq!(absolute.reason, "absolute");
+    }
+
+    #[test]
+    fn normalize_repo_file_path_strips_foreign_root_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join("packages/a").as_std_path()).unwrap();
+        std::fs::write(root.join("packages/a/x.rs").as_std_path(), "").unwrap();
+
+        let resolved = normalize_repo_file_path(root, "other-repo-name/packages/a/x.rs").unwrap();
+        assert_eq!(resolved.canonical, "packages/a/x.rs");
+        assert_eq!(resolved.reason, "stripped_foreign_root_prefix");
+    }
+
+    #[test]
+    fn normalize_repo_file_path_reports_missing_and_ambiguous() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        // Two overlapping stripped tails both exist under root.
+        std::fs::create_dir_all(root.join("a/deep").as_std_path()).unwrap();
+        std::fs::write(root.join("a/deep/only.rs").as_std_path(), "").unwrap();
+        std::fs::create_dir_all(root.join("deep").as_std_path()).unwrap();
+        std::fs::write(root.join("deep/only.rs").as_std_path(), "").unwrap();
+
+        let missing = normalize_repo_file_path(root, "src/nope.rs").unwrap_err();
+        assert!(matches!(missing, RepoPathError::PathNotFound { .. }));
+
+        // Two stripped tails both exist -> ambiguous, candidates listed.
+        let error = normalize_repo_file_path(root, "whatever/a/deep/only.rs").unwrap_err();
+        match error {
+            RepoPathError::AmbiguousPath {
+                requested,
+                candidates,
+            } => {
+                assert_eq!(requested, "whatever/a/deep/only.rs");
+                assert_eq!(candidates, ["a/deep/only.rs", "deep/only.rs"]);
+            }
+            other => panic!("expected ambiguous: {other:?}"),
+        }
+
+        let empty = normalize_repo_file_path(root, "   ").unwrap_err();
+        assert_eq!(empty, RepoPathError::Empty);
+    }
+
+    #[test]
+    fn normalize_repo_file_path_rejects_absolute_outside_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        std::fs::write(root.join("a.rs").as_std_path(), "").unwrap();
+
+        let outside = Utf8Path::new("/definitely/not/the/repo/a.rs");
+        let error = normalize_repo_file_path(root, outside.as_str()).unwrap_err();
+        assert!(matches!(error, RepoPathError::NotUnderRepoRoot { .. }));
     }
 
     /// Linux and macOS share the Unix path policy: separators are normalized,

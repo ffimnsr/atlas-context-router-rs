@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use atlas_core::GraphToolRequirement;
-use atlas_repo::{CanonicalRepoPath, find_repo_root};
+use atlas_repo::{find_repo_root, normalize_repo_file_path};
 use atlas_review::{DocsSectionLookup, DocsSectionSelector, lookup_docs_section};
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
@@ -47,8 +47,14 @@ pub fn run_docs_section(cli: &Cli) -> Result<()> {
 
     let repo = resolve_repo(cli)?;
     let repo_root = find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
-    let canonical = CanonicalRepoPath::from_cli_argument(repo_root.as_path(), Utf8Path::new(path))
-        .with_context(|| format!("invalid explicit file path '{path}'"))?;
+    let canonical = normalize_repo_file_path(repo_root.as_path(), path)
+        .map_err(|error| match error {
+            atlas_repo::RepoPathError::PathNotFound { .. } => {
+                anyhow::anyhow!("file not found: {path}")
+            }
+            other => anyhow::anyhow!("invalid explicit file path '{path}': {other}"),
+        })?
+        .canonical;
     let db_path = db_path(cli, &repo);
     let store = match Store::open(&db_path) {
         Err(e) => {

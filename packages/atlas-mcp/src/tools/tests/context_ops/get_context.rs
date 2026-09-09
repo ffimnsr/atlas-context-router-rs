@@ -283,6 +283,9 @@ fn get_context_rejects_legacy_target_fields() {
 #[test]
 fn get_context_files_returns_review_intent() {
     let dir = tempfile::tempdir().expect("tempdir");
+    // Boundary path normalization requires the input file to exist on disk.
+    write_repo_file(dir.path(), "src/main.rs", "fn main() {}\n");
+    let root = dir.path().to_string_lossy().into_owned();
     let db_path = dir.path().join("atlas.db");
     let db_path = db_path.to_string_lossy().to_string();
     let store = Store::open(&db_path).expect("open store");
@@ -290,7 +293,7 @@ fn get_context_files_returns_review_intent() {
     // checks that the `files` argument sets intent=review.
     store
         .finish_build(
-            "/ignored",
+            &root,
             atlas_store_sqlite::BuildFinishStats {
                 state: atlas_store_sqlite::GraphBuildState::Built,
                 files_discovered: 0,
@@ -308,7 +311,7 @@ fn get_context_files_returns_review_intent() {
         .expect("finish_build");
 
     let args = serde_json::json!({ "target": { "kind": "files", "files": ["src/main.rs"] }, "output_format": "json" });
-    let resp = call("get_context", Some(&args), "/ignored", &db_path).expect("call");
+    let resp = call("get_context", Some(&args), &root, &db_path).expect("call");
     let text = unwrap_tool_text(resp.clone());
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 

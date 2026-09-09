@@ -71,7 +71,15 @@ fn run_registered_updates(
                 ..
             } => {
                 if !files.is_empty() && selected_repo_id.is_some() {
-                    UpdateTarget::Files(files.clone())
+                    let normalized = files
+                        .iter()
+                        .map(|path| {
+                            atlas_repo::normalize_repo_file_path(registration.root.as_path(), path)
+                                .map(|resolved| resolved.canonical)
+                                .with_context(|| format!("invalid explicit update path '{path}'"))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    UpdateTarget::Files(normalized)
                 } else if *staged {
                     UpdateTarget::Staged
                 } else if let Some(base_ref) = base {
@@ -313,7 +321,17 @@ pub fn run_update(cli: &Cli) -> Result<()> {
         };
 
         let target = if !explicit_files.is_empty() {
-            UpdateTarget::Files(explicit_files)
+            // Accept repo-relative, repo-dir-prefixed, and absolute-under-root
+            // forms, then hand canonical repo-relative paths to the engine.
+            let normalized = explicit_files
+                .iter()
+                .map(|path| {
+                    atlas_repo::normalize_repo_file_path(repo_root_path.as_path(), path)
+                        .map(|resolved| resolved.canonical)
+                        .with_context(|| format!("invalid explicit update path '{path}'"))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            UpdateTarget::Files(normalized)
         } else {
             match &cli.command {
                 Command::Update { base, staged, .. } => {

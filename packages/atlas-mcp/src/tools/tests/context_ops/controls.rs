@@ -97,6 +97,9 @@ fn get_context_tests_false_excludes_test_nodes() {
 #[test]
 fn get_context_code_spans_toggle_controls_line_ranges() {
     let dir = tempfile::tempdir().expect("tempdir");
+    // Boundary path normalization requires the input file to exist on disk.
+    write_repo_file(dir.path(), "src/ui.rs", "pub fn render() {}\n");
+    let root = dir.path().to_string_lossy().into_owned();
     let db_path = dir.path().join("atlas.db");
     let db_path = db_path.to_string_lossy().to_string();
     let mut store = Store::open(&db_path).expect("open store");
@@ -127,7 +130,7 @@ fn get_context_code_spans_toggle_controls_line_ranges() {
         "code_spans": true,
         "output_format": "json"
     });
-    let resp_with = call("get_context", Some(&with_spans), "/ignored", &db_path).expect("call");
+    let resp_with = call("get_context", Some(&with_spans), &root, &db_path).expect("call");
     assert_eq!(
         resp_with["structuredContent"]["detail_controls"]["code_spans"].as_bool(),
         Some(true)
@@ -138,8 +141,7 @@ fn get_context_code_spans_toggle_controls_line_ranges() {
         "code_spans": false,
         "output_format": "json"
     });
-    let resp_without =
-        call("get_context", Some(&without_spans), "/ignored", &db_path).expect("call");
+    let resp_without = call("get_context", Some(&without_spans), &root, &db_path).expect("call");
     assert_eq!(
         resp_without["structuredContent"]["detail_controls"]["code_spans"].as_bool(),
         Some(false)
@@ -243,7 +245,13 @@ fn get_context_files_with_max_files_cap_respected() {
         "max_files": 1,
         "output_format": "json"
     });
-    let resp = call("get_context", Some(&args), "/ignored", &fixture.db_path).expect("call");
+    let resp = call(
+        "get_context",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("call");
     assert_eq!(
         resp["structuredContent"]["detail_controls"]["max_files"].as_u64(),
         Some(1),
