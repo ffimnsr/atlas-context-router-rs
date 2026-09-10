@@ -13,6 +13,28 @@ Versioning policy may evolve while Atlas is still moving quickly, but release no
 - accept repo-relative, repo-dir-prefixed, and absolute-under-root file paths on every MCP and CLI file-path surface (discovery tools, context/change-source tools, graph and analysis tools, `docs-section`, `context`, `impact`, `review-context`, `explain-change`, `update --files`, `insights --files`, `analyze dead-code --subpath`, `query --subpath`) with structured not-found/ambiguity errors
 - support canonical relative, `~`, `$HOME`, and `${HOME}` repository paths for portable editor configuration
 
+## 1.7.6 - 2026-09-10
+
+### Features
+
+- modify atlas update to sync the insights (`d9e5867`)
+- update for external parsers (`9059ab5`)
+- path resolution for relative and absolute (`28be0fe`)
+- add auto configure config.toml checking hardware setup (`c58349e`)
+
+
+### Fixes
+
+- lint and warnings (`ff12d18`)
+- chuncks not repo scoped and global uniques on nodes (`a4655f3`)
+
+
+### Tests
+
+- fix the saved context state test (`12fbc14`)
+- fix another flaky test for escaped queries (`2c42c54`)
+
+
 ## 1.7.5 - 2026-09-03
 
 ### Features

@@ -1,6 +1,6 @@
 [package]
 name = "atlas-token-count"
-version = "1.7.5"
+version = "1.7.6"
 edition = "2024"
 description = "Deterministic token counting backed by local tokenizer files or byte heuristics"
 publish = false

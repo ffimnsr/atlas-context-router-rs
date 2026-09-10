@@ -109,7 +109,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-adapters"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "anyhow",
  "atlas-contentstore",
@@ -129,7 +129,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-agent-events"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "anyhow",
  "atlas-adapters",
@@ -151,7 +151,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-cli"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "anyhow",
  "atlas-adapters",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-contentstore"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "atlas-core",
  "atlas-db-utils",
@@ -215,7 +215,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-contextsave"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "atlas-contentstore",
  "atlas-core",
@@ -228,7 +228,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-core"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "camino",
  "serde",
@@ -239,7 +239,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-db-utils"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "atlas-core",
  "rusqlite",
@@ -247,7 +247,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-docs"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "anyhow",
  "atlas-core",
@@ -261,7 +261,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-engine"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "anyhow",
  "atlas-adapters",
@@ -287,7 +287,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-history"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "anyhow",
  "atlas-core",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-impact"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "atlas-core",
  "serde_json",
@@ -315,7 +315,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-mcp"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "anyhow",
  "atlas-adapters",
@@ -362,7 +362,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-parser"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "anyhow",
  "atlas-core",
@@ -397,7 +397,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-reasoning"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "atlas-core",
  "atlas-engine",
@@ -414,7 +414,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-refactor"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "atlas-core",
  "atlas-parser",
@@ -429,7 +429,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-repo"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "anyhow",
  "atlas-core",
@@ -447,7 +447,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-review"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "atlas-contentstore",
  "atlas-core",
@@ -467,7 +467,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-search"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "anyhow",
  "atlas-core",
@@ -485,7 +485,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-session"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "atlas-core",
  "atlas-db-utils",
@@ -504,7 +504,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-store-sqlite"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "anyhow",
  "atlas-core",
@@ -525,7 +525,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-token-count"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "anyhow",
  "serde",
