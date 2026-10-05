@@ -20,6 +20,7 @@ mod insights;
 mod listing;
 mod man;
 mod memory;
+mod metrics;
 mod postprocess;
 mod query;
 mod readiness;

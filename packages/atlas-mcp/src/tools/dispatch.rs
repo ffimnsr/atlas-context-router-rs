@@ -40,6 +40,7 @@ use super::health::{
 };
 use super::inventory::{tool_repo_registry, tool_tool_list, tool_tool_search};
 use super::manual::{tool_help, tool_man};
+use super::metrics::tool_get_metrics;
 use super::postprocess::tool_postprocess_graph;
 use super::shared::{
     bool_arg, derive_graph_readiness, derive_graph_readiness_open_failed,
@@ -350,6 +351,32 @@ pub(crate) fn call_with_worker_threads(
     db_path: &str,
     worker_threads: usize,
 ) -> Result<serde_json::Value> {
+    let started = std::time::Instant::now();
+    let result = call_with_worker_threads_inner(name, args, repo_root, db_path, worker_threads);
+    atlas_metrics::record_mcp_tool_call(
+        name,
+        started.elapsed().as_millis() as u64,
+        tool_call_succeeded(&result),
+    );
+    result
+}
+
+/// Tool execution errors are returned as `Ok` responses with `isError: true`,
+/// so outcome counting must inspect the payload in addition to the `Result`.
+fn tool_call_succeeded(result: &Result<serde_json::Value>) -> bool {
+    match result {
+        Ok(value) => value.get("isError").and_then(serde_json::Value::as_bool) != Some(true),
+        Err(_) => false,
+    }
+}
+
+fn call_with_worker_threads_inner(
+    name: &str,
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    db_path: &str,
+    worker_threads: usize,
+) -> Result<serde_json::Value> {
     let mut adapter = McpAdapter::open(repo_root);
     if let Some(ref mut a) = adapter {
         a.before_command(name);
@@ -423,6 +450,7 @@ pub(crate) fn is_known_tool_name(name: &str) -> bool {
         | "search_templates"
         | "search_text_assets"
         | "broker_status"
+        | "get_metrics"
         | "status"
         | "doctor"
         | "db_check"
@@ -619,6 +647,7 @@ fn call_inner(
         "search_templates" => tool_search_templates(args, repo_root, output_format),
         "search_text_assets" => tool_search_text_assets(args, repo_root, output_format),
         "broker_status" => tool_broker_status(repo_root, db_path, worker_threads, output_format),
+        "get_metrics" => tool_get_metrics(output_format),
         "status" => tool_status(repo_root, db_path, output_format),
         "doctor" => tool_doctor(repo_root, db_path, output_format),
         "db_check" => tool_db_check(args, repo_root, db_path, output_format),

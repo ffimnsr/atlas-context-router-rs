@@ -237,6 +237,7 @@ fn tool_output_schema_for(name: &str) -> Option<Value> {
         "tool_search" => Some(tool_search_output_schema()),
         "tool_help" => Some(man_output_schema()),
         "broker_status" => Some(broker_status_output_schema()),
+        "get_metrics" => Some(get_metrics_output_schema()),
         "build_graph" | "update_graph" => Some(graph_build_output_schema()),
         "postprocess_graph" => Some(postprocess_graph_output_schema()),
         "status" => Some(status_output_schema()),

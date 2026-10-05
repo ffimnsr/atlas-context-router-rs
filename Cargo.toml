@@ -21,6 +21,7 @@ members = [
   "packages/atlas-agent-events",
   "packages/atlas-docs",
   "packages/atlas-token-count",
+  "packages/atlas-metrics",
 ]
 exclude = ["fuzz"]
 resolver = "2"
@@ -130,6 +131,7 @@ atlas-reasoning = { path = "packages/atlas-reasoning", version = "1.7.6" }
 atlas-agent-events = { path = "packages/atlas-agent-events", version = "1.7.6" }
 atlas-docs      = { path = "packages/atlas-docs", version = "1.7.6" }
 atlas-token-count = { path = "packages/atlas-token-count", version = "1.7.6" }
+atlas-metrics   = { path = "packages/atlas-metrics", version = "1.7.6" }
 
 [profile.dev]
 debug = 1

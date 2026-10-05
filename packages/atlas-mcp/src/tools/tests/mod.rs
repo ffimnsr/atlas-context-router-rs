@@ -18,6 +18,7 @@ mod analysis;
 mod context_ops;
 mod graph;
 mod health;
+mod parity_args;
 mod readiness;
 mod registry;
 mod symbols;

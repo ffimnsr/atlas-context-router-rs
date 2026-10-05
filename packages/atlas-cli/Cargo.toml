@@ -20,6 +20,7 @@ atlas-agent-events = { path = "../atlas-agent-events" , version = "1.7.6"}
 atlas-contentstore = { path = "../atlas-contentstore" , version = "1.7.6"}
 atlas-docs = { path = "../atlas-docs", version = "1.7.6" }
 atlas-engine.workspace = true
+atlas-metrics.workspace = true
 atlas-history = { path = "../atlas-history", version = "1.7.6" }
 atlas-impact = { path = "../atlas-impact" , version = "1.7.6"}
 atlas-mcp.workspace = true

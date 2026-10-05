@@ -11,11 +11,12 @@ pub mod paths;
 mod build;
 mod postprocess;
 mod repo_graph;
+mod run_metrics;
 mod update;
 mod update_files;
 pub mod watch;
 
-pub use build::{BuildOptions, BuildSummary, build_graph};
+pub use build::{BuildOptions, BuildSummary};
 pub use config::{BuildRunBudget, Config, ConfigTemplateProfile, EmbeddingBackendConfig};
 pub use lang_policy::{Feature, LangEntry, LanguagePolicy, Maturity};
 pub use postprocess::{
@@ -24,5 +25,6 @@ pub use postprocess::{
     postprocess_graph, supported_postprocess_stages,
 };
 pub use repo_graph::refresh_repo_registry_graph;
-pub use update::{UpdateOptions, UpdateSummary, UpdateTarget, update_graph};
+pub use run_metrics::{build_graph, update_graph};
+pub use update::{UpdateOptions, UpdateSummary, UpdateTarget};
 pub use watch::{FileWatcher, WatchBatchResult, WatchEvent, WatchRunner, WatchState};

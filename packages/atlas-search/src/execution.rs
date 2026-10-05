@@ -148,7 +148,33 @@ pub fn execute_query(
     execute_query_with_embedding(store, query, semantic, None)
 }
 
+/// Execute a query and record mode-labelled latency metrics.
+///
+/// This is the single public query entry point; `explain_query` uses the
+/// unrecorded inner function so explanation sampling does not inflate query
+/// counters when MCP `query_graph` executes then explains the same request.
 pub fn execute_query_with_embedding(
+    store: &Store,
+    query: &SearchQuery,
+    semantic: bool,
+    embed_cfg: Option<&embed::EmbeddingConfig>,
+) -> Result<Vec<ScoredNode>> {
+    let started = std::time::Instant::now();
+    let result = execute_query_inner(store, query, semantic, embed_cfg);
+    let mode =
+        query_execution_mode_for(query, semantic, hybrid_backend_available(query, embed_cfg));
+    atlas_metrics::record_query(mode.as_str(), started.elapsed().as_millis() as u64);
+    result
+}
+
+fn hybrid_backend_available(
+    query: &SearchQuery,
+    embed_cfg: Option<&embed::EmbeddingConfig>,
+) -> bool {
+    query.hybrid && capabilities::derive_capabilities(embed_cfg).hybrid_lexical_vector
+}
+
+fn execute_query_inner(
     store: &Store,
     query: &SearchQuery,
     semantic: bool,
@@ -237,7 +263,7 @@ pub fn explain_query_with_embedding(
         if let Some(store) = store {
             let t0 = std::time::Instant::now();
             let results =
-                execute_query_with_embedding(store, query, semantic, embed_cfg).unwrap_or_default();
+                execute_query_inner(store, query, semantic, embed_cfg).unwrap_or_default();
             let latency_ms = t0.elapsed().as_millis();
             let matches: Vec<QueryExplainMatch> = results
                 .iter()

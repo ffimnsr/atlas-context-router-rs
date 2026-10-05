@@ -39,7 +39,9 @@ pub(crate) fn tool_category(name: &str) -> &'static str {
         | "memory_recall"
         | "feedback_record" => "memory",
         "tool_list" | "tool_search" | "tool_help" | "man" | "repo_registry" => "introspection",
-        "status" | "doctor" | "db_check" | "debug_graph" | "broker_status" => "health",
+        "status" | "doctor" | "db_check" | "debug_graph" | "broker_status" | "get_metrics" => {
+            "health"
+        }
         name if name.starts_with("analyze_")
             || name.starts_with("assess_")
             || name.starts_with("find_")
@@ -63,6 +65,7 @@ pub(crate) const TYPED_HEALTH_SCHEMA_TOOLS: &[&str] = &[
     "doctor",
     "db_check",
     "debug_graph",
+    "get_metrics",
 ];
 
 #[cfg(test)]

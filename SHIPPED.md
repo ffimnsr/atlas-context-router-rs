@@ -262,8 +262,17 @@ For active backlog, see ISSUES.md.
 - Deterministic tokenizer quality gates are implemented with a committed character-level WordPiece fixture whose known counts differ from `bytes.div_ceil(4)`: review truncation-order regression tests (saved context before files, files before direct target nodes, direct targets retained), CLI and MCP integration/parity tests for tokenizer, heuristic-fallback, and fail-closed modes, and exact `tokens_estimated` equality with fixture-backed counts so regressions to byte-only accounting fail CI.
 - Documentation is implemented for byte versus tokenizer-backed caps, default heuristic mode, local tokenizer file mode (local JSON inputs only, never downloaded), fallback metadata fields, and fail-closed behavior in README, with config template snapshot tests and a docs drift guard.
 
+## Runtime Metrics
+
+- Process-local metrics registry `atlas-metrics` is implemented with lock-free `AtomicU64` counters, fixed-bucket histograms (count/sum/min/max/mean/p50/p90/p99), labeled metric families, a derived parser cache reuse ratio, and a serializable `MetricsSnapshot`; recording never panics on poisoned label locks.
+- Build and update runs are instrumented at the public engine boundary with run counters, failure counters, end-to-end duration histograms, and parsed-files-per-run histograms, recording both successful and failed runs.
+- Parser instrumentation is implemented in `ParserRegistry::parse`, counting parse attempts and tree-cache reuse when a cached old tree is supplied to tree-sitter for incremental re-parsing.
+- Query instrumentation is implemented in `execute_query_with_embedding`, recording call counts and latency histograms by execution mode; `explain_query` uses the unrecorded inner path so an MCP `query_graph` call that then explains itself does not double-count.
+- MCP tool dispatch is instrumented with per-tool call counters split by `ok`/`error` outcome and per-tool duration histograms.
+- Operator surfaces are implemented through the MCP `get_metrics` tool and an additive `metrics` block in `atlas build --json` / `atlas update --json` for non-dry-run runs, so dry-run golden output stays deterministic while CI can read build duration and parser cache reuse ratio.
+
 ## Still Open
 
 - ICM-inspired memory follow-on roadmap (ICM-B through ICM-H) remains in ISSUES.md.
 - Retrieval post-retrieval compaction experiment, runtime event enrichment and graph linking, Rust reachability guard, shared parser query migration, context escalation contract, dynamic agent policy and hook enforcement, graph store corruption recovery, and measured SQLite read pooling remain in ISSUES.md.
-- Remaining Additional Backlog items (metrics counters, parser-cache CI gate, LSP shim, budget-policy documentation) remain in ISSUES.md.
+- Remaining Additional Backlog items (parser-cache CI gate, LSP shim, budget-policy documentation) remain in ISSUES.md.

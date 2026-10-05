@@ -229,9 +229,7 @@ pub fn run_build(cli: &Cli) -> Result<()> {
         };
 
         if cli.json {
-            print_json(
-                "build",
-                serde_json::json!({
+            let mut payload = serde_json::json!({
                     "ok": true,
                     "dry_run": dry_run,
                     "health_class": recovery.health_class.map(|class| class.as_str()),
@@ -256,8 +254,13 @@ pub fn run_build(cli: &Cli) -> Result<()> {
                     "nodes_per_sec": if summary.elapsed_ms > 0 {
                         (summary.nodes_inserted as f64 / summary.elapsed_ms as f64 * 1000.0).round() as u64
                     } else { summary.nodes_inserted as u64 },
-                }),
-            )?;
+            });
+            // Dry-run output stays deterministic for golden snapshots; metrics
+            // carry wall-clock durations and are only reported for real runs.
+            if !dry_run {
+                payload["metrics"] = serde_json::to_value(atlas_metrics::snapshot())?;
+            }
+            print_json("build", payload)?;
         } else {
             let nodes_per_sec = if summary.elapsed_ms > 0 {
                 format!(
@@ -491,9 +494,7 @@ fn run_registered_builds(
     }
 
     if cli.json {
-        print_json(
-            "build",
-            serde_json::json!({
+        let mut payload = serde_json::json!({
                 "dry_run": dry_run,
                 "partial_success": aggregate.failed_repo_count > 0,
                 "repo_scope": {
@@ -511,8 +512,11 @@ fn run_registered_builds(
                     "bytes_skipped": aggregate.bytes_skipped,
                 },
                 "repos": results,
-            }),
-        )
+        });
+        if !dry_run {
+            payload["metrics"] = serde_json::to_value(atlas_metrics::snapshot())?;
+        }
+        print_json("build", payload)
     } else {
         println!(
             "Build complete for {} repo(s); processed={} failures={} skipped={}",

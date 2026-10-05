@@ -559,7 +559,7 @@ impl WatchRunner {
         };
 
         let (nodes_updated, errors) =
-            match crate::update::update_graph(&self.repo_root, &self.db_path, &opts) {
+            match crate::run_metrics::update_graph(&self.repo_root, &self.db_path, &opts) {
                 Ok(summary) => {
                     if summary.parse_errors > 0 {
                         tracing::warn!("watch: {} parse error(s) in batch", summary.parse_errors);

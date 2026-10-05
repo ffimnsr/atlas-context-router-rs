@@ -72,6 +72,7 @@
 //! | `analyze_dead_code`       | Dead-code candidates with certainty tiers and blockers   |
 //! | `analyze_dependency`      | Dependency-removal validation: removable verdict and refs |
 //! | `broker_status`           | Lightweight broker liveness probe: PID, uptime, version  |
+//! | `get_metrics`             | In-process build/parser/query/MCP counters and histograms |
 //!
 //! MCP prompt templates:
 //! - `review_change`: review-flow guidance for changed files

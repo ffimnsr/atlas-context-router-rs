@@ -32,6 +32,17 @@ pub(super) fn tools() -> Vec<Value> {
                 }
         }),
         json!({
+                "name": "get_metrics",
+                "description": "Return in-process runtime metrics for this Atlas process: counter and histogram data for build/update duration and parsed-file counts, parser tree-cache reuse ratio, query latency by execution mode, and MCP tool call counts. Metrics are process-local and reset when the process restarts.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+        }),
+        json!({
                 "name": "broker_status",
                 "description": "Return a lightweight health/ready check for the MCP broker process itself. Reports process uptime, PID, server version, and configured worker threads. Does NOT check graph readiness — use `status` or `doctor` for graph health. Useful for liveness probes and connectivity verification independent of graph state.",
                 "inputSchema": {

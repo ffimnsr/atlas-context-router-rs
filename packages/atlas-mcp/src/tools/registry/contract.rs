@@ -46,6 +46,7 @@ pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
         | "tool_search"
         | "tool_help"
         | "broker_status"
+        | "get_metrics"
         | "get_context_stats"
         | "man"
         | "detect_changes"

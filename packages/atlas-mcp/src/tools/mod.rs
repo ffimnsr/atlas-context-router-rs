@@ -5,6 +5,7 @@ mod graph;
 pub mod health;
 mod inventory;
 mod manual;
+mod metrics;
 mod postprocess;
 mod registry;
 pub(crate) mod shared;

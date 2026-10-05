@@ -32,5 +32,6 @@ mod explain;
 mod fts;
 mod fuzzy;
 mod merge;
+mod metrics;
 mod ranking;
 mod search;

@@ -68,6 +68,38 @@ pub(crate) fn list_graph_stats_output_schema() -> Value {
     )
 }
 
+pub(crate) fn get_metrics_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "build_runs": { "type": "object", "additionalProperties": { "type": "integer" } },
+            "build_failures": { "type": "object", "additionalProperties": { "type": "integer" } },
+            "build_duration_ms": { "type": "object", "additionalProperties": { "type": "object" } },
+            "build_parsed_files": { "type": "object", "additionalProperties": { "type": "object" } },
+            "parser_parses_total": { "type": "integer" },
+            "parser_tree_reuses_total": { "type": "integer" },
+            "parser_cache_reuse_ratio": { "type": "number" },
+            "query_calls": { "type": "object", "additionalProperties": { "type": "integer" } },
+            "query_duration_ms": { "type": "object", "additionalProperties": { "type": "object" } },
+            "mcp_tool_calls": { "type": "object", "additionalProperties": { "type": "object" } },
+            "mcp_tool_duration_ms": { "type": "object", "additionalProperties": { "type": "object" } }
+        }),
+        &[
+            "build_runs",
+            "build_failures",
+            "build_duration_ms",
+            "build_parsed_files",
+            "parser_parses_total",
+            "parser_tree_reuses_total",
+            "parser_cache_reuse_ratio",
+            "query_calls",
+            "query_duration_ms",
+            "mcp_tool_calls",
+            "mcp_tool_duration_ms",
+        ],
+        None,
+    )
+}
+
 pub(crate) fn broker_status_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({

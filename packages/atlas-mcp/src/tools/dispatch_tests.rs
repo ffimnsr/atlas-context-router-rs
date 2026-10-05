@@ -334,6 +334,7 @@ fn schema_test_args(name: &str, saved_source_id: &str) -> serde_json::Value {
         "search_text_assets" => json!({"output_format": "json"}),
         "repo_registry" => json!({"output_format": "json"}),
         "broker_status" => json!({"output_format": "json"}),
+        "get_metrics" => json!({"output_format": "json"}),
         "status" => json!({"output_format": "json"}),
         "doctor" => json!({"output_format": "json"}),
         "db_check" => json!({"output_format": "json"}),
@@ -449,4 +450,18 @@ fn tools_with_output_schema_emit_schema_compatible_structured_content() {
             .unwrap_or_else(|error| panic!("{name} should succeed for schema test: {error}"));
         assert_matches_output_schema(name, &value, &schema);
     }
+}
+
+#[test]
+fn tool_call_outcome_counts_error_payloads_and_transport_errors() {
+    assert!(tool_call_succeeded(&Ok(json!({
+        "structuredContent": { "ok": true }
+    }))));
+    assert!(!tool_call_succeeded(&Ok(json!({
+        "isError": true,
+        "structuredContent": { "code": "invalid_input" }
+    }))));
+    assert!(!tool_call_succeeded(&Err(anyhow::anyhow!(
+        "transport failure"
+    ))));
 }

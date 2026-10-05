@@ -169,6 +169,7 @@ dependencies = [
  "atlas-history",
  "atlas-impact",
  "atlas-mcp",
+ "atlas-metrics",
  "atlas-parser",
  "atlas-reasoning",
  "atlas-refactor",
@@ -272,6 +273,7 @@ dependencies = [
  "anyhow",
  "atlas-adapters",
  "atlas-core",
+ "atlas-metrics",
  "atlas-parser",
  "atlas-repo",
  "atlas-store-sqlite",
@@ -330,6 +332,7 @@ dependencies = [
  "atlas-core",
  "atlas-engine",
  "atlas-impact",
+ "atlas-metrics",
  "atlas-parser",
  "atlas-reasoning",
  "atlas-repo",
@@ -368,11 +371,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "atlas-metrics"
+version = "1.7.6"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "atlas-parser"
 version = "1.7.6"
 dependencies = [
  "anyhow",
  "atlas-core",
+ "atlas-metrics",
  "atlas-repo",
  "criterion",
  "regex",
@@ -481,6 +493,7 @@ version = "1.7.6"
 dependencies = [
  "anyhow",
  "atlas-core",
+ "atlas-metrics",
  "atlas-store-sqlite",
  "criterion",
  "regex",

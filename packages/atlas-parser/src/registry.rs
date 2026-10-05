@@ -110,6 +110,9 @@ impl ParserRegistry {
             return None;
         }
         let handler = self.handler_for(rel_path)?;
+        // Record before handing off to the language parser: this counts real
+        // parse work and whether tree-sitter receives a cached old tree.
+        atlas_metrics::record_parse_attempt(old_tree.is_some());
         let ctx = ParseContext {
             rel_path,
             file_hash,
@@ -312,6 +315,31 @@ mod tests {
                 .unwrap_or_else(|| panic!("registry should support {rel_path}"));
             assert_parsed_file_invariants(&parsed, rel_path, source);
         }
+    }
+
+    #[test]
+    fn parse_records_tree_reuse_metrics() {
+        let reg = ParserRegistry::with_defaults();
+        let before = atlas_metrics::snapshot();
+
+        let (_parsed, tree) = reg
+            .parse("src/main.rs", "hash1", b"fn main() {}", None)
+            .expect("fresh parse");
+        let tree = tree.expect("rust parser must return a tree");
+        let (_parsed2, _tree2) = reg
+            .parse("src/main.rs", "hash2", b"fn main() { }", Some(&tree))
+            .expect("incremental parse");
+
+        let after = atlas_metrics::snapshot();
+        assert!(
+            after.parser_parses_total >= before.parser_parses_total + 2,
+            "both parse calls must be counted"
+        );
+        assert!(
+            after.parser_tree_reuses_total > before.parser_tree_reuses_total,
+            "incremental parse with old tree must count as a reuse"
+        );
+        assert!(after.parser_cache_reuse_ratio > 0.0);
     }
 
     #[test]
