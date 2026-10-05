@@ -20,6 +20,9 @@ Versioning policy may evolve while Atlas is still moving quickly, but release no
 - resolve unscoped store lookups (file owners, node signatures, rename/delete) through a single stable repo identity and fail closed when the store holds several
 - canonicalize the repo root before reasoning build-state and insights-snapshot lookups so symlinked roots (git `--show-toplevel` resolves, for example, macOS `/var` -> `/private/var`) still resolve `assess_risk` targets; covered by a symlinked-root regression test
 - repair a private intra-doc link in `atlas-repo` that failed the docs job under `RUSTDOCFLAGS=-D warnings`
+- publish `serve-daemon` runtime metadata only after the socket transport installs shutdown signals, closing a startup race where a fast SIGTERM killed the daemon with the default disposition and failed `serve_daemon_clears_runtime_state_on_sigterm`
+- install broker SIGINT/SIGTERM handling before lock acquisition and daemon startup so a signal during `atlas serve` startup exits cleanly instead of dying by default disposition; the relay registers its socket for interruption and the SIGINT test no longer pads with a fixed sleep
+- make the broker daemon spawn helper shared between the Unix and Windows brokers so `win_spawn_and_wait_for_daemon` resolves it; the helper was `#[cfg(unix)]` while already being called from Windows-gated code
 
 ### Maintenance
 
@@ -31,6 +34,7 @@ Versioning policy may evolve while Atlas is still moving quickly, but release no
 - remove the obsolete `jsonschema` `draft202012` feature and move the `atlas-cli`/`atlas-mcp` dev-dependency to 0.58; contract tests now use `jsonschema::validator_for` draft auto-detection
 - refresh direct dependencies: `console` 0.16, `dialoguer` 0.12, `indicatif` 0.18, `signal-hook` 0.4, `jsonwebtoken` 11 (`aws-lc-rs` backend), `reqwest` 0.13 (rustls), `rmcp` 3.5, `ignore` 0.4.33, `grep-searcher` 0.1.17, `tokio` 1.53, `tokio-stream` 0.1.19, `libc` 0.2.190, `windows-sys` 0.61; `tower-http` 0.7 stays blocked because `reqwest` 0.13 and `rmcp` 3.5 both pin 0.6
 - drop the unused `windows-sys` target dependency from `atlas-cli` and the stale `#[allow(deprecated)]` around `std::env::home_dir`; allow `Zlib` in `deny.toml` for `foldhash` 0.2 and remove the obsolete `number_prefix` advisory ignore now that `indicatif` 0.18 no longer pulls it
+- extract the Unix stdio broker (daemon attach/spawn, stdio relay, reconnect loop) and its signal handling into `commands/platform/broker.rs` / `commands/platform/broker_signals.rs`, bringing `platform.rs` back under the 1K LOC threshold
 
 ## 1.7.6 - 2026-09-10
 

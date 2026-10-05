@@ -630,7 +630,6 @@ fn serve_broker_exits_cleanly_on_sigint() {
     wait_until(Duration::from_secs(3), || {
         !list_mcp_instance_metadata(repo.path()).is_empty()
     });
-    std::thread::sleep(Duration::from_millis(250));
 
     send_signal(child.id(), libc::SIGINT);
     let output = child.wait_with_output().expect("wait for serve broker");

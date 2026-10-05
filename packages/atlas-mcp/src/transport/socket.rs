@@ -162,17 +162,31 @@ fn perform_socket_handshake<R: std::io::BufRead, W: std::io::Write>(
 // Unix socket server
 // ---------------------------------------------------------------------------
 
+/// Run the Unix socket daemon transport until a shutdown signal arrives.
+///
+/// `on_ready` runs once the listener accepts connections and shutdown signals
+/// are installed; use it to publish runtime metadata.
 #[cfg(unix)]
 pub fn run_socket_server_with_options(
     socket_path: &Path,
     repo_root: &str,
     db_path: &str,
     options: ServerOptions,
+    on_ready: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     if let Some(parent) = socket_path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("cannot create {}", parent.display()))?;
     }
+
+    // Install shutdown signals before the socket becomes visible and before
+    // `on_ready` publishes runtime metadata: a SIGTERM delivered in between
+    // would otherwise terminate the process with the default disposition.
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let active_streams = Arc::new(Mutex::new(Vec::<UnixStream>::new()));
+    let _shutdown_guard =
+        install_socket_shutdown_handler(Arc::clone(&shutdown), Arc::clone(&active_streams))?;
+
     if socket_path.exists() {
         std::fs::remove_file(socket_path)
             .with_context(|| format!("cannot remove stale {}", socket_path.display()))?;
@@ -188,10 +202,10 @@ pub fn run_socket_server_with_options(
         .with_context(|| format!("cannot set nonblocking {}", socket_path.display()))?;
     crate::tools::health::mark_server_started();
     let next_connection = AtomicUsize::new(0);
-    let shutdown = Arc::new(AtomicBool::new(false));
-    let active_streams = Arc::new(Mutex::new(Vec::<UnixStream>::new()));
-    let _shutdown_guard =
-        install_socket_shutdown_handler(Arc::clone(&shutdown), Arc::clone(&active_streams))?;
+    // The transport is ready: the socket accepts connections and signals are
+    // handled. Consumers publish runtime metadata here so readiness observers
+    // can never signal a process that is not yet handling signals.
+    on_ready()?;
 
     eprintln!(
         "atlas-mcp: daemon ready (repo={repo_root}, db={db_path}, socket={})",
@@ -420,10 +434,12 @@ pub fn run_socket_server_with_options(
     repo_root: &str,
     db_path: &str,
     options: ServerOptions,
+    on_ready: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     use std::os::windows::ffi::OsStrExt;
 
     crate::tools::health::mark_server_started();
+    on_ready()?;
 
     let pipe_name: Vec<u16> = pipe_path
         .as_os_str()
@@ -485,6 +501,7 @@ pub fn run_socket_server_with_options(
     _repo_root: &str,
     _db_path: &str,
     _options: ServerOptions,
+    _on_ready: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     Err(anyhow::anyhow!(
         "MCP daemon transport is unsupported on this platform"

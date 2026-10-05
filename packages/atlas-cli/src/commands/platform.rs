@@ -1,12 +1,20 @@
-use std::process::Stdio;
-
-use anyhow::{Context, Result};
+#[cfg(any(unix, windows))]
+use anyhow::Context;
+use anyhow::Result;
 use atlas_mcp::ServerOptions;
 use serde::{Deserialize, Serialize};
+#[cfg(any(unix, windows))]
+use std::process::Stdio;
 
 use crate::cli::{Cli, Command, InstallMode};
 
 use super::{db_path, print_json, resolve_repo};
+
+#[cfg(unix)]
+mod broker;
+
+#[cfg(unix)]
+mod broker_signals;
 
 fn server_options_for_repo(repo: &str) -> Result<ServerOptions> {
     let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo))?;
@@ -31,7 +39,12 @@ pub fn run_serve(cli: &Cli) -> Result<()> {
 
     let instance = crate::mcp_instance::McpInstance::for_repo_and_db(&repo, &db_path)?;
 
-    #[cfg(any(unix, windows))]
+    #[cfg(unix)]
+    {
+        broker::run_stdio_broker(instance, options)
+    }
+
+    #[cfg(windows)]
     {
         run_stdio_broker(instance, options)
     }
@@ -85,91 +98,6 @@ fn broker_reconnect_delay(attempt: u32) -> std::time::Duration {
 }
 
 #[cfg(unix)]
-enum RelayOutcome {
-    /// stdin closed naturally or signal received — session is done.
-    Clean,
-    /// Daemon socket disconnected while stdin was still open — daemon crashed.
-    DaemonDied,
-}
-
-#[cfg(unix)]
-const MAX_DAEMON_RECONNECTS: u32 = 3;
-
-#[cfg(unix)]
-fn run_stdio_broker(
-    instance: crate::mcp_instance::McpInstance,
-    options: ServerOptions,
-) -> Result<()> {
-    let coordination_lock = instance.acquire_lock_blocking()?;
-    let stream = match instance.inspect_metadata()? {
-        crate::mcp_instance::McpInstanceStatus::Ready(metadata) => {
-            match connect_to_daemon(
-                &metadata.socket_path,
-                &instance.repo_root,
-                &instance.db_path,
-            ) {
-                Ok(stream) => {
-                    eprintln!(
-                        "atlas-mcp: broker attach socket={} repo={} db={}",
-                        metadata.socket_path, instance.repo_root, instance.db_path
-                    );
-                    stream
-                }
-                Err(error) => {
-                    eprintln!("atlas-mcp: stale daemon state detected; respawn: {error:#}");
-                    eprintln!(
-                        "atlas-mcp: broker cleanup socket={} repo={} db={}",
-                        metadata.socket_path, instance.repo_root, instance.db_path
-                    );
-                    instance.clear_runtime_state()?;
-                    spawn_and_wait_for_daemon(&instance, options.clone())?
-                }
-            }
-        }
-        crate::mcp_instance::McpInstanceStatus::Missing => {
-            spawn_and_wait_for_daemon(&instance, options.clone())?
-        }
-        crate::mcp_instance::McpInstanceStatus::Stale(stale) => {
-            eprintln!(
-                "atlas-mcp: cleaning stale daemon state for {} socket={} ({:?})",
-                instance.instance_id,
-                instance.socket_path.display(),
-                stale.reasons
-            );
-            instance.clear_runtime_state()?;
-            spawn_and_wait_for_daemon(&instance, options.clone())?
-        }
-    };
-
-    drop(coordination_lock);
-
-    let mut stream = stream;
-    let mut reconnects = 0u32;
-    loop {
-        match relay_stdio(stream)? {
-            RelayOutcome::Clean => break,
-            RelayOutcome::DaemonDied => {
-                reconnects += 1;
-                if reconnects > MAX_DAEMON_RECONNECTS {
-                    return Err(anyhow::anyhow!(
-                        "atlas-mcp: daemon crashed {MAX_DAEMON_RECONNECTS} times; giving up"
-                    ));
-                }
-                let delay = broker_reconnect_delay(reconnects);
-                eprintln!(
-                    "atlas-mcp: daemon died mid-session; waiting {}ms before reconnect attempt {reconnects}/{MAX_DAEMON_RECONNECTS}",
-                    delay.as_millis()
-                );
-                std::thread::sleep(delay);
-                instance.clear_runtime_state()?;
-                stream = spawn_and_wait_for_daemon(&instance, options.clone())?;
-            }
-        }
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
 fn run_socket_daemon(
     instance: crate::mcp_instance::McpInstance,
     options: ServerOptions,
@@ -180,7 +108,6 @@ fn run_socket_daemon(
         atlas_mcp::MCP_PROTOCOL_VERSION,
         &daemon_started_at(),
     );
-    instance.write_metadata(&metadata)?;
     let cleanup = DaemonCleanup {
         instance: instance.clone(),
     };
@@ -189,239 +116,10 @@ fn run_socket_daemon(
         &instance.repo_root,
         &instance.db_path,
         options,
+        || instance.write_metadata(&metadata),
     );
     drop(cleanup);
     result
-}
-
-#[cfg(unix)]
-fn spawn_and_wait_for_daemon(
-    instance: &crate::mcp_instance::McpInstance,
-    options: ServerOptions,
-) -> Result<std::os::unix::net::UnixStream> {
-    eprintln!(
-        "atlas-mcp: broker spawn socket={} repo={} db={}",
-        instance.socket_path.display(),
-        instance.repo_root,
-        instance.db_path
-    );
-    spawn_daemon_process(instance, options)?;
-    wait_for_daemon_ready(instance)
-}
-
-#[cfg(unix)]
-fn spawn_daemon_process(
-    instance: &crate::mcp_instance::McpInstance,
-    _options: ServerOptions,
-) -> Result<()> {
-    let current_exe = std::env::current_exe().context("cannot resolve atlas binary path")?;
-    std::process::Command::new(&current_exe)
-        .args([
-            "--repo",
-            &instance.repo_root,
-            "--db",
-            &instance.db_path,
-            "serve-daemon",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .with_context(|| format!("cannot spawn daemon from {}", current_exe.display()))?;
-    Ok(())
-}
-
-#[cfg(unix)]
-fn wait_for_daemon_ready(
-    instance: &crate::mcp_instance::McpInstance,
-) -> Result<std::os::unix::net::UnixStream> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    let mut last_error: Option<anyhow::Error> = None;
-
-    while std::time::Instant::now() < deadline {
-        match instance.read_metadata() {
-            Ok(Some(metadata)) => match connect_to_daemon(
-                &metadata.socket_path,
-                &instance.repo_root,
-                &instance.db_path,
-            ) {
-                Ok(stream) => return Ok(stream),
-                Err(error) => last_error = Some(error),
-            },
-            Ok(None) => {}
-            Err(error) => last_error = Some(error),
-        }
-        std::thread::sleep(std::time::Duration::from_millis(25));
-    }
-
-    Err(anyhow::anyhow!(
-        "daemon readiness handshake failed for repo={} db={}: {}",
-        instance.repo_root,
-        instance.db_path,
-        last_error
-            .map(|error| error.to_string())
-            .unwrap_or_else(|| "daemon never became ready".to_owned())
-    ))
-}
-
-#[cfg(unix)]
-fn relay_stdio(mut stream: std::os::unix::net::UnixStream) -> Result<RelayOutcome> {
-    use std::io::{self, Write};
-    use std::net::Shutdown;
-    use std::os::fd::AsRawFd;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    let mut write_stream = stream
-        .try_clone()
-        .context("cannot clone broker socket stream")?;
-    let signal_stream = stream
-        .try_clone()
-        .context("cannot clone broker socket stream for shutdown")?;
-    let shutdown = Arc::new(AtomicBool::new(false));
-    let signal_shutdown = Arc::clone(&shutdown);
-    // Set to true when stdin closes naturally (EOF), false if we close it to
-    // interrupt the relay because the daemon died first.
-    let stdin_done = Arc::new(AtomicBool::new(false));
-    let stdin_done_writer = Arc::clone(&stdin_done);
-    let mut signals = signal_hook::iterator::Signals::new([
-        signal_hook::consts::SIGINT,
-        signal_hook::consts::SIGTERM,
-    ])
-    .context("cannot install broker shutdown signals")?;
-    let signal_handle = signals.handle();
-    let signal_thread = std::thread::Builder::new()
-        .name("atlas-cli:broker-signal-handler".to_owned())
-        .spawn(move || {
-            if signals.forever().next().is_some() {
-                signal_shutdown.store(true, Ordering::Relaxed);
-                let _ = signal_stream.shutdown(Shutdown::Both);
-                unsafe {
-                    let _ = libc::close(libc::STDIN_FILENO);
-                }
-            }
-        })
-        .context("cannot spawn broker shutdown signal handler")?;
-    let stdin_thread = std::thread::spawn(move || -> Result<()> {
-        let stdin = io::stdin();
-        let mut input = stdin.lock();
-        match io::copy(&mut input, &mut write_stream) {
-            Ok(_) => {
-                // stdin reached EOF naturally before the daemon disconnected.
-                stdin_done_writer.store(true, Ordering::Relaxed);
-            }
-            Err(error) if is_benign_broker_stdin_disconnect(&error) => return Ok(()),
-            Err(error) => return Err(error).context("stdin relay failed"),
-        }
-        finish_broker_socket_write_half(write_stream.shutdown(Shutdown::Write))?;
-        Ok(())
-    });
-
-    let stdout = io::stdout();
-    let mut output = stdout.lock();
-    let stdout_result = io::copy(&mut stream, &mut output);
-    output.flush().context("cannot flush broker stdout")?;
-
-    // Determine the outcome before joining the stdin thread.
-    let outcome = if shutdown.load(Ordering::Relaxed) {
-        // Clean signal-triggered shutdown.
-        RelayOutcome::Clean
-    } else if stdin_done.load(Ordering::Relaxed) {
-        // stdin reached EOF before the daemon closed — normal session end.
-        RelayOutcome::Clean
-    } else {
-        // Daemon socket closed while stdin was still open — daemon died.
-        // Interrupt the stdin relay so it exits.
-        let _ = stream.shutdown(Shutdown::Both);
-        RelayOutcome::DaemonDied
-    };
-
-    match stdout_result {
-        Ok(_) => {}
-        Err(_error) if shutdown.load(Ordering::Relaxed) => {}
-        Err(_error) if matches!(outcome, RelayOutcome::DaemonDied) => {}
-        Err(error) => return Err(error).context("stdout relay failed"),
-    }
-
-    match stdin_thread.join() {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) if shutdown.load(Ordering::Relaxed) => {
-            tracing::debug!(error = %error, fd = stream.as_raw_fd(), "broker stdin relay interrupted by shutdown signal");
-        }
-        Ok(Err(error)) if matches!(outcome, RelayOutcome::DaemonDied) => {
-            tracing::debug!(error = %error, "broker stdin relay interrupted by daemon death");
-        }
-        Ok(Err(error)) => return Err(error),
-        Err(_) => return Err(anyhow::anyhow!("stdin relay thread panicked")),
-    }
-    signal_handle.close();
-    let _ = signal_thread.join();
-    Ok(outcome)
-}
-
-#[cfg(unix)]
-fn is_benign_broker_stdin_disconnect(error: &std::io::Error) -> bool {
-    matches!(
-        error.kind(),
-        std::io::ErrorKind::BrokenPipe
-            | std::io::ErrorKind::ConnectionReset
-            | std::io::ErrorKind::ConnectionAborted
-            | std::io::ErrorKind::NotConnected
-            | std::io::ErrorKind::UnexpectedEof
-    )
-}
-
-#[cfg(unix)]
-fn finish_broker_socket_write_half(result: std::io::Result<()>) -> Result<()> {
-    match result {
-        Ok(()) => Ok(()),
-        Err(error) if is_benign_broker_stdin_disconnect(&error) => Ok(()),
-        Err(error) => Err(error).context("cannot close broker socket write half"),
-    }
-}
-
-#[cfg(unix)]
-fn connect_to_daemon(
-    socket_path: &str,
-    repo_root: &str,
-    db_path: &str,
-) -> Result<std::os::unix::net::UnixStream> {
-    use std::io::{BufRead, BufReader, Write};
-
-    let mut stream = std::os::unix::net::UnixStream::connect(socket_path)
-        .with_context(|| format!("cannot connect {}", socket_path))?;
-    let mut reader = BufReader::new(
-        stream
-            .try_clone()
-            .context("cannot clone daemon socket for handshake")?,
-    );
-    let request = DaemonHandshakeRequest {
-        protocol_version: atlas_mcp::MCP_PROTOCOL_VERSION.to_owned(),
-        repo_root: repo_root.to_owned(),
-        db_path: db_path.to_owned(),
-    };
-    writeln!(stream, "{}", serde_json::to_string(&request)?)
-        .context("cannot write daemon handshake")?;
-    stream.flush().context("cannot flush daemon handshake")?;
-
-    let mut response_line = String::new();
-    let bytes = reader
-        .read_line(&mut response_line)
-        .context("cannot read daemon handshake")?;
-    if bytes == 0 {
-        return Err(anyhow::anyhow!("daemon closed before handshake response"));
-    }
-    let response: DaemonHandshakeResponse =
-        serde_json::from_str(response_line.trim()).context("invalid daemon handshake response")?;
-    if response.ok {
-        Ok(stream)
-    } else {
-        Err(anyhow::anyhow!(
-            response
-                .error
-                .unwrap_or_else(|| "daemon handshake rejected".to_owned())
-        ))
-    }
 }
 
 #[cfg(unix)]
@@ -538,7 +236,6 @@ fn run_socket_daemon(
         atlas_mcp::MCP_PROTOCOL_VERSION,
         &daemon_started_at(),
     );
-    instance.write_metadata(&metadata)?;
     let cleanup = WinDaemonCleanup {
         instance: instance.clone(),
     };
@@ -547,6 +244,7 @@ fn run_socket_daemon(
         &instance.repo_root,
         &instance.db_path,
         options,
+        || instance.write_metadata(&metadata),
     );
     drop(cleanup);
     result
@@ -736,6 +434,32 @@ fn win_is_benign_disconnect(error: &std::io::Error) -> bool {
             | std::io::ErrorKind::ConnectionAborted
             | std::io::ErrorKind::UnexpectedEof
     )
+}
+
+/// Spawn the detached `serve-daemon` child used by the stdio brokers.
+///
+/// Shared by the Unix socket broker and the Windows named-pipe broker; the
+/// daemon detaches from stdio and the broker attaches over the transport.
+#[cfg(any(unix, windows))]
+fn spawn_daemon_process(
+    instance: &crate::mcp_instance::McpInstance,
+    _options: ServerOptions,
+) -> Result<()> {
+    let current_exe = std::env::current_exe().context("cannot resolve atlas binary path")?;
+    std::process::Command::new(&current_exe)
+        .args([
+            "--repo",
+            &instance.repo_root,
+            "--db",
+            &instance.db_path,
+            "serve-daemon",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("cannot spawn daemon from {}", current_exe.display()))?;
+    Ok(())
 }
 
 #[cfg(any(unix, windows))]
@@ -999,84 +723,6 @@ mod tests {
                 direct_stdio: false
             }
         ));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn broker_stdin_disconnect_classifier_keeps_expected_socket_teardowns_nonfatal() {
-        let benign = [
-            std::io::ErrorKind::BrokenPipe,
-            std::io::ErrorKind::ConnectionReset,
-            std::io::ErrorKind::ConnectionAborted,
-            std::io::ErrorKind::NotConnected,
-            std::io::ErrorKind::UnexpectedEof,
-        ];
-
-        for kind in benign {
-            let error = std::io::Error::from(kind);
-            assert!(
-                super::is_benign_broker_stdin_disconnect(&error),
-                "expected {kind:?} to be treated as a benign broker stdin disconnect"
-            );
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn broker_stdin_disconnect_classifier_keeps_real_io_failures_fatal() {
-        let fatal = [
-            std::io::ErrorKind::PermissionDenied,
-            std::io::ErrorKind::InvalidInput,
-            std::io::ErrorKind::Other,
-        ];
-
-        for kind in fatal {
-            let error = std::io::Error::from(kind);
-            assert!(
-                !super::is_benign_broker_stdin_disconnect(&error),
-                "expected {kind:?} to remain a fatal broker stdin error"
-            );
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn broker_write_half_close_keeps_expected_socket_teardowns_nonfatal() {
-        let benign = [
-            std::io::ErrorKind::BrokenPipe,
-            std::io::ErrorKind::ConnectionReset,
-            std::io::ErrorKind::ConnectionAborted,
-            std::io::ErrorKind::NotConnected,
-            std::io::ErrorKind::UnexpectedEof,
-        ];
-
-        for kind in benign {
-            assert!(
-                super::finish_broker_socket_write_half(Err(std::io::Error::from(kind))).is_ok(),
-                "expected {kind:?} to be treated as a benign broker write-half close"
-            );
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn broker_write_half_close_keeps_real_io_failures_fatal() {
-        let fatal = [
-            std::io::ErrorKind::PermissionDenied,
-            std::io::ErrorKind::InvalidInput,
-            std::io::ErrorKind::Other,
-        ];
-
-        for kind in fatal {
-            let error = super::finish_broker_socket_write_half(Err(std::io::Error::from(kind)))
-                .expect_err("fatal shutdown error must propagate");
-            assert!(
-                error
-                    .to_string()
-                    .contains("cannot close broker socket write half"),
-                "expected shutdown error context for {kind:?}: {error:#}"
-            );
-        }
     }
 
     #[test]
