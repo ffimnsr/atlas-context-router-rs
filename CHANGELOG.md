@@ -36,6 +36,21 @@ Versioning policy may evolve while Atlas is still moving quickly, but release no
 - drop the unused `windows-sys` target dependency from `atlas-cli` and the stale `#[allow(deprecated)]` around `std::env::home_dir`; allow `Zlib` in `deny.toml` for `foldhash` 0.2 and remove the obsolete `number_prefix` advisory ignore now that `indicatif` 0.18 no longer pulls it
 - extract the Unix stdio broker (daemon attach/spawn, stdio relay, reconnect loop) and its signal handling into `commands/platform/broker.rs` / `commands/platform/broker_signals.rs`, bringing `platform.rs` back under the 1K LOC threshold
 
+## 1.7.7 - 2026-10-05
+
+### Features
+
+- remove legacy processing to only legacy migration (`add62f2`)
+- unify the some functions and change handrolled impl with well tested crate (`067a5b6`)
+- update docs and fix ci error (`85da9de`)
+- add metrics for tooling (`55a3da9`)
+
+
+### Maintenance
+
+- fix all errors on CI and windows runner (`339905e`)
+
+
 ## 1.7.6 - 2026-09-10
 
 ### Features

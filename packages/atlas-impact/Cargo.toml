@@ -1,6 +1,6 @@
 [package]
 name = "atlas-impact"
-version = "1.7.6"
+version = "1.7.7"
 license.workspace = true
 edition = "2024"
 description = "Impact scoring, boundary analysis, and test reachability for Atlas"

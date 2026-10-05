@@ -1,6 +1,6 @@
 [package]
 name = "atlas-adapters"
-version = "1.7.6"
+version = "1.7.7"
 license.workspace = true
 edition = "2024"
 description = "Transport and frontend adapter layer for Atlas context memory integration"
@@ -8,10 +8,10 @@ publish = false
 
 [dependencies]
 atlas-core.workspace = true
-atlas-contentstore = { path = "../atlas-contentstore" , version = "1.7.6"}
-atlas-session = { path = "../atlas-session" , version = "1.7.6"}
-atlas-contextsave = { path = "../atlas-contextsave" , version = "1.7.6"}
-atlas-repo = { path = "../atlas-repo" , version = "1.7.6"}
+atlas-contentstore = { path = "../atlas-contentstore" , version = "1.7.7"}
+atlas-session = { path = "../atlas-session" , version = "1.7.7"}
+atlas-contextsave = { path = "../atlas-contextsave" , version = "1.7.7"}
+atlas-repo = { path = "../atlas-repo" , version = "1.7.7"}
 camino.workspace = true
 anyhow.workspace = true
 regex.workspace = true

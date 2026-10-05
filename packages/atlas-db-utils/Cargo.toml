@@ -1,6 +1,6 @@
 [package]
 name = "atlas-db-utils"
-version = "1.7.6"
+version = "1.7.7"
 license.workspace = true
 edition = "2024"
 description = "Shared SQLite connection helpers (PRAGMAs, application_id, VACUUM) for Atlas stores"

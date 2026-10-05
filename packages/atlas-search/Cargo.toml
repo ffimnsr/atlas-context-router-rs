@@ -1,6 +1,6 @@
 [package]
 name = "atlas-search"
-version = "1.7.6"
+version = "1.7.7"
 license.workspace = true
 edition = "2024"
 description = "FTS-backed graph search and ranking utilities for Atlas"
@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 atlas-core.workspace = true
 atlas-metrics.workspace = true
-atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "1.7.6"}
+atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "1.7.7"}
 anyhow.workspace = true
 thiserror.workspace = true
 regex.workspace = true

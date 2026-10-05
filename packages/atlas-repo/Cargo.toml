@@ -1,6 +1,6 @@
 [package]
 name = "atlas-repo"
-version = "1.7.6"
+version = "1.7.7"
 license.workspace = true
 edition = "2024"
 description = "Repository discovery, file collection, diffing, and path utilities for Atlas"
