@@ -136,6 +136,7 @@ pub(super) fn setup_mcp_fixture() -> McpFixture {
     let canonical_root = canonical_filesystem_path(Utf8Path::from_path(dir.path()).unwrap())
         .expect("canonical root");
     let canonical_root_str = canonical_root.as_str().to_owned();
+    let source_repo_id = atlas_repo::stable_repo_id(canonical_root.as_path());
     let db_path = dir.path().join("atlas.db");
     let db_path = db_path.to_string_lossy().to_string();
 
@@ -148,7 +149,8 @@ pub(super) fn setup_mcp_fixture() -> McpFixture {
         "src/service.rs",
     );
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            &source_repo_id,
             "src/service.rs",
             "hash:src/service.rs",
             Some("rust"),
@@ -171,7 +173,8 @@ pub(super) fn setup_mcp_fixture() -> McpFixture {
         "src/api.rs",
     );
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            &source_repo_id,
             "src/api.rs",
             "hash:src/api.rs",
             Some("rust"),
@@ -194,7 +197,8 @@ pub(super) fn setup_mcp_fixture() -> McpFixture {
         "tests/service_test.rs",
     );
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            &source_repo_id,
             "tests/service_test.rs",
             "hash:tests/service_test.rs",
             Some("rust"),
@@ -258,6 +262,7 @@ pub(super) fn setup_git_mcp_fixture() -> GitMcpFixture {
     let canonical_root =
         canonical_filesystem_path(Utf8Path::from_path(root).unwrap()).expect("canonical repo root");
     let canonical_root_str = canonical_root.as_str().to_owned();
+    let source_repo_id = atlas_repo::stable_repo_id(canonical_root.as_path());
     let db_path = root.join("atlas.db").to_string_lossy().to_string();
     let mut store = Store::open(&db_path).expect("open store");
 
@@ -268,7 +273,8 @@ pub(super) fn setup_git_mcp_fixture() -> GitMcpFixture {
         "src/service.rs",
     );
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            &source_repo_id,
             "src/service.rs",
             "hash:src/service.rs",
             Some("rust"),
@@ -291,7 +297,8 @@ pub(super) fn setup_git_mcp_fixture() -> GitMcpFixture {
         "src/api.rs",
     );
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            &source_repo_id,
             "src/api.rs",
             "hash:src/api.rs",
             Some("rust"),
@@ -314,7 +321,8 @@ pub(super) fn setup_git_mcp_fixture() -> GitMcpFixture {
         "tests/service_test.rs",
     );
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            &source_repo_id,
             "tests/service_test.rs",
             "hash:tests/service_test.rs",
             Some("rust"),
@@ -361,7 +369,8 @@ pub(super) fn setup_git_mcp_fixture() -> GitMcpFixture {
         repo_provenance: None,
     };
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            &source_repo_id,
             "README.md",
             "hash:README.md",
             Some("markdown"),
@@ -389,7 +398,8 @@ pub(super) fn setup_git_mcp_fixture() -> GitMcpFixture {
         .expect("finish indexing");
 
     store
-        .finish_build(
+        .finish_build_for_repo(
+            &source_repo_id,
             &canonical_root_str,
             BuildFinishStats {
                 state: GraphBuildState::Built,

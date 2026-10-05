@@ -345,8 +345,8 @@ fn db_check_reports_logical_inconsistency_for_dangling_graph_edge() {
     let conn = Connection::open(&db_path).expect("open atlas db");
     conn.execute(
         "INSERT INTO edges (
-            kind, source_qualified, target_qualified, file_path, line, confidence, confidence_tier, extra_json
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            kind, source_qualified, target_qualified, file_path, line, confidence, confidence_tier, extra_json, source_repo_id
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         rusqlite::params![
             "contains",
             "missing::source",
@@ -355,7 +355,8 @@ fn db_check_reports_logical_inconsistency_for_dangling_graph_edge() {
             1,
             1.0_f64,
             "definite",
-            "{}"
+            "{}",
+            "repo_test"
         ],
     )
     .expect("seed dangling edge");

@@ -45,7 +45,15 @@ fn logical_inconsistency_triggers_quarantine_and_full_rebuild() {
         "rust",
     );
     store
-        .replace_file_graph("src/lib.rs", "hash", Some("rust"), None, &[node], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "src/lib.rs",
+            "hash",
+            Some("rust"),
+            None,
+            &[node],
+            &[],
+        )
         .unwrap();
     store.conn.execute(
         "INSERT INTO edges(kind, source_qualified, target_qualified, file_path, confidence, confidence_tier, extra_json, source_repo_id)
@@ -65,6 +73,36 @@ fn logical_inconsistency_triggers_quarantine_and_full_rebuild() {
         true,
     )
     .expect("logical inconsistency should quarantine");
+
+    assert_eq!(
+        recovery.health_class,
+        Some(GraphStoreHealthClass::LogicalInconsistency)
+    );
+    assert!(recovery.full_rebuild_required);
+    let quarantine = recovery.quarantine_path.expect("quarantine path");
+    assert!(std::path::Path::new(&quarantine).exists());
+    assert!(dir.path().join("test.sqlite").exists());
+}
+
+#[test]
+fn legacy_repo_identity_triggers_quarantine_and_full_rebuild() {
+    let (dir, path, store) = open_file_backed();
+    store
+        .conn
+        .execute(
+            "INSERT INTO files (path, hash, language, indexed_at, source_repo_id)
+             VALUES ('src/lib.rs', 'hash', 'rust', '2025-01-01T00:00:00Z', 'legacy')",
+            [],
+        )
+        .unwrap();
+    drop(store);
+
+    let recovery = Store::prepare_graph_store_rebuild(
+        &path,
+        crate::GraphRecoveryMode::AutoQuarantineAndRebuild,
+        true,
+    )
+    .expect("legacy identity should quarantine");
 
     assert_eq!(
         recovery.health_class,

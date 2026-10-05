@@ -80,7 +80,8 @@ fn setup_graph_repo_fixture(
 
     let primary = make_node(NodeKind::Function, primary_name, primary_qn, primary_file);
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             primary_file,
             &format!("hash:{primary_file}"),
             Some("rust"),
@@ -111,7 +112,8 @@ fn setup_fixture() -> TransportFixture {
         "src/api.rs",
     );
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "src/api.rs",
             "hash:src/api.rs",
             Some("rust"),

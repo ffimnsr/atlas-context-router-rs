@@ -82,3 +82,45 @@ fn postprocess_graph_supports_single_stage_changed_only() {
     );
     assert_eq!(value["executed_stages"].as_array().map(Vec::len), Some(1));
 }
+
+#[test]
+fn postprocess_graph_denies_legacy_identity_rows() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    git_run(root, &["init", "--quiet"]);
+    git_run(root, &["config", "user.email", "atlas-tests@example.com"]);
+    git_run(root, &["config", "user.name", "Atlas Tests"]);
+    write_repo_file(root, "src/lib.rs", "pub fn helper() {}\n");
+    git_run(root, &["add", "-A"]);
+    git_run(root, &["commit", "--quiet", "-m", "initial"]);
+
+    let db_path = root.join("atlas.db").to_string_lossy().to_string();
+    {
+        let mut store = Store::open(&db_path).expect("open store");
+        store
+            .replace_file_graph_for_repo("legacy", "src/lib.rs", "h", Some("rust"), None, &[], &[])
+            .expect("seed legacy identity row");
+    }
+    let repo_root =
+        atlas_repo::canonical_filesystem_path(camino::Utf8Path::from_path(root).unwrap())
+            .expect("canonical repo root")
+            .to_string();
+
+    let args = serde_json::json!({ "output_format": "json" });
+    let response = call("postprocess_graph", Some(&args), &repo_root, &db_path)
+        .expect("postprocess_graph call");
+    let text = unwrap_tool_text(response);
+    let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+    assert_eq!(value["summary"]["ok"], serde_json::json!(false));
+    assert_eq!(
+        value["summary"]["error_code"],
+        serde_json::json!("legacy_repo_identity")
+    );
+    assert_eq!(value["summary"]["graph_built"], serde_json::json!(false));
+    assert_error_code_doc_link(
+        value["summary"]["error_code_docs"]
+            .as_str()
+            .expect("error_code_docs"),
+        "legacy_repo_identity",
+    );
+}

@@ -175,7 +175,9 @@ fn impact_context_fails_closed_for_ambiguous_symbol_seed() {
         )],
         edges: vec![],
     };
-    store.replace_batch(&[dupe]).unwrap();
+    store
+        .replace_files_transactional_for_repo("repo_test", &[dupe])
+        .unwrap();
     seed_graph(&mut store);
 
     let req = ContextRequest {

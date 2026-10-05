@@ -146,7 +146,8 @@ mod tests {
         let repo_root = repo.path().to_str().unwrap();
         let mut store = make_store();
         store
-            .replace_file_graph(
+            .replace_file_graph_for_repo(
+                "repo_test",
                 "src/lib.rs",
                 "hash-lib",
                 Some("rust"),
@@ -156,7 +157,8 @@ mod tests {
             )
             .unwrap();
         store
-            .replace_file_graph(
+            .replace_file_graph_for_repo(
+                "repo_test",
                 ".atlas/synthetic/repos/registry.atlas",
                 "hash-registry",
                 Some("atlas"),

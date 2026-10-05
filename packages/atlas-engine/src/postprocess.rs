@@ -60,20 +60,42 @@ fn qn_file_path(qualified_name: &str) -> &str {
         .unwrap_or(qualified_name)
 }
 
-fn graph_built(store: &Store, repo_root: &Utf8Path, stats: &GraphStats) -> anyhow::Result<bool> {
+/// Identity resolution for postprocess gating.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GraphIdentity {
+    Built,
+    NotBuilt,
+    Legacy,
+}
+
+/// Resolve the graph identity used by the postprocess gate.
+///
+/// Legacy-stamped rows are denied outright: they predate the stable multi-repo
+/// identity and mixing them with stable rows corrupts derived analytics.
+fn graph_identity(
+    store: &Store,
+    repo_root: &Utf8Path,
+    stats: &GraphStats,
+) -> anyhow::Result<GraphIdentity> {
     if stats.file_count <= 0 && stats.node_count <= 0 && stats.edge_count <= 0 {
-        return Ok(false);
+        return Ok(GraphIdentity::NotBuilt);
+    }
+    if !store.legacy_identity_rows(1)?.is_empty() {
+        return Ok(GraphIdentity::Legacy);
     }
     let source_repo_id = store
         .get_build_status(repo_root.as_str())?
         .map(|status| status.source_repo_id)
         .unwrap_or_else(|| stable_repo_id(repo_root));
-    let file_hashes = store
-        .file_hashes_for_repo(&source_repo_id)
-        .or_else(|_| store.file_hashes_for_repo("legacy"))?;
-    Ok(file_hashes
+    let file_hashes = store.file_hashes_for_repo(&source_repo_id)?;
+    if file_hashes
         .into_keys()
-        .any(|path| !path.starts_with(".atlas/synthetic/")))
+        .any(|path| !path.starts_with(".atlas/synthetic/"))
+    {
+        Ok(GraphIdentity::Built)
+    } else {
+        Ok(GraphIdentity::NotBuilt)
+    }
 }
 
 fn unknown_stage_summary(
@@ -125,6 +147,38 @@ fn no_graph_summary(
         ],
         graph_built: false,
         state: PostprocessRunState::Succeeded,
+        requested_mode: options.mode(),
+        stage_filter: options.stage.clone(),
+        dry_run: options.dry_run,
+        changed_files: Vec::new(),
+        started_at_ms,
+        finished_at_ms: now_ms(),
+        total_elapsed_ms: 0,
+        stages: Vec::new(),
+        supported_stages: supported_postprocess_stages(),
+    }
+}
+
+fn legacy_identity_summary(
+    repo_root: &str,
+    options: &PostprocessOptions,
+    started_at_ms: i64,
+) -> PostprocessRunSummary {
+    PostprocessRunSummary {
+        repo_root: repo_root.to_string(),
+        ok: false,
+        noop: false,
+        noop_reason: None,
+        error_code: "legacy_repo_identity".to_string(),
+        message: "legacy repo identity rows detected; refusing to postprocess legacy graph state"
+            .to_string(),
+        suggestions: vec![
+            "run `atlas build` to quarantine the legacy graph and rebuild under the stable repo identity"
+                .to_string(),
+            "run `atlas db-check` to inspect legacy identity rows".to_string(),
+        ],
+        graph_built: false,
+        state: PostprocessRunState::Failed,
         requested_mode: options.mode(),
         stage_filter: options.stage.clone(),
         dry_run: options.dry_run,
@@ -391,8 +445,18 @@ pub fn postprocess_graph(
     let store =
         Store::open(db_path).with_context(|| format!("cannot open database at {db_path}"))?;
     let stats = store.stats().context("cannot read graph stats")?;
-    if !graph_built(&store, repo_root, &stats)? {
-        return Ok(no_graph_summary(repo_root.as_str(), options, started_at_ms));
+    match graph_identity(&store, repo_root, &stats)? {
+        GraphIdentity::Legacy => {
+            return Ok(legacy_identity_summary(
+                repo_root.as_str(),
+                options,
+                started_at_ms,
+            ));
+        }
+        GraphIdentity::NotBuilt => {
+            return Ok(no_graph_summary(repo_root.as_str(), options, started_at_ms));
+        }
+        GraphIdentity::Built => {}
     }
 
     let git_repo_root = find_repo_root(repo_root).context("cannot find git repo root")?;

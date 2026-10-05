@@ -58,9 +58,14 @@ Graph SQLite file is physically corrupt, unreadable, or failed with low-level SQ
 <a id="logical_inconsistency"></a>
 ### `logical_inconsistency`
 
-Graph database opened, but graph invariants failed, such as dangling edges, foreign-key failures, orphan rows, or noncanonical graph path rows.
+Graph database opened, but graph invariants failed, such as dangling edges, foreign-key failures, orphan rows, noncanonical graph path rows, or legacy repo identity rows.
 
 Agent behavior for `schema_mismatch`, `sqlite_corrupt`, and `logical_inconsistency`: do not answer from stored graph facts. Run `status`, `doctor`, or `db_check` for diagnostics, or rebuild graph state before using graph-backed answers. `stale_index` stays queryable but must carry freshness warning.
+
+<a id="legacy_repo_identity"></a>
+### `legacy_repo_identity`
+
+Persisted graph rows still carry the pre-multi-repo `source_repo_id = 'legacy'` identity. Legacy rows are not readable, writable, or postprocessable: mixing them with stable repo identity rows produces duplicate or dangling graph state. Run `atlas build` to quarantine the legacy graph and rebuild it under the stable repo identity.
 
 <a id="corrupt_or_inconsistent_graph_rows"></a>
 ### `corrupt_or_inconsistent_graph_rows`

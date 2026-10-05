@@ -23,7 +23,7 @@ fn nodes_with_same_qname_coexist_across_repo_ids() {
     // Un-namespaced qnames collide on relative path across repos: each repo
     // must keep its own node row (UNIQUE (source_repo_id, qualified_name)).
     store
-        .replace_files_transactional_for_repo("legacy", &[parsed("h1")])
+        .replace_files_transactional_for_repo("repo_a", &[parsed("h1")])
         .unwrap();
     store
         .replace_files_transactional_for_repo("repo_b", &[parsed("h2")])
@@ -34,7 +34,7 @@ fn nodes_with_same_qname_coexist_across_repo_ids() {
         .query_row(
             "SELECT count(*) FROM nodes
              WHERE qualified_name = 'a.rs::fn::x'
-               AND (source_repo_id = 'legacy' OR source_repo_id = 'repo_b')",
+               AND (source_repo_id = 'repo_a' OR source_repo_id = 'repo_b')",
             [],
             |row| row.get(0),
         )
@@ -58,16 +58,16 @@ fn chunk_replacement_is_repo_scoped() {
     };
 
     store
-        .replace_files_transactional_for_repo("legacy", &[parsed("h1", "x", "a.rs::fn::x")])
+        .replace_files_transactional_for_repo("repo_a", &[parsed("h1", "x", "a.rs::fn::x")])
         .unwrap();
     store
         .replace_files_transactional_for_repo("repo_b", &[parsed("h2", "y", "a.rs::fn::y")])
         .unwrap();
     store
-        .replace_chunks_for_parsed_files("legacy", &[parsed("h1", "x", "a.rs::fn::x")])
+        .replace_chunks_for_parsed_files("repo_a", &[parsed("h1", "x", "a.rs::fn::x")])
         .unwrap();
 
-    // Replacing chunks for repo_b must not delete repo legacy's chunks
+    // Replacing chunks for repo_b must not delete repo_a's chunks
     // (same relative path in both repos).
     store
         .replace_chunks_for_parsed_files("repo_b", &[parsed("h2", "y", "a.rs::fn::y")])
@@ -116,7 +116,15 @@ fn replace_file_graph_inserts_nodes_and_edges() {
     )];
 
     store
-        .replace_file_graph("src/a.rs", "hash1", Some("rust"), Some(200), &nodes, &edges)
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "src/a.rs",
+            "hash1",
+            Some("rust"),
+            Some(200),
+            &nodes,
+            &edges,
+        )
         .unwrap();
 
     let stats = store.stats().unwrap();
@@ -138,10 +146,26 @@ fn replace_file_graph_is_idempotent() {
     let edges: Vec<Edge> = vec![];
 
     store
-        .replace_file_graph("a.rs", "h1", Some("rust"), None, &nodes, &edges)
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "a.rs",
+            "h1",
+            Some("rust"),
+            None,
+            &nodes,
+            &edges,
+        )
         .unwrap();
     store
-        .replace_file_graph("a.rs", "h2", Some("rust"), None, &nodes, &edges)
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "a.rs",
+            "h2",
+            Some("rust"),
+            None,
+            &nodes,
+            &edges,
+        )
         .unwrap();
 
     // Second replace must not double the counts.
@@ -161,7 +185,7 @@ fn replace_file_graph_updates_nodes() {
         "rust",
     )];
     store
-        .replace_file_graph("a.rs", "h1", None, None, &first, &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h1", None, None, &first, &[])
         .unwrap();
 
     let second = vec![make_node(
@@ -172,7 +196,7 @@ fn replace_file_graph_updates_nodes() {
         "rust",
     )];
     store
-        .replace_file_graph("a.rs", "h2", None, None, &second, &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h2", None, None, &second, &[])
         .unwrap();
 
     let got = store.nodes_by_file("a.rs").unwrap();
@@ -198,7 +222,8 @@ fn replace_file_graph_canonicalizes_equivalent_raw_paths() {
     )];
 
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "./src/feature/../module.rs",
             "hash1",
             Some("rust"),
@@ -253,7 +278,7 @@ fn delete_file_graph_removes_all_rows() {
         "a.rs",
     )];
     store
-        .replace_file_graph("a.rs", "h", None, None, &nodes, &edges)
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &nodes, &edges)
         .unwrap();
 
     store.delete_file_graph("a.rs").unwrap();
@@ -273,10 +298,10 @@ fn delete_file_graph_removes_dangling_cross_file_edges() {
     // Edge lives in b.rs but targets a.rs::fn::fa.
     let cross_edge = make_edge(EdgeKind::Calls, "b.rs::fn::fb", "a.rs::fn::fa", "b.rs");
     store
-        .replace_file_graph("a.rs", "h", None, None, &[na], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &[na], &[])
         .unwrap();
     store
-        .replace_file_graph("b.rs", "h", None, None, &[nb], &[cross_edge])
+        .replace_file_graph_for_repo("repo_test", "b.rs", "h", None, None, &[nb], &[cross_edge])
         .unwrap();
 
     // Verify the cross-file edge is present before deletion.
@@ -317,10 +342,18 @@ fn replace_file_graph_preserves_cross_file_edges_to_retained_nodes() {
         "b.rs",
     );
     store
-        .replace_file_graph("a.rs", "h1", None, None, &[original_target], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "a.rs",
+            "h1",
+            None,
+            None,
+            &[original_target],
+            &[],
+        )
         .unwrap();
     store
-        .replace_file_graph("b.rs", "h1", None, None, &[caller], &[inbound])
+        .replace_file_graph_for_repo("repo_test", "b.rs", "h1", None, None, &[caller], &[inbound])
         .unwrap();
 
     let updated_target = make_node(
@@ -331,7 +364,15 @@ fn replace_file_graph_preserves_cross_file_edges_to_retained_nodes() {
         "rust",
     );
     store
-        .replace_file_graph("a.rs", "h2", None, None, &[updated_target], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "a.rs",
+            "h2",
+            None,
+            None,
+            &[updated_target],
+            &[],
+        )
         .unwrap();
 
     let caller_edges = store.edges_by_file("b.rs").unwrap();
@@ -365,10 +406,10 @@ fn replace_file_graph_removes_stale_cross_file_edges_on_update() {
         "b.rs",
     );
     store
-        .replace_file_graph("a.rs", "h1", None, None, &[na], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h1", None, None, &[na], &[])
         .unwrap();
     store
-        .replace_file_graph("b.rs", "h1", None, None, &[nb], &[stale])
+        .replace_file_graph_for_repo("repo_test", "b.rs", "h1", None, None, &[nb], &[stale])
         .unwrap();
     assert_eq!(store.stats().unwrap().edge_count, 1);
 
@@ -381,7 +422,7 @@ fn replace_file_graph_removes_stale_cross_file_edges_on_update() {
         "rust",
     );
     store
-        .replace_file_graph("a.rs", "h2", None, None, &[new_na], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h2", None, None, &[new_na], &[])
         .unwrap();
 
     // The stale edge from b.rs towards the now-gone old_fn must be removed.
@@ -432,7 +473,9 @@ fn replace_batch_processes_multiple_files() {
             )],
         },
     ];
-    store.replace_batch(&batch).unwrap();
+    store
+        .replace_files_transactional_for_repo("repo_test", &batch)
+        .unwrap();
 
     let stats = store.stats().unwrap();
     assert_eq!(stats.file_count, 2);
@@ -457,7 +500,8 @@ fn replace_file_graph_rolls_back_on_insert_error() {
         "a.rs",
     );
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "a.rs",
             "old-hash",
             Some("rust"),
@@ -480,7 +524,8 @@ fn replace_file_graph_rolls_back_on_insert_error() {
         .unwrap();
 
     let err = store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "a.rs",
             "new-hash",
             Some("rust"),
@@ -576,7 +621,9 @@ fn replace_files_transactional_rolls_back_all_files_on_error() {
         },
     ];
 
-    let err = store.replace_files_transactional(&files).unwrap_err();
+    let err = store
+        .replace_files_transactional_for_repo("repo_test", &files)
+        .unwrap_err();
     assert!(matches!(err, AtlasError::Db(msg) if msg.contains("simulated batch insert failure")));
 
     store
@@ -615,7 +662,9 @@ fn replace_files_transactional_canonicalizes_path_identity() {
         )],
     }];
 
-    store.replace_files_transactional(&files).unwrap();
+    store
+        .replace_files_transactional_for_repo("repo_test", &files)
+        .unwrap();
 
     let nodes = store.nodes_by_file("src/lib.rs").unwrap();
     assert_eq!(nodes.len(), 1);
@@ -643,7 +692,15 @@ fn replace_file_graph_uses_stable_windows_case_policy() {
     )];
 
     store
-        .replace_file_graph("SRC\\Module.RS", "hash1", Some("rust"), None, &nodes, &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "SRC\\Module.RS",
+            "hash1",
+            Some("rust"),
+            None,
+            &nodes,
+            &[],
+        )
         .unwrap();
 
     let stored = store.nodes_by_file("src/module.rs").unwrap();
@@ -672,7 +729,8 @@ fn replace_file_graph_reports_lock_contention() {
     lock_holder.conn.execute_batch("BEGIN IMMEDIATE").unwrap();
 
     let err = blocked_writer
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "locked.rs",
             "h1",
             Some("rust"),
@@ -691,7 +749,8 @@ fn replace_file_graph_reports_lock_contention() {
 
     lock_holder.conn.execute_batch("ROLLBACK").unwrap();
     blocked_writer
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "locked.rs",
             "h1",
             Some("rust"),
@@ -725,39 +784,45 @@ fn replace_files_transactional_reports_lock_contention() {
     lock_holder.conn.execute_batch("BEGIN IMMEDIATE").unwrap();
 
     let err = blocked_writer
-        .replace_files_transactional(&[ParsedFile {
-            path: "locked.rs".to_string(),
-            language: Some("rust".to_string()),
-            hash: "h1".to_string(),
-            size: Some(10),
-            nodes: vec![make_node(
-                NodeKind::Function,
-                "locked_batch",
-                "locked.rs::fn::locked_batch",
-                "locked.rs",
-                "rust",
-            )],
-            edges: vec![],
-        }])
+        .replace_files_transactional_for_repo(
+            "repo_test",
+            &[ParsedFile {
+                path: "locked.rs".to_string(),
+                language: Some("rust".to_string()),
+                hash: "h1".to_string(),
+                size: Some(10),
+                nodes: vec![make_node(
+                    NodeKind::Function,
+                    "locked_batch",
+                    "locked.rs::fn::locked_batch",
+                    "locked.rs",
+                    "rust",
+                )],
+                edges: vec![],
+            }],
+        )
         .unwrap_err();
     assert!(matches!(err, AtlasError::Db(msg) if msg.contains("locked")));
 
     lock_holder.conn.execute_batch("ROLLBACK").unwrap();
     blocked_writer
-        .replace_files_transactional(&[ParsedFile {
-            path: "locked.rs".to_string(),
-            language: Some("rust".to_string()),
-            hash: "h1".to_string(),
-            size: Some(10),
-            nodes: vec![make_node(
-                NodeKind::Function,
-                "locked_batch",
-                "locked.rs::fn::locked_batch",
-                "locked.rs",
-                "rust",
-            )],
-            edges: vec![],
-        }])
+        .replace_files_transactional_for_repo(
+            "repo_test",
+            &[ParsedFile {
+                path: "locked.rs".to_string(),
+                language: Some("rust".to_string()),
+                hash: "h1".to_string(),
+                size: Some(10),
+                nodes: vec![make_node(
+                    NodeKind::Function,
+                    "locked_batch",
+                    "locked.rs::fn::locked_batch",
+                    "locked.rs",
+                    "rust",
+                )],
+                edges: vec![],
+            }],
+        )
         .unwrap();
     assert_eq!(blocked_writer.nodes_by_file("locked.rs").unwrap().len(), 1);
 }
@@ -776,7 +841,7 @@ fn node_id_assigned_after_insert() {
     );
     assert_eq!(node.id, NodeId::UNSET, "before insert id must be UNSET");
     store
-        .replace_file_graph("a.rs", "h", None, None, &[node], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &[node], &[])
         .unwrap();
     let fetched = store.nodes_by_file("a.rs").unwrap();
     assert_eq!(fetched.len(), 1);
@@ -840,7 +905,9 @@ fn replace_files_transactional_inserts_all_files() {
         },
     ];
 
-    let (total_nodes, total_edges) = store.replace_files_transactional(&files).unwrap();
+    let (total_nodes, total_edges) = store
+        .replace_files_transactional_for_repo("repo_test", &files)
+        .unwrap();
     assert_eq!(total_nodes, 3);
     assert_eq!(total_edges, 1);
 
@@ -853,7 +920,9 @@ fn replace_files_transactional_inserts_all_files() {
 #[test]
 fn replace_files_transactional_empty_is_noop() {
     let mut store = open_in_memory();
-    let (n, e) = store.replace_files_transactional(&[]).unwrap();
+    let (n, e) = store
+        .replace_files_transactional_for_repo("repo_test", &[])
+        .unwrap();
     assert_eq!(n, 0);
     assert_eq!(e, 0);
     assert_eq!(store.stats().unwrap().file_count, 0);
@@ -876,8 +945,12 @@ fn replace_files_transactional_is_idempotent() {
         )],
         edges: vec![],
     }];
-    store.replace_files_transactional(&files).unwrap();
-    store.replace_files_transactional(&files).unwrap();
+    store
+        .replace_files_transactional_for_repo("repo_test", &files)
+        .unwrap();
+    store
+        .replace_files_transactional_for_repo("repo_test", &files)
+        .unwrap();
     assert_eq!(store.stats().unwrap().node_count, 1);
 }
 
@@ -900,7 +973,7 @@ fn node_signatures_by_file_returns_entry_per_node() {
         make_node(NodeKind::Function, "bar", "a.rs::fn::bar", "a.rs", "rust"),
     ];
     store
-        .replace_file_graph("a.rs", "h1", Some("rust"), None, &nodes, &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h1", Some("rust"), None, &nodes, &[])
         .unwrap();
 
     let sigs = store.node_signatures_by_file("a.rs").unwrap();
@@ -955,7 +1028,15 @@ fn node_signatures_stable_across_position_change() {
     node.line_start = 1;
     node.line_end = 5;
     store
-        .replace_file_graph("a.rs", "h1", Some("rust"), None, &[node.clone()], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "a.rs",
+            "h1",
+            Some("rust"),
+            None,
+            &[node.clone()],
+            &[],
+        )
         .unwrap();
     let sigs_before = store.node_signatures_by_file("a.rs").unwrap();
 
@@ -964,7 +1045,7 @@ fn node_signatures_stable_across_position_change() {
     moved.line_start = 100;
     moved.line_end = 110;
     store
-        .replace_file_graph("a.rs", "h2", Some("rust"), None, &[moved], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h2", Some("rust"), None, &[moved], &[])
         .unwrap();
     let sigs_after = store.node_signatures_by_file("a.rs").unwrap();
 
@@ -989,7 +1070,8 @@ fn file_owner_round_trips_cargo_owner() {
         "rust",
     );
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "crates/foo/src/lib.rs",
             "abc",
             Some("rust"),
@@ -1032,7 +1114,15 @@ fn file_owner_returns_none_when_not_set() {
         "python",
     );
     store
-        .replace_file_graph("scripts/run.py", "ff", Some("python"), None, &[node], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "scripts/run.py",
+            "ff",
+            Some("python"),
+            None,
+            &[node],
+            &[],
+        )
         .unwrap();
     // No upsert → owner should be None.
     assert_eq!(store.file_owner("scripts/run.py").unwrap(), None);
@@ -1049,7 +1139,15 @@ fn file_owner_id_returns_id_string() {
         "go",
     );
     store
-        .replace_file_graph("lib/core/core.go", "g1", Some("go"), None, &[node], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "lib/core/core.go",
+            "g1",
+            Some("go"),
+            None,
+            &[node],
+            &[],
+        )
         .unwrap();
 
     let owner = PackageOwner {
@@ -1135,7 +1233,15 @@ fn file_hash_returns_stored_hash() {
     let mut store = open_in_memory();
     let node = make_node(NodeKind::Function, "foo", "a.rs::fn::foo", "a.rs", "rust");
     store
-        .replace_file_graph("a.rs", "deadbeef", Some("rust"), None, &[node], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "a.rs",
+            "deadbeef",
+            Some("rust"),
+            None,
+            &[node],
+            &[],
+        )
         .unwrap();
     assert_eq!(
         store.file_hash("a.rs").unwrap(),
@@ -1164,7 +1270,15 @@ fn rename_file_graph_moves_nodes_and_edges() {
         "old.rs",
     );
     store
-        .replace_file_graph("old.rs", "h1", Some("rust"), None, &[node], &[edge])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "old.rs",
+            "h1",
+            Some("rust"),
+            None,
+            &[node],
+            &[edge],
+        )
         .unwrap();
 
     store.rename_file_graph("old.rs", "new.rs").unwrap();
@@ -1256,7 +1370,7 @@ fn rename_file_graph_preserves_node_ids() {
     let mut store = open_in_memory();
     let node = make_node(NodeKind::Function, "foo", "a.rs::fn::foo", "a.rs", "rust");
     store
-        .replace_file_graph("a.rs", "h1", Some("rust"), None, &[node], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h1", Some("rust"), None, &[node], &[])
         .unwrap();
 
     let id_before = store.nodes_by_file("a.rs").unwrap()[0].id;
@@ -1277,7 +1391,15 @@ fn rename_file_graph_updates_fts_index() {
         "rust",
     );
     store
-        .replace_file_graph("old.rs", "h1", Some("rust"), None, &[node], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "old.rs",
+            "h1",
+            Some("rust"),
+            None,
+            &[node],
+            &[],
+        )
         .unwrap();
 
     store.rename_file_graph("old.rs", "new.rs").unwrap();

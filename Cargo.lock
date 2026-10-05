@@ -403,6 +403,7 @@ dependencies = [
  "atlas-engine",
  "atlas-repo",
  "atlas-store-sqlite",
+ "camino",
  "criterion",
  "globset",
  "serde",
@@ -418,7 +419,9 @@ version = "1.7.6"
 dependencies = [
  "atlas-core",
  "atlas-parser",
+ "atlas-repo",
  "atlas-store-sqlite",
+ "camino",
  "criterion",
  "serde_json",
  "sha2 0.10.9",

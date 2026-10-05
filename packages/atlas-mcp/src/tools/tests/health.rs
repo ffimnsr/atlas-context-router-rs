@@ -5,8 +5,10 @@ use rusqlite::Connection;
 fn status_healthy_repo_returns_ok() {
     let fixture = setup_mcp_fixture();
     let store = Store::open(&fixture.db_path).expect("open");
+    let source_repo_id = atlas_repo::stable_repo_id(camino::Utf8Path::new(&fixture.repo_root));
     store
-        .finish_build(
+        .finish_build_for_repo(
+            &source_repo_id,
             &fixture.repo_root,
             atlas_store_sqlite::BuildFinishStats {
                 state: atlas_store_sqlite::GraphBuildState::Built,
@@ -92,9 +94,11 @@ fn status_missing_db_returns_error_code() {
 fn status_build_failed_returns_error_code() {
     let fixture = setup_mcp_fixture();
     let store = Store::open(&fixture.db_path).expect("open");
-    store.begin_build("/repo").expect("begin_build");
     store
-        .fail_build("/repo", "parse error in src/main.rs")
+        .begin_build_for_repo("repo_test", "/repo")
+        .expect("begin_build");
+    store
+        .fail_build_for_repo("repo_test", "/repo", "parse error in src/main.rs")
         .expect("fail_build");
 
     let args = serde_json::json!({ "output_format": "json" });
@@ -116,7 +120,9 @@ fn status_build_failed_returns_error_code() {
 fn status_interrupted_build_returns_category() {
     let fixture = setup_mcp_fixture();
     let store = Store::open(&fixture.db_path).expect("open");
-    store.begin_build("/repo").expect("begin_build");
+    store
+        .begin_build_for_repo("repo_test", "/repo")
+        .expect("begin_build");
 
     let args = serde_json::json!({ "output_format": "json" });
     let resp = call("status", Some(&args), "/repo", &fixture.db_path).expect("status call");
@@ -398,8 +404,8 @@ fn db_check_reports_noncanonical_path_rows() {
     let fixture = setup_mcp_fixture();
     let conn = Connection::open(&fixture.db_path).expect("open db");
     conn.execute(
-        "INSERT INTO files (path, language, hash, size, indexed_at)
-         VALUES (?1, 'rust', 'h1', 0, '2025-01-01T00:00:00Z')",
+        "INSERT INTO files (path, language, hash, size, indexed_at, source_repo_id)
+         VALUES (?1, 'rust', 'h1', 0, '2025-01-01T00:00:00Z', 'repo_test')",
         ["./src/lib.rs"],
     )
     .expect("seed noncanonical file row");
@@ -427,6 +433,36 @@ fn db_check_reports_noncanonical_path_rows() {
             .any(|issue| issue
                 .as_str()
                 .is_some_and(|text| text.contains("noncanonical_path:")))
+    );
+}
+
+#[test]
+fn db_check_reports_legacy_repo_identity_rows() {
+    let fixture = setup_mcp_fixture();
+    let conn = Connection::open(&fixture.db_path).expect("open db");
+    conn.execute(
+        "INSERT INTO files (path, language, hash, size, indexed_at, source_repo_id)
+         VALUES ('src/legacy.rs', 'rust', 'h1', 0, '2025-01-01T00:00:00Z', 'legacy')",
+        [],
+    )
+    .expect("seed legacy file row");
+
+    let args = serde_json::json!({ "output_format": "json" });
+    let resp = call("db_check", Some(&args), "/repo", &fixture.db_path).expect("db_check call");
+    let text = unwrap_tool_text(resp);
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert_eq!(v["summary"]["ok"].as_bool(), Some(false));
+    assert_eq!(v["health_class"].as_str(), Some("logical_inconsistency"));
+    assert!(
+        v["integrity"]["issues"]
+            .as_array()
+            .expect("integrity issues array")
+            .iter()
+            .any(|issue| issue
+                .as_str()
+                .is_some_and(|text| text.contains("legacy_repo_identity:"))),
+        "db_check must report legacy identity rows"
     );
 }
 

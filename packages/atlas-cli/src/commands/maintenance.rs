@@ -368,11 +368,9 @@ fn graph_issue_code(error: &str) -> &'static str {
 
 fn integrity_issue_code(issues: &[String], structural_problem: bool) -> &'static str {
     if structural_problem
-        || issues.iter().any(|issue| {
-            issue.starts_with("missing_repo_provenance:")
-                || issue.starts_with("noncanonical_path:")
-                || issue.to_ascii_lowercase().contains("foreign key")
-        })
+        || issues
+            .iter()
+            .any(|issue| atlas_core::is_logical_inconsistency_issue(issue))
     {
         "logical_inconsistency"
     } else {
@@ -924,7 +922,11 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
                 let registry = super::parser_registry_from_config(&repo);
                 // Collect stored file hashes once; used to detect whether atlas
                 // update has already indexed the current on-disk state.
-                let stored_hashes = store.file_hashes().unwrap_or_default();
+                let graph_repo_root = find_repo_root(Utf8Path::new(&repo))
+                    .unwrap_or_else(|_| Utf8Path::new(&repo).to_owned());
+                let stored_hashes = store
+                    .file_hashes_for_repo(&stable_repo_id(graph_repo_root.as_path()))
+                    .unwrap_or_default();
                 match atlas_repo::changed_files(
                     Utf8Path::new(&repo),
                     &atlas_repo::DiffTarget::WorkingTree,
@@ -1598,7 +1600,8 @@ mod tests {
     fn structural_dangling_edges_ignores_nonstructural_calls() {
         let mut store = open_store();
         store
-            .replace_file_graph(
+            .replace_file_graph_for_repo(
+                "repo_test",
                 "src/lib.rs",
                 "hash",
                 Some("rust"),
@@ -1615,7 +1618,8 @@ mod tests {
     fn structural_dangling_edges_keeps_structural_contains() {
         let mut store = open_store();
         store
-            .replace_file_graph(
+            .replace_file_graph_for_repo(
+                "repo_test",
                 "src/lib.rs",
                 "hash",
                 Some("rust"),

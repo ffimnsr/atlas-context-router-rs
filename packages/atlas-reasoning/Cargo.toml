@@ -10,6 +10,7 @@ atlas-core.workspace = true
 atlas-engine.workspace = true
 atlas-repo = { path = "../atlas-repo", version = "1.7.6" }
 atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "1.7.6"}
+camino.workspace = true
 serde.workspace = true
 tracing.workspace = true
 serde_json.workspace = true

@@ -13,7 +13,7 @@ use atlas_core::{
 use atlas_parser::{ExternalParserConfig, ParserRegistry, TreeCache};
 use atlas_repo::{
     CanonicalRepoPath, DiffTarget, changed_files, discover_package_owners, hash_file, head_ref,
-    stable_repo_fingerprint,
+    stable_repo_fingerprint, stable_repo_id,
 };
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
@@ -191,7 +191,7 @@ pub fn update_graph(
     let source_repo_id = opts
         .source_repo_id
         .clone()
-        .unwrap_or_else(|| "legacy".to_owned());
+        .unwrap_or_else(|| stable_repo_id(repo_root));
     store
         .upsert_repo(repo_root.as_str())
         .context("cannot register repo root for build state and history")?;

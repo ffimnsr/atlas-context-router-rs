@@ -222,6 +222,66 @@ fn wal_mode_enabled_on_file_db() {
 // --- stats correctness ---------------------------------------------------
 
 #[test]
+fn migration_019_preserves_nodes_and_fts_rows_on_upgrade() {
+    let conn = open_unmigrated_in_memory();
+    apply_migrations_through(&conn, 18);
+    let mut store = Store {
+        conn,
+        _thread_bound: std::marker::PhantomData,
+    };
+    let node = make_node(
+        NodeKind::Function,
+        "survivor",
+        "src/lib.rs::fn::survivor",
+        "src/lib.rs",
+        "rust",
+    );
+    store
+        .replace_file_graph_for_repo(
+            "repo_a",
+            "src/lib.rs",
+            "h1",
+            Some("rust"),
+            None,
+            &[node],
+            &[],
+        )
+        .unwrap();
+
+    store.migrate().unwrap();
+
+    let nodes: i64 = store
+        .conn
+        .query_row(
+            "SELECT count(*) FROM nodes WHERE source_repo_id = 'repo_a'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(nodes, 1, "node rows must survive the 019 table rebuild");
+    let fts_hits: i64 = store
+        .conn
+        .query_row(
+            "SELECT count(*) FROM nodes_fts WHERE nodes_fts MATCH 'survivor'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        fts_hits, 1,
+        "nodes_fts external-content rows must stay aligned after the rebuild"
+    );
+    assert!(
+        !store
+            .integrity_check()
+            .unwrap()
+            .iter()
+            .any(|issue| issue.starts_with("legacy_repo_identity:")),
+        "upgraded graph must not carry legacy identity rows"
+    );
+}
+
+#[test]
 fn stats_returns_nodes_by_kind() {
     let mut store = open_in_memory();
     let func = make_node(NodeKind::Function, "fn1", "a.rs::fn::fn1", "a.rs", "rust");
@@ -233,7 +293,15 @@ fn stats_returns_nodes_by_kind() {
         "rust",
     );
     store
-        .replace_file_graph("a.rs", "h", Some("rust"), None, &[func, strct], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "a.rs",
+            "h",
+            Some("rust"),
+            None,
+            &[func, strct],
+            &[],
+        )
         .unwrap();
 
     let stats = store.stats().unwrap();
@@ -247,7 +315,7 @@ fn stats_returns_languages() {
     let mut store = open_in_memory();
     let node = make_node(NodeKind::Function, "fn1", "a.rs::fn::fn1", "a.rs", "rust");
     store
-        .replace_file_graph("a.rs", "h", Some("rust"), None, &[node], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", Some("rust"), None, &[node], &[])
         .unwrap();
 
     let stats = store.stats().unwrap();
@@ -259,7 +327,7 @@ fn stats_last_indexed_at_set_after_replace() {
     let mut store = open_in_memory();
     let node = make_node(NodeKind::Function, "fn1", "a.rs::fn::fn1", "a.rs", "rust");
     store
-        .replace_file_graph("a.rs", "h", Some("rust"), None, &[node], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", Some("rust"), None, &[node], &[])
         .unwrap();
 
     let stats = store.stats().unwrap();
@@ -286,7 +354,7 @@ fn integrity_check_after_writes() {
     let mut store = open_in_memory();
     let node = make_node(NodeKind::Function, "foo", "a.rs::fn::foo", "a.rs", "rust");
     store
-        .replace_file_graph("a.rs", "h1", Some("rust"), None, &[node], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h1", Some("rust"), None, &[node], &[])
         .unwrap();
     let issues = store
         .integrity_check()
@@ -303,8 +371,8 @@ fn integrity_check_reports_noncanonical_path_rows() {
     store
         .conn
         .execute(
-            "INSERT INTO files (path, hash, language, indexed_at)
-             VALUES (?1, 'h1', 'rust', '2025-01-01T00:00:00Z')",
+            "INSERT INTO files (path, hash, language, indexed_at, source_repo_id)
+             VALUES (?1, 'h1', 'rust', '2025-01-01T00:00:00Z', 'repo_test')",
             ["./src/lib.rs"],
         )
         .unwrap();
@@ -315,6 +383,30 @@ fn integrity_check_reports_noncanonical_path_rows() {
             && issue.contains("table=files")
             && issue.contains("canonical=src/lib.rs")
     }));
+}
+
+#[test]
+fn integrity_check_reports_legacy_identity_rows() {
+    let store = open_in_memory();
+    store
+        .conn
+        .execute(
+            "INSERT INTO files (path, hash, language, indexed_at, source_repo_id)
+             VALUES ('src/legacy.rs', 'h1', 'rust', '2025-01-01T00:00:00Z', 'legacy')",
+            [],
+        )
+        .unwrap();
+
+    let issues = store.integrity_check().expect("integrity_check should run");
+    assert!(issues.iter().any(|issue| {
+        issue.starts_with("legacy_repo_identity:")
+            && issue.contains("table=files")
+            && issue.contains("source_repo_id=legacy")
+    }));
+    assert_eq!(
+        store.graph_store_health_class().unwrap(),
+        Some(atlas_core::GraphStoreHealthClass::LogicalInconsistency)
+    );
 }
 
 // --- orphan-node query regression ----------------------------------------
@@ -347,7 +439,8 @@ fn orphan_nodes_returns_isolated_nodes() {
         "a.rs",
     );
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "a.rs",
             "h",
             Some("rust"),
@@ -371,7 +464,15 @@ fn orphan_nodes_empty_when_all_nodes_connected() {
     let b = make_node(NodeKind::Function, "b", "a.rs::fn::b", "a.rs", "rust");
     let edge = make_edge(EdgeKind::Calls, "a.rs::fn::a", "a.rs::fn::b", "a.rs");
     store
-        .replace_file_graph("a.rs", "h", Some("rust"), None, &[a, b], &[edge])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "a.rs",
+            "h",
+            Some("rust"),
+            None,
+            &[a, b],
+            &[edge],
+        )
         .unwrap();
 
     let orphans = store
@@ -398,7 +499,8 @@ fn orphan_nodes_exempt_synthetic_metadata_nodes() {
         "toml",
     );
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "a.rs",
             "h-a",
             Some("rust"),
@@ -408,7 +510,8 @@ fn orphan_nodes_exempt_synthetic_metadata_nodes() {
         )
         .unwrap();
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             ".atlas/synthetic/owners/package/cargo/cargo_fuzz_Cargo_toml.atlas",
             "h-syn",
             Some("toml"),
@@ -435,7 +538,7 @@ fn orphan_nodes_all_when_no_edges() {
     let a = make_node(NodeKind::Function, "a", "a.rs::fn::a", "a.rs", "rust");
     let b = make_node(NodeKind::Function, "b", "a.rs::fn::b", "a.rs", "rust");
     store
-        .replace_file_graph("a.rs", "h", Some("rust"), None, &[a, b], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", Some("rust"), None, &[a, b], &[])
         .unwrap();
 
     let orphans = store
@@ -490,7 +593,15 @@ fn write_succeeds_while_second_connection_holds_wal_write_lock() {
         "rust",
     );
     store
-        .replace_file_graph("lock.rs", "h1", Some("rust"), None, &[node], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "lock.rs",
+            "h1",
+            Some("rust"),
+            None,
+            &[node],
+            &[],
+        )
         .expect("write must succeed within busy_timeout after lock is released");
 
     blocker.join().unwrap();

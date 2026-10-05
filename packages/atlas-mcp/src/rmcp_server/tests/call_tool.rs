@@ -166,6 +166,39 @@ fn call_tool_get_context_fails_closed_on_logical_inconsistency() {
 }
 
 #[test]
+fn call_tool_get_context_fails_closed_on_legacy_repo_identity() {
+    let fixture = ToolFixture::new();
+    seed_legacy_graph_row(&fixture);
+
+    let rmcp = fixture
+        .server
+        .call_tool_for_tests(call_tool_request(
+            "get_context",
+            Some(json!({
+                "target": {"kind": "query", "query": "greet"},
+                "output_format": "json"
+            })),
+        ))
+        .expect("rmcp get_context blocked response");
+    let rmcp_complete = expect_complete(rmcp);
+    let rmcp_body = rmcp_complete
+        .structured_content
+        .clone()
+        .expect("rmcp structured content");
+
+    assert_eq!(rmcp_complete.is_error, Some(true));
+    assert_eq!(rmcp_body["ok"], json!(false));
+    assert_eq!(rmcp_body["blocked"], json!(true));
+    assert_eq!(rmcp_body["error_code"], json!("logical_inconsistency"));
+    assert_eq!(rmcp_body["health_class"], json!("logical_inconsistency"));
+    assert_eq!(rmcp_body["execution_state"], json!("corrupt"));
+    assert_eq!(
+        rmcp_body["recommended_rebuild_command"],
+        json!("atlas build")
+    );
+}
+
+#[test]
 fn call_tool_query_graph_increments_session_event_count() {
     let rmcp_fixture = ToolFixture::new();
     let rmcp_before = session_event_count(&rmcp_fixture.repo_root, &rmcp_fixture.db_path);

@@ -101,7 +101,16 @@ impl Store {
                     issue.starts_with("foreign_key_check:")
                         || issue.starts_with("noncanonical_path:")
                         || issue.starts_with("missing_repo_provenance:")
+                        || issue.starts_with("legacy_repo_identity:")
                 }) {
+                    if issues
+                        .iter()
+                        .any(|issue| issue.starts_with("legacy_repo_identity:"))
+                    {
+                        warn!(
+                            "legacy repo identity rows detected in graph store; rebuild graph from repository source"
+                        );
+                    }
                     return Ok(Some(GraphStoreHealthClass::LogicalInconsistency));
                 }
                 return Ok(Some(GraphStoreHealthClass::SqliteCorrupt));

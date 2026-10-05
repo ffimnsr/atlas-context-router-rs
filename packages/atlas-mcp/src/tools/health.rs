@@ -134,11 +134,9 @@ fn structural_dangling_edges(
 
 fn integrity_issue_code(issues: &[String], structural_problem: bool) -> &'static str {
     if structural_problem
-        || issues.iter().any(|issue| {
-            issue.starts_with("noncanonical_path:")
-                || issue.starts_with("missing_repo_provenance:")
-                || issue.to_ascii_lowercase().contains("foreign key")
-        })
+        || issues
+            .iter()
+            .any(|issue| atlas_core::is_logical_inconsistency_issue(issue))
     {
         "logical_inconsistency"
     } else {
@@ -1170,7 +1168,8 @@ mod tests {
     fn structural_dangling_edges_ignores_nonstructural_calls() {
         let mut store = open_store();
         store
-            .replace_file_graph(
+            .replace_file_graph_for_repo(
+                "repo_test",
                 "src/lib.rs",
                 "hash",
                 Some("rust"),
@@ -1187,7 +1186,8 @@ mod tests {
     fn structural_dangling_edges_keeps_structural_contains() {
         let mut store = open_store();
         store
-            .replace_file_graph(
+            .replace_file_graph_for_repo(
+                "repo_test",
                 "src/lib.rs",
                 "hash",
                 Some("rust"),

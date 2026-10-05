@@ -13,6 +13,12 @@ Versioning policy may evolve while Atlas is still moving quickly, but release no
 - accept repo-relative, repo-dir-prefixed, and absolute-under-root file paths on every MCP and CLI file-path surface (discovery tools, context/change-source tools, graph and analysis tools, `docs-section`, `context`, `impact`, `review-context`, `explain-change`, `update --files`, `insights --files`, `analyze dead-code --subpath`, `query --subpath`) with structured not-found/ambiguity errors
 - support canonical relative, `~`, `$HOME`, and `${HOME}` repository paths for portable editor configuration
 
+### Fixes
+
+- record MCP `build_graph`/`update_graph` lifecycle state and `atlas doctor` file hashes under the stable repo identity; `postprocess_graph` now fails closed with `legacy_repo_identity` instead of falling back to legacy rows
+- reject `source_repo_id = 'legacy'` graph rows as `logical_inconsistency`; explicit build/update quarantines and rebuilds them under the stable identity; migration 019 drops the legacy column default from graph tables
+- resolve unscoped store lookups (file owners, node signatures, rename/delete) through a single stable repo identity and fail closed when the store holds several
+
 ## 1.7.6 - 2026-09-10
 
 ### Features

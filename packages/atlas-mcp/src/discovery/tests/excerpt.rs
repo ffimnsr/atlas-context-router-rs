@@ -45,7 +45,8 @@ fn seed_docs_index(root: &str, nodes: &[Node]) -> String {
     let db_path = format!("{root}/atlas.db");
     let mut store = Store::open(&db_path).expect("open store");
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "README.md",
             "hash:README.md",
             Some("markdown"),

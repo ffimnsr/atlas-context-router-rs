@@ -111,3 +111,52 @@ fn update_graph_rejects_missing_or_null_change_source() {
         );
     }
 }
+
+#[test]
+fn build_graph_records_stable_repo_identity() {
+    let fixture = setup_git_mcp_fixture();
+    let resp = call(
+        "build_graph",
+        Some(&serde_json::json!({ "output_format": "json" })),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("build_graph");
+    assert_ne!(resp.get("isError"), Some(&serde_json::json!(true)));
+
+    let store = Store::open(&fixture.db_path).expect("open store");
+    let status = store
+        .get_build_status(&fixture.repo_root)
+        .expect("build status")
+        .expect("build status row");
+    let expected = atlas_repo::stable_repo_id(camino::Utf8Path::new(&fixture.repo_root));
+    assert_eq!(
+        status.source_repo_id, expected,
+        "MCP build must record lifecycle state under the stable repo identity"
+    );
+
+    let hashes = store
+        .file_hashes_for_repo(&expected)
+        .expect("stable-identity file hashes");
+    assert!(
+        hashes
+            .keys()
+            .any(|path| !path.starts_with(".atlas/synthetic/")),
+        "stable-identity file inventory must not be empty"
+    );
+
+    // The postprocess gate must accept the graph right after an MCP build.
+    let pp = call(
+        "postprocess_graph",
+        Some(&serde_json::json!({ "stage": "architecture_metrics", "output_format": "json" })),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("postprocess_graph");
+    assert_eq!(
+        pp.pointer("/structuredContent/summary/graph_built")
+            .and_then(|value| value.as_bool()),
+        Some(true),
+        "postprocess gate must resolve the stable identity written by build_graph"
+    );
+}

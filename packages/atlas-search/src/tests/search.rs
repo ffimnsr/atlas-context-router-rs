@@ -28,7 +28,8 @@ fn search_excludes_file_nodes_by_default() {
         repo_provenance: None,
     };
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "docs/architecture.md",
             "h",
             Some("markdown"),
@@ -240,7 +241,15 @@ fn search_relaxed_fuzzy_records_term_distance_and_threshold() {
         repo_provenance: None,
     };
     store
-        .replace_file_graph("src/lib.rs", "h", Some("rust"), Some(5), &[node], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "src/lib.rs",
+            "h",
+            Some("rust"),
+            Some(5),
+            &[node],
+            &[],
+        )
         .expect("replace file graph");
 
     let results = search(

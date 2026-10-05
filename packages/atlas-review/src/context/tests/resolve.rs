@@ -53,7 +53,9 @@ fn resolve_ambiguous_symbol_name() {
         )],
         edges: vec![],
     };
-    store.replace_batch(&[dupe]).unwrap();
+    store
+        .replace_files_transactional_for_repo("repo_test", &[dupe])
+        .unwrap();
     seed_graph(&mut store);
 
     let target = ContextTarget::SymbolName {
@@ -150,7 +152,9 @@ fn resolve_qname_with_function_alias_resolves_via_normalisation() {
         )],
         edges: vec![],
     };
-    store.replace_batch(&[file]).unwrap();
+    store
+        .replace_files_transactional_for_repo("repo_test", &[file])
+        .unwrap();
 
     let target = ContextTarget::QualifiedName {
         qname: "src/x.rs::function::my_fn".to_string(),

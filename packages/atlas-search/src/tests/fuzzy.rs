@@ -136,7 +136,8 @@ fn search_fuzzy_typo_recovers_symbol_above_markdown_noise() {
         repo_provenance: None,
     };
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "internal/requestctx/context.go",
             "h1",
             Some("go"),
@@ -165,7 +166,8 @@ fn search_fuzzy_typo_recovers_symbol_above_markdown_noise() {
         repo_provenance: None,
     };
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "docs/load_identity_messages.md",
             "h2",
             Some("markdown"),

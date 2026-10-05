@@ -545,7 +545,8 @@ mod tests {
 
         let qn = "src/search.rs::fn::lexical_anchor";
         store
-            .replace_file_graph(
+            .replace_file_graph_for_repo(
+                "repo_test",
                 "src/search.rs",
                 "hash",
                 Some("rust"),

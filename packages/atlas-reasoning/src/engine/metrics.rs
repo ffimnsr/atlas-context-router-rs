@@ -6,6 +6,8 @@ use atlas_core::{
     AtlasError, CoverageStrength, Edge, EdgeKind, InsightEvidence, InsightFinding,
     InsightLineRange, InsightSeverity, MetricsReport, Node, NodeKind, Result,
 };
+use atlas_repo::stable_repo_id;
+use camino::Utf8Path;
 use tree_sitter::Node as TsNode;
 
 use super::InsightsEngine;
@@ -197,10 +199,16 @@ impl<'s> InsightsEngine<'s> {
         store: &'s atlas_store_sqlite::Store,
         repo_root: impl AsRef<Path>,
     ) -> Result<GraphSnapshot> {
-        let source_repo_id = store
-            .get_build_status(repo_root.as_ref().to_string_lossy().as_ref())?
-            .map(|status| status.source_repo_id)
-            .unwrap_or_else(|| "legacy".to_owned());
+        let source_repo_id =
+            match store.get_build_status(repo_root.as_ref().to_string_lossy().as_ref())? {
+                Some(status) => status.source_repo_id,
+                None => match store.single_source_repo_id()? {
+                    Some(source_repo_id) => source_repo_id,
+                    None => stable_repo_id(Utf8Path::from_path(repo_root.as_ref()).ok_or_else(
+                        || AtlasError::Other("reasoning repo root is not valid UTF-8".to_owned()),
+                    )?),
+                },
+            };
         let file_hash_by_file = store
             .file_hashes_for_repo(&source_repo_id)?
             .into_iter()

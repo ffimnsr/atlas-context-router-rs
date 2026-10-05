@@ -12,7 +12,9 @@ use atlas_core::{
     Result, SafetyBand, SimulatedRefactorImpact,
 };
 use atlas_parser::ParserRegistry;
+use atlas_repo::stable_repo_id;
 use atlas_store_sqlite::Store;
+use camino::Utf8Path;
 use sha2::{Digest, Sha256};
 use tracing::debug;
 
@@ -817,7 +819,12 @@ impl<'s> RefactorEngine<'s> {
         }
 
         if !parsed_files.is_empty() {
-            self.store.replace_files_transactional(&parsed_files)?;
+            let repo_root = Utf8Path::from_path(self.repo_root).ok_or_else(|| {
+                AtlasError::Other("refactor repo root is not valid UTF-8".to_owned())
+            })?;
+            let source_repo_id = stable_repo_id(repo_root);
+            self.store
+                .replace_files_transactional_for_repo(&source_repo_id, &parsed_files)?;
         }
 
         Ok(())

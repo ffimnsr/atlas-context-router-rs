@@ -6,8 +6,6 @@ use atlas_core::{
 use rusqlite::{Connection, params};
 use tracing::info;
 
-const LEGACY_SOURCE_REPO_ID: &str = "legacy";
-
 use super::{
     Store,
     helpers::{
@@ -28,6 +26,35 @@ fn upsert_repo_provenance_json(
         .entry("repo_provenance".to_owned())
         .or_insert_with(|| serde_json::to_value(provenance).unwrap_or(serde_json::Value::Null));
     serde_json::Value::Object(extra)
+}
+
+/// Resolve the single stable repo identity owning rows for one path.
+///
+/// Unscoped convenience lookups must never guess between repositories: they
+/// resolve only when exactly one stable repo identity owns the path. Legacy
+/// and registry pseudo-identities are ignored, and ambiguity yields `None`
+/// so callers fail closed instead of reading another repo's rows.
+fn single_source_repo_id_for_value(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    value: &str,
+) -> Result<Option<String>> {
+    let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+    let sql = format!(
+        "SELECT DISTINCT source_repo_id FROM {table}\n         WHERE {column} = ?1\n           AND source_repo_id NOT IN ('legacy', 'registry')\n         LIMIT 2"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(db_err)?;
+    let ids = stmt
+        .query_map([value], |row| row.get::<_, String>(0))
+        .map_err(db_err)?
+        .filter_map(|row| row.ok())
+        .collect::<Vec<_>>();
+    if ids.len() == 1 {
+        Ok(ids.into_iter().next())
+    } else {
+        Ok(None)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -131,7 +158,7 @@ fn do_replace_file_graph(
     .map_err(db_err)?;
 
     let default_repo_provenance = RepoProvenance::new(source_repo_id.to_owned())
-        .with_repo_fingerprint(format!("repo_fp_legacy_{source_repo_id}"));
+        .with_repo_fingerprint(format!("repo_fp_{source_repo_id}"));
 
     // Steps 6a + 6b: insert each node then its FTS row.
     for n in nodes {
@@ -222,8 +249,36 @@ fn do_replace_file_graph(
 }
 
 impl Store {
-    pub fn replace_file_graph(
+    /// Resolve the single stable repo identity present in this store.
+    ///
+    /// Returns `None` when no stable identity exists or when several
+    /// identities are present, so callers fail closed instead of guessing
+    /// across repositories. Legacy and registry pseudo-identities are ignored.
+    pub fn single_source_repo_id(&self) -> Result<Option<String>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT DISTINCT source_repo_id FROM files
+                 WHERE source_repo_id NOT IN ('legacy', 'registry') LIMIT 2",
+            )
+            .map_err(db_err)?;
+        let ids = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(db_err)?
+            .filter_map(|row| row.ok())
+            .collect::<Vec<_>>();
+        if ids.len() == 1 {
+            Ok(ids.into_iter().next())
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn replace_file_graph_for_repo(
         &mut self,
+        source_repo_id: &str,
         path: &str,
         hash: &str,
         language: Option<&str>,
@@ -236,7 +291,7 @@ impl Store {
         self.conn.execute_batch("BEGIN IMMEDIATE").map_err(db_err)?;
         match do_replace_file_graph(
             &self.conn,
-            LEGACY_SOURCE_REPO_ID,
+            source_repo_id,
             &normalized.path,
             hash,
             language,
@@ -263,15 +318,11 @@ impl Store {
 
     /// Replace graph slices for multiple parsed files in one transaction.
     ///
-    /// Significantly faster than calling `replace_file_graph` per file: the
-    /// SQLite write-ahead log is flushed once per batch rather than once per
-    /// file.  If any file fails the entire batch is rolled back.
+    /// Significantly faster than calling `replace_file_graph_for_repo` per
+    /// file: the SQLite write-ahead log is flushed once per batch rather than
+    /// once per file.  If any file fails the entire batch is rolled back.
     ///
     /// Returns `(total_nodes, total_edges)` inserted.
-    pub fn replace_files_transactional(&mut self, files: &[ParsedFile]) -> Result<(usize, usize)> {
-        self.replace_files_transactional_for_repo(LEGACY_SOURCE_REPO_ID, files)
-    }
-
     pub fn replace_files_transactional_for_repo(
         &mut self,
         source_repo_id: &str,
@@ -320,22 +371,6 @@ impl Store {
         Ok((total_nodes, total_edges))
     }
 
-    /// Replace graph slices for a batch of parsed files (calls
-    /// `replace_file_graph` for each entry).
-    pub fn replace_batch(&mut self, files: &[ParsedFile]) -> Result<()> {
-        for f in files {
-            self.replace_file_graph(
-                &f.path,
-                &f.hash,
-                f.language.as_deref(),
-                f.size,
-                &f.nodes,
-                &f.edges,
-            )?;
-        }
-        Ok(())
-    }
-
     /// Returns a map of `qualified_name → content-signature` for every node
     /// stored for `path`.
     ///
@@ -345,7 +380,13 @@ impl Store {
     /// intentionally — moving a function within a file does not change its
     /// interface and must not trigger unnecessary dependent reparsing.
     pub fn node_signatures_by_file(&self, path: &str) -> Result<HashMap<String, String>> {
-        self.node_signatures_by_file_for_repo(LEGACY_SOURCE_REPO_ID, path)
+        let path = canonicalize_repo_path(path)?;
+        match single_source_repo_id_for_value(&self.conn, "nodes", "file_path", path.as_str())? {
+            Some(source_repo_id) => {
+                self.node_signatures_by_file_for_repo(&source_repo_id, path.as_str())
+            }
+            None => Ok(HashMap::new()),
+        }
     }
 
     pub fn node_signatures_by_file_for_repo(
@@ -386,7 +427,11 @@ impl Store {
 
     /// Atomically remove every node, edge and FTS row for `path`.
     pub fn delete_file_graph(&mut self, path: &str) -> Result<()> {
-        self.delete_file_graph_for_repo(LEGACY_SOURCE_REPO_ID, path)
+        let path = canonicalize_repo_path(path)?;
+        match single_source_repo_id_for_value(&self.conn, "files", "path", path.as_str())? {
+            Some(source_repo_id) => self.delete_file_graph_for_repo(&source_repo_id, path.as_str()),
+            None => Ok(()),
+        }
     }
 
     pub fn delete_file_graph_for_repo(&mut self, source_repo_id: &str, path: &str) -> Result<()> {
@@ -507,33 +552,13 @@ impl Store {
     }
 
     /// Returns the stored owner metadata for `path`, if present.
+    ///
+    /// Resolves the owning repo identity before reading; the lookup fails
+    /// closed (`None`) when the path is ambiguous across stable repos and
+    /// ignores legacy or registry pseudo-identities.
     pub fn file_owner(&self, path: &str) -> Result<Option<PackageOwner>> {
-        if let Some(owner) = self.file_owner_for_repo(LEGACY_SOURCE_REPO_ID, path)? {
-            return Ok(Some(owner));
-        }
-
         let path = canonicalize_repo_path(path)?;
-        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
-        use rusqlite::OptionalExtension;
-        let source_repo_id: Option<String> = self
-            .conn
-            .query_row(
-                "SELECT source_repo_id
-                 FROM files
-                 WHERE path = ?1 AND owner_id IS NOT NULL
-                 ORDER BY CASE
-                     WHEN source_repo_id = 'legacy' THEN 0
-                     WHEN source_repo_id = 'registry' THEN 2
-                     ELSE 1
-                 END
-                 LIMIT 1",
-                params![path.as_str()],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(db_err)?;
-
-        match source_repo_id {
+        match single_source_repo_id_for_value(&self.conn, "files", "path", path.as_str())? {
             Some(source_repo_id) => self.file_owner_for_repo(&source_repo_id, path.as_str()),
             None => Ok(None),
         }
@@ -601,10 +626,6 @@ impl Store {
             .map(|owner| owner.owner_id))
     }
 
-    pub fn file_paths_with_prefix(&self, prefix: &str) -> Result<Vec<String>> {
-        self.file_paths_with_prefix_for_repo(LEGACY_SOURCE_REPO_ID, prefix)
-    }
-
     pub fn file_paths_with_prefix_for_repo(
         &self,
         source_repo_id: &str,
@@ -626,9 +647,15 @@ impl Store {
         Ok(paths)
     }
 
-    /// Upsert owner metadata for a stored legacy file row.
+    /// Upsert owner metadata for a stored file row.
     pub fn upsert_file_owner(&mut self, path: &str, owner: Option<&PackageOwner>) -> Result<()> {
-        self.upsert_file_owner_for_repo(LEGACY_SOURCE_REPO_ID, path, owner)
+        let path = canonicalize_repo_path(path)?;
+        match single_source_repo_id_for_value(&self.conn, "files", "path", path.as_str())? {
+            Some(source_repo_id) => {
+                self.upsert_file_owner_for_repo(&source_repo_id, path.as_str(), owner)
+            }
+            None => Ok(()),
+        }
     }
 
     pub fn upsert_file_owner_for_repo(
@@ -680,7 +707,13 @@ impl Store {
     /// can simply be retargeted to the new path instead of being deleted and
     /// rebuilt from scratch.
     pub fn rename_file_graph(&mut self, old_path: &str, new_path: &str) -> Result<()> {
-        self.rename_file_graph_for_repo(LEGACY_SOURCE_REPO_ID, old_path, new_path)
+        let old_path = canonicalize_repo_path(old_path)?;
+        match single_source_repo_id_for_value(&self.conn, "files", "path", old_path.as_str())? {
+            Some(source_repo_id) => {
+                self.rename_file_graph_for_repo(&source_repo_id, old_path.as_str(), new_path)
+            }
+            None => Ok(()),
+        }
     }
 
     pub fn rename_file_graph_for_repo(

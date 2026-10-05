@@ -895,7 +895,8 @@ mod tests {
             "src/service.rs",
         );
         store
-            .replace_file_graph(
+            .replace_file_graph_for_repo(
+                "repo_test",
                 "src/service.rs",
                 "hash:src/service.rs",
                 Some("rust"),
@@ -918,7 +919,8 @@ mod tests {
             "src/api.rs",
         );
         store
-            .replace_file_graph(
+            .replace_file_graph_for_repo(
+                "repo_test",
                 "src/api.rs",
                 "hash:src/api.rs",
                 Some("rust"),
@@ -941,7 +943,8 @@ mod tests {
             "tests/service_test.rs",
         );
         store
-            .replace_file_graph(
+            .replace_file_graph_for_repo(
+                "repo_test",
                 "tests/service_test.rs",
                 "hash:tests/service_test.rs",
                 Some("rust"),

@@ -79,7 +79,15 @@ fn flow_membership_survives_node_rebuild() {
     let mut store = open_in_memory();
     let node = make_node(NodeKind::Function, "step", "pkg::fn::step", "a.rs", "rust");
     store
-        .replace_file_graph("a.rs", "h1", None, None, std::slice::from_ref(&node), &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "a.rs",
+            "h1",
+            None,
+            None,
+            std::slice::from_ref(&node),
+            &[],
+        )
         .unwrap();
 
     let flow_id = store.create_flow("myflow", None, None).unwrap();
@@ -89,7 +97,7 @@ fn flow_membership_survives_node_rebuild() {
 
     // Simulate `atlas build` re-indexing the same file.
     store
-        .replace_file_graph("a.rs", "h2", None, None, &[node], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h2", None, None, &[node], &[])
         .unwrap();
 
     // Membership must still exist after rebuild.
@@ -229,7 +237,15 @@ fn community_membership_survives_node_rebuild() {
     let mut store = open_in_memory();
     let node = make_node(NodeKind::Function, "fn_a", "pkg::fn::fn_a", "a.rs", "rust");
     store
-        .replace_file_graph("a.rs", "h1", None, None, std::slice::from_ref(&node), &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "a.rs",
+            "h1",
+            None,
+            None,
+            std::slice::from_ref(&node),
+            &[],
+        )
         .unwrap();
 
     let comm_id = store.create_community("mycomm", None, None, None).unwrap();
@@ -237,7 +253,7 @@ fn community_membership_survives_node_rebuild() {
 
     // Rebuild — simulates `atlas build`.
     store
-        .replace_file_graph("a.rs", "h2", None, None, &[node], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h2", None, None, &[node], &[])
         .unwrap();
 
     let nodes = store.get_community_nodes(comm_id).unwrap();

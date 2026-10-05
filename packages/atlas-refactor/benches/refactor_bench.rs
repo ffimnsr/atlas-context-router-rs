@@ -114,7 +114,7 @@ fn setup_rename_fixture(caller_count: usize) -> RenameFixture {
     }
 
     store
-        .replace_files_transactional(&parsed_files)
+        .replace_files_transactional_for_repo("repo_test", &parsed_files)
         .expect("seed rename fixture");
 
     RenameFixture {

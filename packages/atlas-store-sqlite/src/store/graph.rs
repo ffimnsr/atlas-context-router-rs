@@ -197,12 +197,6 @@ impl Store {
         Ok(rows)
     }
 
-    /// Replace only the stored edges for legacy `path`, leaving nodes and file
-    /// metadata untouched.
-    pub fn rewrite_file_edges(&mut self, path: &str, edges: &[atlas_core::Edge]) -> Result<()> {
-        self.rewrite_file_edges_for_repo("legacy", path, edges)
-    }
-
     pub fn rewrite_file_edges_for_repo(
         &mut self,
         source_repo_id: &str,
@@ -268,16 +262,6 @@ impl Store {
         Ok(rows)
     }
 
-    /// Returns a map of `file_path → stored_hash` for all indexed files.
-    ///
-    /// Used by the build command to skip re-parsing files whose content has not
-    /// changed since the last indexed pass. The map keys are the canonical
-    /// `files.path` identities stored in the graph DB, so file-hash reuse and
-    /// later historical snapshot keys operate on the same path spelling.
-    pub fn file_hashes(&self) -> Result<std::collections::HashMap<String, String>> {
-        self.file_hashes_for_repo("legacy")
-    }
-
     pub fn file_hashes_for_repo(
         &self,
         source_repo_id: &str,
@@ -314,52 +298,12 @@ impl Store {
         Ok(paths)
     }
 
-    /// Files that have at least one edge pointing **into** a node defined in
-    /// any of `changed_paths` (i.e. direct importers / callers).
-    pub fn find_dependents(&self, changed_paths: &[&str]) -> Result<Vec<String>> {
-        if changed_paths.is_empty() {
-            return Ok(vec![]);
-        }
-        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
-
-        let placeholders = repeat_placeholders(changed_paths.len());
-        let sql = format!(
-            "SELECT DISTINCT ns.file_path
-             FROM edges  e
-             JOIN nodes  nt ON e.target_qualified = nt.qualified_name
-             JOIN nodes  ns ON e.source_qualified = ns.qualified_name
-             WHERE nt.file_path IN ({placeholders})
-               AND ns.file_path NOT IN ({placeholders})
-             ORDER BY ns.file_path"
-        );
-
-        // bind the same list twice (target IN, source NOT IN).
-        let params: Vec<&dyn rusqlite::types::ToSql> = changed_paths
-            .iter()
-            .chain(changed_paths.iter())
-            .map(|p| p as &dyn rusqlite::types::ToSql)
-            .collect();
-
-        let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
-        let rows = stmt
-            .query_map(params.as_slice(), |r| r.get(0))
-            .map_err(db_err)?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
-    }
-
     /// Files that have at least one edge pointing into any of `changed_qnames`.
     ///
-    /// More targeted than `Store::find_dependents()` which operates on file
-    /// paths:
-    /// this accepts specific qualified names so the caller can restrict
-    /// invalidation to symbols whose signatures actually changed, avoiding
-    /// unnecessary reparsing of files that only depend on stable symbols.
-    pub fn find_dependents_for_qnames(&self, changed_qnames: &[&str]) -> Result<Vec<String>> {
-        self.find_dependents_for_qnames_for_repo("legacy", changed_qnames)
-    }
-
+    /// More targeted than path-based invalidation: this accepts specific
+    /// qualified names so the caller can restrict invalidation to symbols whose
+    /// signatures actually changed, avoiding unnecessary reparsing of files
+    /// that only depend on stable symbols.
     pub fn find_dependents_for_qnames_for_repo(
         &self,
         source_repo_id: &str,

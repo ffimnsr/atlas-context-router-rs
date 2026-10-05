@@ -86,7 +86,15 @@ fn seed_graph(store: &mut Store, nodes: Vec<Node>, edges: Vec<Edge>) {
     for (path, (nodes, edges)) in files {
         let language = nodes.first().map(|node| node.language.clone());
         store
-            .replace_file_graph(&path, "hash", language.as_deref(), None, &nodes, &edges)
+            .replace_file_graph_for_repo(
+                "repo_test",
+                &path,
+                "hash",
+                language.as_deref(),
+                None,
+                &nodes,
+                &edges,
+            )
             .unwrap();
     }
 }

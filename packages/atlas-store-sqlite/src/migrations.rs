@@ -93,9 +93,14 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "018_repo_scoped_node_identity",
         up_sql: include_str!("migrations/018_repo_scoped_node_identity.sql"),
     },
+    Migration {
+        version: 19,
+        name: "019_drop_legacy_source_repo_defaults",
+        up_sql: include_str!("migrations/019_drop_legacy_source_repo_defaults.sql"),
+    },
 ];
 
-pub const LATEST_VERSION: i32 = 18;
+pub const LATEST_VERSION: i32 = 19;
 
 pub const MIGRATION_SET: MigrationSet = MigrationSet {
     db_kind: "worldtree",

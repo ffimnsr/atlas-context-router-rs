@@ -122,7 +122,15 @@ fn get_context_code_spans_toggle_controls_line_ranges() {
         repo_provenance: None,
     };
     store
-        .replace_file_graph("src/ui.rs", "h1", Some("rust"), Some(20), &[node], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "src/ui.rs",
+            "h1",
+            Some("rust"),
+            Some(20),
+            &[node],
+            &[],
+        )
         .expect("replace_file_graph");
 
     let with_spans = serde_json::json!({

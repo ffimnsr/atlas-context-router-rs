@@ -6,7 +6,8 @@ use atlas_store_sqlite::BuildFinishStats;
 fn finish_build(db_path: &str, repo_root: &str, state: atlas_store_sqlite::GraphBuildState) {
     let store = Store::open(db_path).expect("open store");
     store
-        .finish_build(
+        .finish_build_for_repo(
+            "repo_test",
             repo_root,
             BuildFinishStats {
                 state,

@@ -85,7 +85,8 @@ fn build_corpus(module_count: usize) -> (Store, Vec<RetrievalCase>) {
         ];
 
         store
-            .replace_file_graph(
+            .replace_file_graph_for_repo(
+                "repo_test",
                 &file,
                 &format!("hash-{m}"),
                 Some("rust"),

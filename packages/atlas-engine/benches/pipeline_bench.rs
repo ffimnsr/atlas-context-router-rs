@@ -143,7 +143,7 @@ fn bench_write_only(c: &mut Criterion) {
                 b.iter(|| {
                     let mut store = make_store();
                     let (n, e) = store
-                        .replace_files_transactional(black_box(parsed))
+                        .replace_files_transactional_for_repo("repo_test", black_box(parsed))
                         .expect("write");
                     black_box((n, e));
                 });
@@ -189,7 +189,10 @@ fn bench_full_pipeline(c: &mut Criterion) {
 
                         if !parsed.is_empty() {
                             let (n, e) = store
-                                .replace_files_transactional(black_box(&parsed))
+                                .replace_files_transactional_for_repo(
+                                    "repo_test",
+                                    black_box(&parsed),
+                                )
                                 .expect("write");
                             total_nodes += n;
                             total_edges += e;

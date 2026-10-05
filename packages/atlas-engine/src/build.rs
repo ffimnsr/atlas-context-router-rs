@@ -9,7 +9,7 @@ use atlas_core::{BudgetReport, BuildUpdateBudgetCounters, PackageOwner, model::P
 use atlas_parser::{ExternalParserConfig, ParserRegistry};
 use atlas_repo::{
     collect_supported_files_with_stats, discover_package_owners, find_repo_root, hash_file,
-    head_ref, stable_repo_fingerprint,
+    head_ref, stable_repo_fingerprint, stable_repo_id,
 };
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
@@ -96,7 +96,7 @@ pub fn build_graph(
     let source_repo_id = opts
         .source_repo_id
         .clone()
-        .unwrap_or_else(|| "legacy".to_owned());
+        .unwrap_or_else(|| stable_repo_id(repo_root));
     store
         .upsert_repo(repo_root.as_str())
         .context("cannot register repo root for build state and history")?;
@@ -667,10 +667,12 @@ mod tests {
         let lib_path = repo_root.join("lib.rs");
         let file_path = Utf8Path::from_path(&lib_path).unwrap();
         let file_hash = atlas_repo::hash_file(file_path).unwrap();
+        let source_repo_id = atlas_repo::stable_repo_id(Utf8Path::from_path(repo_root).unwrap());
 
         let mut store = Store::open(db_path.to_str().unwrap()).unwrap();
         store
-            .replace_file_graph(
+            .replace_file_graph_for_repo(
+                &source_repo_id,
                 "lib.rs",
                 &file_hash,
                 Some("rust"),

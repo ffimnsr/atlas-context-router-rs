@@ -72,6 +72,17 @@ pub fn classify_graph_store_error(error: &str) -> GraphStoreHealthClass {
     GraphStoreHealthClass::SqliteCorrupt
 }
 
+/// True when one `integrity_check` issue string describes a logical
+/// inconsistency (dangling edges, foreign-key failures, noncanonical paths,
+/// missing repo provenance, or legacy repo identity rows) rather than physical
+/// SQLite corruption.
+///
+/// Shared by CLI and MCP integrity checks so issue classification cannot
+/// drift between surfaces.
+pub fn is_logical_inconsistency_issue(issue: &str) -> bool {
+    looks_like_logical_inconsistency(&issue.to_ascii_lowercase())
+}
+
 pub fn select_graph_health_error_code(input: GraphHealthInput<'_>) -> &'static str {
     if !input.db_exists {
         return "missing_graph_db";
@@ -133,6 +144,9 @@ pub fn graph_health_error_message(error_code: &str) -> &'static str {
         "failed_build" => {
             "Last build failed. Check build_last_error for details, then run `atlas build` to retry."
         }
+        "legacy_repo_identity" => {
+            "Legacy repo identity rows detected. Rebuild the graph under the stable repo identity before using graph-backed features."
+        }
         "stale_index" => {
             "Graph-backed answers may be stale because graph-relevant files changed after the last index."
         }
@@ -180,6 +194,10 @@ pub fn graph_health_error_suggestions(error_code: &str) -> &'static [&'static st
         "failed_build" => &[
             "check the build_last_error field for details",
             "run `atlas build` to retry",
+        ],
+        "legacy_repo_identity" => &[
+            "run `atlas build` to quarantine the legacy graph and rebuild under the stable repo identity",
+            "run `atlas db-check` to inspect legacy identity rows",
         ],
         "stale_index" => &[
             "run `atlas update` or `update_graph` to refresh graph facts",
@@ -255,6 +273,8 @@ fn looks_like_logical_inconsistency(lower: &str) -> bool {
         "noncanonical_path:",
         "noncanonical_path_rows",
         "missing_repo_provenance:",
+        "legacy_repo_identity",
+        "foreign_key_check:",
         "foreign key",
         "pragma foreign_key_check",
         "dangling edge",
@@ -336,6 +356,31 @@ mod tests {
             classify_graph_store_error("dangling edge detected during graph invariant scan"),
             GraphStoreHealthClass::LogicalInconsistency
         );
+        assert_eq!(
+            classify_graph_store_error("legacy_repo_identity: table=files rowid=1"),
+            GraphStoreHealthClass::LogicalInconsistency
+        );
+    }
+
+    #[test]
+    fn logical_inconsistency_issue_matcher_covers_all_integrity_prefixes() {
+        use super::is_logical_inconsistency_issue;
+
+        assert!(is_logical_inconsistency_issue(
+            "noncanonical_path: table=files rowid=1 path=./a.rs"
+        ));
+        assert!(is_logical_inconsistency_issue(
+            "missing_repo_provenance: table=nodes rowid=2 source_repo_id="
+        ));
+        assert!(is_logical_inconsistency_issue(
+            "legacy_repo_identity: table=files rowid=3 source_repo_id=legacy"
+        ));
+        assert!(is_logical_inconsistency_issue(
+            "foreign_key_check: table=edges rowid=4 parent=nodes fkid=0"
+        ));
+        assert!(!is_logical_inconsistency_issue(
+            "integrity_check: database disk image is malformed"
+        ));
     }
 
     #[test]

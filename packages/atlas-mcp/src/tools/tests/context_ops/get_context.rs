@@ -9,7 +9,8 @@ fn get_context_missing_args_returns_error() {
     // Mark graph as built so the readiness check passes and the tool itself
     // handles the missing-args validation (rather than being blocked early).
     store
-        .finish_build(
+        .finish_build_for_repo(
+            "repo_test",
             "/ignored",
             atlas_store_sqlite::BuildFinishStats {
                 state: atlas_store_sqlite::GraphBuildState::Built,
@@ -67,7 +68,15 @@ fn get_context_query_returns_packaged_result() {
         repo_provenance: None,
     };
     store
-        .replace_file_graph("src/math.rs", "h1", Some("rust"), Some(5), &[node], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "src/math.rs",
+            "h1",
+            Some("rust"),
+            Some(5),
+            &[node],
+            &[],
+        )
         .expect("replace_file_graph");
 
     let args = serde_json::json!({ "target": { "kind": "query", "query": "compute" }, "output_format": "json" });
@@ -129,7 +138,15 @@ fn get_context_accepts_target_object_and_reports_normalized_target() {
         repo_provenance: None,
     };
     store
-        .replace_file_graph("src/math.rs", "h1", Some("rust"), Some(5), &[node], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "src/math.rs",
+            "h1",
+            Some("rust"),
+            Some(5),
+            &[node],
+            &[],
+        )
         .expect("replace_file_graph");
 
     let args = serde_json::json!({
@@ -171,7 +188,15 @@ fn get_context_accepts_supported_query_intent_phrases() {
         repo_provenance: None,
     };
     store
-        .replace_file_graph("src/math.rs", "h1", Some("rust"), Some(5), &[node], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "src/math.rs",
+            "h1",
+            Some("rust"),
+            Some(5),
+            &[node],
+            &[],
+        )
         .expect("replace_file_graph");
 
     let resp = call(
@@ -196,7 +221,8 @@ fn get_context_rejects_natural_language_only_query_descriptions() {
     let db_path = db_path.to_string_lossy().to_string();
     let store = Store::open(&db_path).expect("open store");
     store
-        .finish_build(
+        .finish_build_for_repo(
+            "repo_test",
             "/ignored",
             atlas_store_sqlite::BuildFinishStats {
                 state: atlas_store_sqlite::GraphBuildState::Built,
@@ -240,7 +266,8 @@ fn get_context_rejects_legacy_target_fields() {
     let db_path = db_path.to_string_lossy().to_string();
     let store = Store::open(&db_path).expect("open store");
     store
-        .finish_build(
+        .finish_build_for_repo(
+            "repo_test",
             "/ignored",
             atlas_store_sqlite::BuildFinishStats {
                 state: atlas_store_sqlite::GraphBuildState::Built,
@@ -292,7 +319,8 @@ fn get_context_files_returns_review_intent() {
     // A built (empty) graph is sufficient to pass readiness; the test only
     // checks that the `files` argument sets intent=review.
     store
-        .finish_build(
+        .finish_build_for_repo(
+            "repo_test",
             &root,
             atlas_store_sqlite::BuildFinishStats {
                 state: atlas_store_sqlite::GraphBuildState::Built,
@@ -331,7 +359,8 @@ fn get_context_not_found_returns_empty_nodes() {
     // A built (empty) graph is sufficient to pass readiness; the test only
     // checks that an unknown query returns 0 nodes.
     store
-        .finish_build(
+        .finish_build_for_repo(
+            "repo_test",
             "/ignored",
             atlas_store_sqlite::BuildFinishStats {
                 state: atlas_store_sqlite::GraphBuildState::Built,
@@ -384,7 +413,15 @@ fn get_context_defaults_to_json_output() {
         repo_provenance: None,
     };
     store
-        .replace_file_graph("src/math.rs", "h1", Some("rust"), Some(5), &[node], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "src/math.rs",
+            "h1",
+            Some("rust"),
+            Some(5),
+            &[node],
+            &[],
+        )
         .expect("replace_file_graph");
 
     let args = serde_json::json!({ "target": { "kind": "query", "query": "compute" } });

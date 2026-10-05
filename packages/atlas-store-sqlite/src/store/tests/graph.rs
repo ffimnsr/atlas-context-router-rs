@@ -8,10 +8,10 @@ fn nodes_by_file_returns_only_that_file() {
     let na = make_node(NodeKind::Function, "fa", "a.rs::fn::fa", "a.rs", "rust");
     let nb = make_node(NodeKind::Function, "fb", "b.rs::fn::fb", "b.rs", "rust");
     store
-        .replace_file_graph("a.rs", "h", None, None, &[na], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &[na], &[])
         .unwrap();
     store
-        .replace_file_graph("b.rs", "h", None, None, &[nb], &[])
+        .replace_file_graph_for_repo("repo_test", "b.rs", "h", None, None, &[nb], &[])
         .unwrap();
 
     let got = store.nodes_by_file("a.rs").unwrap();
@@ -49,10 +49,10 @@ fn edges_by_file_returns_only_that_file() {
         "b.rs",
     )];
     store
-        .replace_file_graph("a.rs", "h", None, None, &nodes_a, &edges_a)
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &nodes_a, &edges_a)
         .unwrap();
     store
-        .replace_file_graph("b.rs", "h", None, None, &nodes_b, &edges_b)
+        .replace_file_graph_for_repo("repo_test", "b.rs", "h", None, None, &nodes_b, &edges_b)
         .unwrap();
 
     let got = store.edges_by_file("a.rs").unwrap();
@@ -81,22 +81,17 @@ fn find_dependents_returns_importing_files() {
         "b.rs",
     );
     store
-        .replace_file_graph("a.rs", "h", None, None, &[na], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &[na], &[])
         .unwrap();
     store
-        .replace_file_graph("b.rs", "h", None, None, &[nb], &[edge])
+        .replace_file_graph_for_repo("repo_test", "b.rs", "h", None, None, &[nb], &[edge])
         .unwrap();
 
-    let deps = store.find_dependents(&["a.rs"]).unwrap();
+    let deps = store
+        .find_dependents_for_qnames_for_repo("repo_test", &["a.rs::struct::Foo"])
+        .unwrap();
     assert!(deps.contains(&"b.rs".to_string()));
     assert!(!deps.contains(&"a.rs".to_string()));
-}
-
-#[test]
-fn find_dependents_empty_input_returns_empty() {
-    let store = open_in_memory();
-    let deps = store.find_dependents(&[]).unwrap();
-    assert!(deps.is_empty());
 }
 
 // --- impact_radius -------------------------------------------------------
@@ -109,10 +104,10 @@ fn impact_radius_one_hop() {
     let nb = make_node(NodeKind::Function, "b", "b.rs::fn::b", "b.rs", "rust");
     let edge = make_edge(EdgeKind::Calls, "a.rs::fn::a", "b.rs::fn::b", "a.rs");
     store
-        .replace_file_graph("a.rs", "h", None, None, &[na], &[edge])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &[na], &[edge])
         .unwrap();
     store
-        .replace_file_graph("b.rs", "h", None, None, &[nb], &[])
+        .replace_file_graph_for_repo("repo_test", "b.rs", "h", None, None, &[nb], &[])
         .unwrap();
 
     let result = store.impact_radius(&["a.rs"], 3, 200, 400).unwrap();
@@ -135,10 +130,10 @@ fn impact_radius_cyclic_graph_terminates() {
     let e1 = make_edge(EdgeKind::Calls, "a.rs::fn::a", "b.rs::fn::b", "a.rs");
     let e2 = make_edge(EdgeKind::Calls, "b.rs::fn::b", "a.rs::fn::a", "b.rs");
     store
-        .replace_file_graph("a.rs", "h", None, None, &[na], &[e1])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &[na], &[e1])
         .unwrap();
     store
-        .replace_file_graph("b.rs", "h", None, None, &[nb], &[e2])
+        .replace_file_graph_for_repo("repo_test", "b.rs", "h", None, None, &[nb], &[e2])
         .unwrap();
 
     // Must not loop forever and must return both nodes.
@@ -170,13 +165,13 @@ fn impact_radius_disconnected_graph() {
     let nc = make_node(NodeKind::Function, "c", "c.rs::fn::c", "c.rs", "rust");
     let edge = make_edge(EdgeKind::Calls, "a.rs::fn::a", "b.rs::fn::b", "a.rs");
     store
-        .replace_file_graph("a.rs", "h", None, None, &[na], &[edge])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &[na], &[edge])
         .unwrap();
     store
-        .replace_file_graph("b.rs", "h", None, None, &[nb], &[])
+        .replace_file_graph_for_repo("repo_test", "b.rs", "h", None, None, &[nb], &[])
         .unwrap();
     store
-        .replace_file_graph("c.rs", "h", None, None, &[nc], &[])
+        .replace_file_graph_for_repo("repo_test", "c.rs", "h", None, None, &[nc], &[])
         .unwrap();
 
     let result = store.impact_radius(&["a.rs"], 5, 200, 400).unwrap();
@@ -213,16 +208,16 @@ fn impact_radius_depth_cap() {
     let e2 = make_edge(EdgeKind::Calls, "b.rs::fn::b", "c.rs::fn::c", "b.rs");
     let e3 = make_edge(EdgeKind::Calls, "c.rs::fn::c", "d.rs::fn::d", "c.rs");
     store
-        .replace_file_graph("a.rs", "h", None, None, &[na], &[e1])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &[na], &[e1])
         .unwrap();
     store
-        .replace_file_graph("b.rs", "h", None, None, &[nb], &[e2])
+        .replace_file_graph_for_repo("repo_test", "b.rs", "h", None, None, &[nb], &[e2])
         .unwrap();
     store
-        .replace_file_graph("c.rs", "h", None, None, &[nc], &[e3])
+        .replace_file_graph_for_repo("repo_test", "c.rs", "h", None, None, &[nc], &[e3])
         .unwrap();
     store
-        .replace_file_graph("d.rs", "h", None, None, &[nd], &[])
+        .replace_file_graph_for_repo("repo_test", "d.rs", "h", None, None, &[nd], &[])
         .unwrap();
 
     // max_depth=1: only b should be reachable beyond the seed.
@@ -262,14 +257,14 @@ fn impact_radius_max_node_cap() {
         .map(|(_, qn, fp)| make_edge(EdgeKind::Calls, "a.rs::fn::a", qn, fp))
         .collect();
     store
-        .replace_file_graph("a.rs", "h", None, None, &[na], &edges)
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &[na], &edges)
         .unwrap();
     // Clear so we can reuse this vec as a per-file edges slice.
     edges.clear();
     for (name, qn, fp) in &nodes_src {
         let n = make_node(NodeKind::Function, name, qn, fp, "rust");
         store
-            .replace_file_graph(fp, "h", None, None, &[n], &[])
+            .replace_file_graph_for_repo("repo_test", fp, "h", None, None, &[n], &[])
             .unwrap();
     }
 
@@ -290,10 +285,10 @@ fn impact_radius_deleted_seed_file_returns_empty() {
     let nb = make_node(NodeKind::Function, "b", "b.rs::fn::b", "b.rs", "rust");
     let edge = make_edge(EdgeKind::Calls, "a.rs::fn::a", "b.rs::fn::b", "a.rs");
     store
-        .replace_file_graph("a.rs", "h", None, None, &[na], &[edge])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &[na], &[edge])
         .unwrap();
     store
-        .replace_file_graph("b.rs", "h", None, None, &[nb], &[])
+        .replace_file_graph_for_repo("repo_test", "b.rs", "h", None, None, &[nb], &[])
         .unwrap();
 
     // Delete the seed file before querying impact.
@@ -315,7 +310,7 @@ fn impact_radius_seed_file_with_no_nodes() {
     let mut store = open_in_memory();
     // Index a file record with zero nodes.
     store
-        .replace_file_graph("empty.rs", "h", None, None, &[], &[])
+        .replace_file_graph_for_repo("repo_test", "empty.rs", "h", None, None, &[], &[])
         .unwrap();
 
     let result = store.impact_radius(&["empty.rs"], 5, 200, 400).unwrap();
@@ -350,13 +345,29 @@ fn file_hashes_returns_stored_hashes() {
         "go",
     )];
     store
-        .replace_file_graph("a.rs", "hash_aaa", Some("rust"), None, &nodes_a, &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "a.rs",
+            "hash_aaa",
+            Some("rust"),
+            None,
+            &nodes_a,
+            &[],
+        )
         .unwrap();
     store
-        .replace_file_graph("b.rs", "hash_bbb", Some("go"), None, &nodes_b, &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "b.rs",
+            "hash_bbb",
+            Some("go"),
+            None,
+            &nodes_b,
+            &[],
+        )
         .unwrap();
 
-    let hashes = store.file_hashes().unwrap();
+    let hashes = store.file_hashes_for_repo("repo_test").unwrap();
     assert_eq!(hashes.get("a.rs").map(String::as_str), Some("hash_aaa"));
     assert_eq!(hashes.get("b.rs").map(String::as_str), Some("hash_bbb"));
 }
@@ -364,7 +375,7 @@ fn file_hashes_returns_stored_hashes() {
 #[test]
 fn file_hashes_empty_when_no_files() {
     let store = open_in_memory();
-    let hashes = store.file_hashes().unwrap();
+    let hashes = store.file_hashes_for_repo("repo_test").unwrap();
     assert!(hashes.is_empty());
 }
 
@@ -379,13 +390,13 @@ fn file_hashes_updated_after_replace() {
         "rust",
     )];
     store
-        .replace_file_graph("a.rs", "old_hash", None, None, &nodes, &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "old_hash", None, None, &nodes, &[])
         .unwrap();
     store
-        .replace_file_graph("a.rs", "new_hash", None, None, &nodes, &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "new_hash", None, None, &nodes, &[])
         .unwrap();
 
-    let hashes = store.file_hashes().unwrap();
+    let hashes = store.file_hashes_for_repo("repo_test").unwrap();
     assert_eq!(hashes.get("a.rs").map(String::as_str), Some("new_hash"));
     assert_eq!(hashes.len(), 1);
 }
@@ -404,16 +415,16 @@ fn impact_radius_respects_depth_limit() {
     let e2 = make_edge(EdgeKind::Calls, "b.rs::fn::b", "c.rs::fn::c", "b.rs");
     let e3 = make_edge(EdgeKind::Calls, "c.rs::fn::c", "d.rs::fn::d", "c.rs");
     store
-        .replace_file_graph("a.rs", "h", None, None, &[na], &[e1])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &[na], &[e1])
         .unwrap();
     store
-        .replace_file_graph("b.rs", "h", None, None, &[nb], &[e2])
+        .replace_file_graph_for_repo("repo_test", "b.rs", "h", None, None, &[nb], &[e2])
         .unwrap();
     store
-        .replace_file_graph("c.rs", "h", None, None, &[nc], &[e3])
+        .replace_file_graph_for_repo("repo_test", "c.rs", "h", None, None, &[nc], &[e3])
         .unwrap();
     store
-        .replace_file_graph("d.rs", "h", None, None, &[nd], &[])
+        .replace_file_graph_for_repo("repo_test", "d.rs", "h", None, None, &[nd], &[])
         .unwrap();
 
     let result = store.impact_radius(&["a.rs"], 1, 200, 400).unwrap();
@@ -446,16 +457,16 @@ fn impact_radius_respects_node_count_limit() {
     let e2 = make_edge(EdgeKind::Calls, "a.rs::fn::a", "c.rs::fn::c", "a.rs");
     let e3 = make_edge(EdgeKind::Calls, "a.rs::fn::a", "d.rs::fn::d", "a.rs");
     store
-        .replace_file_graph("a.rs", "h", None, None, &[na], &[e1, e2, e3])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &[na], &[e1, e2, e3])
         .unwrap();
     store
-        .replace_file_graph("b.rs", "h", None, None, &[nb], &[])
+        .replace_file_graph_for_repo("repo_test", "b.rs", "h", None, None, &[nb], &[])
         .unwrap();
     store
-        .replace_file_graph("c.rs", "h", None, None, &[nc], &[])
+        .replace_file_graph_for_repo("repo_test", "c.rs", "h", None, None, &[nc], &[])
         .unwrap();
     store
-        .replace_file_graph("d.rs", "h", None, None, &[nd], &[])
+        .replace_file_graph_for_repo("repo_test", "d.rs", "h", None, None, &[nd], &[])
         .unwrap();
 
     // Limit to 2 total nodes — should stop before visiting all of b/c/d.
@@ -478,16 +489,16 @@ fn impact_radius_reports_traversal_edge_cap() {
     let e2 = make_edge(EdgeKind::Calls, "a.rs::fn::a", "c.rs::fn::c", "a.rs");
     let e3 = make_edge(EdgeKind::Calls, "a.rs::fn::a", "d.rs::fn::d", "a.rs");
     store
-        .replace_file_graph("a.rs", "h", None, None, &[na], &[e1, e2, e3])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &[na], &[e1, e2, e3])
         .unwrap();
     store
-        .replace_file_graph("b.rs", "h", None, None, &[nb], &[])
+        .replace_file_graph_for_repo("repo_test", "b.rs", "h", None, None, &[nb], &[])
         .unwrap();
     store
-        .replace_file_graph("c.rs", "h", None, None, &[nc], &[])
+        .replace_file_graph_for_repo("repo_test", "c.rs", "h", None, None, &[nc], &[])
         .unwrap();
     store
-        .replace_file_graph("d.rs", "h", None, None, &[nd], &[])
+        .replace_file_graph_for_repo("repo_test", "d.rs", "h", None, None, &[nd], &[])
         .unwrap();
 
     let result = store.impact_radius(&["a.rs"], 5, 200, 1).unwrap();
@@ -577,25 +588,49 @@ fn find_dependents_for_qnames_returns_importers_of_changed_symbols() {
     // a.rs defines `foo`
     let node_a = make_node(NodeKind::Function, "foo", "a.rs::fn::foo", "a.rs", "rust");
     store
-        .replace_file_graph("a.rs", "h1", Some("rust"), None, &[node_a], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "a.rs",
+            "h1",
+            Some("rust"),
+            None,
+            &[node_a],
+            &[],
+        )
         .unwrap();
 
     // b.rs defines `bar` and calls a.rs::fn::foo
     let node_b = make_node(NodeKind::Function, "bar", "b.rs::fn::bar", "b.rs", "rust");
     let edge_b_to_a = make_edge(EdgeKind::Calls, "b.rs::fn::bar", "a.rs::fn::foo", "b.rs");
     store
-        .replace_file_graph("b.rs", "h2", Some("rust"), None, &[node_b], &[edge_b_to_a])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "b.rs",
+            "h2",
+            Some("rust"),
+            None,
+            &[node_b],
+            &[edge_b_to_a],
+        )
         .unwrap();
 
     // c.rs defines `qux` with no edges
     let node_c = make_node(NodeKind::Function, "qux", "c.rs::fn::qux", "c.rs", "rust");
     store
-        .replace_file_graph("c.rs", "h3", Some("rust"), None, &[node_c], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "c.rs",
+            "h3",
+            Some("rust"),
+            None,
+            &[node_c],
+            &[],
+        )
         .unwrap();
 
     // Changing a.rs::fn::foo should only invalidate b.rs, not c.rs.
     let deps = store
-        .find_dependents_for_qnames(&["a.rs::fn::foo"])
+        .find_dependents_for_qnames_for_repo("repo_test", &["a.rs::fn::foo"])
         .unwrap();
     assert_eq!(deps, vec!["b.rs"]);
 }
@@ -646,22 +681,16 @@ fn find_dependents_for_qnames_for_repo_excludes_foreign_repo_edges() {
     );
 }
 
-#[test]
-fn find_dependents_for_qnames_empty_input_returns_empty() {
-    let store = open_in_memory();
-    let deps = store.find_dependents_for_qnames(&[]).unwrap();
-    assert!(deps.is_empty());
-}
-
+// --- impact_radius -------------------------------------------------------
 #[test]
 fn find_dependents_for_qnames_no_edges_returns_empty() {
     let mut store = open_in_memory();
     let node = make_node(NodeKind::Function, "foo", "a.rs::fn::foo", "a.rs", "rust");
     store
-        .replace_file_graph("a.rs", "h1", Some("rust"), None, &[node], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h1", Some("rust"), None, &[node], &[])
         .unwrap();
     let deps = store
-        .find_dependents_for_qnames(&["a.rs::fn::foo"])
+        .find_dependents_for_qnames_for_repo("repo_test", &["a.rs::fn::foo"])
         .unwrap();
     assert!(deps.is_empty());
 }

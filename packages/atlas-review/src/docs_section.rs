@@ -372,7 +372,15 @@ mod tests {
         let db_path = dir.path().join("atlas.db");
         let mut store = Store::open(&db_path.to_string_lossy()).expect("open store");
         store
-            .replace_file_graph("README.md", "h1", Some("markdown"), Some(8), nodes, &[])
+            .replace_file_graph_for_repo(
+                "repo_test",
+                "README.md",
+                "h1",
+                Some("markdown"),
+                Some(8),
+                nodes,
+                &[],
+            )
             .expect("replace graph");
         (dir, store)
     }

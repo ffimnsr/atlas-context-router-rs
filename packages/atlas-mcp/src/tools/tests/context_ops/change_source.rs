@@ -160,7 +160,8 @@ fn review_and_impact_context_report_cross_repo_hops() {
         repo_provenance: None,
     };
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "src/app.rs",
             "h-app",
             Some("rust"),
@@ -170,7 +171,8 @@ fn review_and_impact_context_report_cross_repo_hops() {
         )
         .expect("replace app graph");
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "src/lib.rs",
             "h-dep",
             Some("rust"),
@@ -258,7 +260,15 @@ fn explain_change_reports_change_kind_counts() {
         repo_provenance: None,
     };
     store
-        .replace_file_graph("src/a.rs", "h1", Some("rust"), Some(10), &[node], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "src/a.rs",
+            "h1",
+            Some("rust"),
+            Some(10),
+            &[node],
+            &[],
+        )
         .expect("replace_file_graph");
 
     let args = serde_json::json!({

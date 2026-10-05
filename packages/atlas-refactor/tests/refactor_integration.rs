@@ -33,10 +33,12 @@ fn write_file(dir: &Path, rel_path: &str, content: &str) {
     std::fs::write(full, content).unwrap();
 }
 
-/// Insert a `ParsedFile` into the store.
-fn insert_pf(store: &mut Store, pf: atlas_core::ParsedFile) {
+/// Insert a `ParsedFile` into the store under the repo's stable identity.
+fn insert_pf(store: &mut Store, dir: &Path, pf: atlas_core::ParsedFile) {
+    let repo_root = camino::Utf8Path::from_path(dir).expect("utf8 repo root");
+    let source_repo_id = atlas_repo::stable_repo_id(repo_root);
     store
-        .replace_files_transactional(&[pf])
+        .replace_files_transactional_for_repo(&source_repo_id, &[pf])
         .expect("replace_files_transactional");
 }
 
@@ -89,7 +91,7 @@ fn rename_single_file_symbol() {
     write_file(dir.path(), src, content);
 
     let pf = parsed_file_with_fn(src, "old_name", "src/lib.rs::fn::old_name", 1, 3);
-    insert_pf(&mut store, pf);
+    insert_pf(&mut store, dir.path(), pf);
 
     let mut engine = RefactorEngine::new(&mut store, dir.path());
     let plan = engine
@@ -135,7 +137,7 @@ fn rename_multi_file_symbol() {
 
     // Insert definition node.
     let pf_def = parsed_file_with_fn(def_file, "my_func", "src/lib.rs::fn::my_func", 1, 1);
-    insert_pf(&mut store, pf_def);
+    insert_pf(&mut store, dir.path(), pf_def);
 
     // Insert reference node and edge manually.
     let pf_ref = atlas_core::ParsedFile {
@@ -174,7 +176,7 @@ fn rename_multi_file_symbol() {
             repo_provenance: None,
         }],
     };
-    insert_pf(&mut store, pf_ref);
+    insert_pf(&mut store, dir.path(), pf_ref);
 
     let mut engine = RefactorEngine::new(&mut store, dir.path());
     let plan = engine
@@ -248,7 +250,7 @@ fn rename_collision_rejected() {
         ],
         edges: vec![],
     };
-    insert_pf(&mut store, pf);
+    insert_pf(&mut store, dir.path(), pf);
 
     let engine = RefactorEngine::new(&mut store, dir.path());
     let err = engine.plan_rename("src/lib.rs::fn::old_name", "new_name");
@@ -316,7 +318,7 @@ fn dead_code_removal_private_helper() {
         ],
         edges: vec![],
     };
-    insert_pf(&mut store, pf);
+    insert_pf(&mut store, dir.path(), pf);
 
     let mut engine = RefactorEngine::new(&mut store, dir.path());
     let plan = engine
@@ -344,7 +346,7 @@ fn protected_entrypoint_not_removed() {
     write_file(dir.path(), src, "fn main() {}\n");
 
     let pf = parsed_file_with_fn(src, "main", "src/main.rs::fn::main", 1, 1);
-    insert_pf(&mut store, pf);
+    insert_pf(&mut store, dir.path(), pf);
 
     let engine = RefactorEngine::new(&mut store, dir.path());
     let err = engine.plan_dead_code_removal("src/main.rs::fn::main");
@@ -367,6 +369,7 @@ fn unused_import_removed() {
     write_file(dir.path(), src, content);
     insert_pf(
         &mut store,
+        dir.path(),
         parsed_file_with_fn(src, "foo", "src/lib.rs::fn::foo", 4, 7),
     );
 
@@ -406,6 +409,7 @@ fn used_import_preserved() {
     write_file(dir.path(), src, content);
     insert_pf(
         &mut store,
+        dir.path(),
         parsed_file_with_fn(src, "foo", "src/lib.rs::fn::foo", 2, 2),
     );
 
@@ -436,7 +440,7 @@ fn extract_function_candidate_detection_basic() {
 
     let total = body_lines.len() as u32 + 2;
     let pf = parsed_file_with_fn(src, "large_fn", "src/compute.rs::fn::large_fn", 1, total);
-    insert_pf(&mut store, pf);
+    insert_pf(&mut store, dir.path(), pf);
 
     let engine = RefactorEngine::new(&mut store, dir.path());
     let candidates = engine.detect_extract_function_candidates(src).unwrap();
@@ -460,7 +464,7 @@ fn dry_run_output_stable() {
     let content = "fn stable() {}\n";
     write_file(dir.path(), src, content);
     let pf = parsed_file_with_fn(src, "stable", "src/lib.rs::fn::stable", 1, 1);
-    insert_pf(&mut store, pf);
+    insert_pf(&mut store, dir.path(), pf);
 
     let mut engine = RefactorEngine::new(&mut store, dir.path());
     let plan = engine
@@ -487,7 +491,7 @@ fn simulate_impact_basic() {
     let src = "src/lib.rs";
     write_file(dir.path(), src, "fn target() {}\n");
     let pf = parsed_file_with_fn(src, "target", "src/lib.rs::fn::target", 1, 1);
-    insert_pf(&mut store, pf);
+    insert_pf(&mut store, dir.path(), pf);
 
     let engine = RefactorEngine::new(&mut store, dir.path());
     let plan = engine
@@ -508,6 +512,7 @@ fn apply_rename_updates_graph_slice_after_write() {
     write_file(dir.path(), src, "fn old_name() {}\n");
     insert_pf(
         &mut store,
+        dir.path(),
         parsed_file_with_fn(src, "old_name", "src/lib.rs::fn::old_name", 1, 1),
     );
 
@@ -543,6 +548,7 @@ fn import_cleanup_revalidates_syntax_before_write() {
     write_file(dir.path(), src, content);
     insert_pf(
         &mut store,
+        dir.path(),
         parsed_file_with_fn(src, "foo", "src/lib.rs::fn::foo", 2, 4),
     );
 
@@ -589,6 +595,7 @@ fn import_cleanup_normalizes_order_after_removal() {
     write_file(dir.path(), src, content);
     insert_pf(
         &mut store,
+        dir.path(),
         parsed_file_with_fn(src, "foo", "src/lib.rs::fn::foo", 5, 9),
     );
 
@@ -636,6 +643,7 @@ fn extract_function_skips_side_effect_heavy_blocks() {
     write_file(dir.path(), src, &content);
     insert_pf(
         &mut store,
+        dir.path(),
         parsed_file_with_fn(src, "large_fn", "src/compute.rs::fn::large_fn", 1, 24),
     );
 

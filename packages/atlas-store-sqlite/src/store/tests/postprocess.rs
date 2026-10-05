@@ -112,10 +112,26 @@ fn find_large_functions_filters_by_threshold_and_files() {
         )
     };
     store
-        .replace_file_graph("src/short.rs", "h1", Some("rust"), Some(10), &[short], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "src/short.rs",
+            "h1",
+            Some("rust"),
+            Some(10),
+            &[short],
+            &[],
+        )
         .unwrap();
     store
-        .replace_file_graph("src/long.rs", "h2", Some("rust"), Some(60), &[long], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "src/long.rs",
+            "h2",
+            Some("rust"),
+            Some(60),
+            &[long],
+            &[],
+        )
         .unwrap();
 
     let all = store.find_large_functions(None, 40, 10).unwrap();

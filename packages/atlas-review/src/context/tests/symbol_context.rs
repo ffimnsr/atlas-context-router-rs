@@ -296,7 +296,9 @@ fn symbol_context_blocks_cross_repo_callers_unless_enabled() {
             )],
         },
     ];
-    store.replace_batch(&files).unwrap();
+    store
+        .replace_files_transactional_for_repo("repo_test", &files)
+        .unwrap();
 
     let seed = store
         .node_by_qname("src/local.rs::fn::target")

@@ -84,7 +84,8 @@ fn seed_store(module_count: usize) -> Store {
         ];
 
         store
-            .replace_file_graph(
+            .replace_file_graph_for_repo(
+                "repo_test",
                 &file_path,
                 &format!("hash-{module_idx}"),
                 Some("rust"),

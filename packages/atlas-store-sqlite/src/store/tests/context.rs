@@ -23,7 +23,8 @@ fn setup_call_graph(store: &mut Store) {
         "a.rs",
     );
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "a.rs",
             "h1",
             Some("rust"),
@@ -33,7 +34,15 @@ fn setup_call_graph(store: &mut Store) {
         )
         .unwrap();
     store
-        .replace_file_graph("b.rs", "h2", Some("rust"), None, &[callee], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "b.rs",
+            "h2",
+            Some("rust"),
+            None,
+            &[callee],
+            &[],
+        )
         .unwrap();
 }
 
@@ -84,10 +93,10 @@ fn nodes_by_name_multiple_matches() {
         "rust",
     );
     store
-        .replace_file_graph("a.rs", "h1", None, None, &[n1], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h1", None, None, &[n1], &[])
         .unwrap();
     store
-        .replace_file_graph("b.rs", "h2", None, None, &[n2], &[])
+        .replace_file_graph_for_repo("repo_test", "b.rs", "h2", None, None, &[n2], &[])
         .unwrap();
     let nodes = store.nodes_by_name("process", 10).unwrap();
     assert_eq!(nodes.len(), 2);
@@ -111,10 +120,10 @@ fn nodes_by_name_limit_respected() {
         "rust",
     );
     store
-        .replace_file_graph("a.rs", "h1", None, None, &[n1], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h1", None, None, &[n1], &[])
         .unwrap();
     store
-        .replace_file_graph("b.rs", "h2", None, None, &[n2], &[])
+        .replace_file_graph_for_repo("repo_test", "b.rs", "h2", None, None, &[n2], &[])
         .unwrap();
     let nodes = store.nodes_by_name("process", 1).unwrap();
     assert_eq!(nodes.len(), 1);
@@ -210,10 +219,10 @@ fn setup_import_graph(store: &mut Store) {
         "a.rs",
     );
     store
-        .replace_file_graph("a.rs", "h1", None, None, &[importer], &[edge])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h1", None, None, &[importer], &[edge])
         .unwrap();
     store
-        .replace_file_graph("b.rs", "h2", None, None, &[importee], &[])
+        .replace_file_graph_for_repo("repo_test", "b.rs", "h2", None, None, &[importee], &[])
         .unwrap();
 }
 
@@ -259,7 +268,7 @@ fn setup_sibling_graph(store: &mut Store) {
     let n2 = parent_method("method_b", "a.rs::MyClass::method_b");
     let n3 = parent_method("method_c", "a.rs::MyClass::method_c");
     store
-        .replace_file_graph("a.rs", "h1", None, None, &[n1, n2, n3], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h1", None, None, &[n1, n2, n3], &[])
         .unwrap();
 }
 
@@ -300,7 +309,7 @@ fn containment_siblings_no_parent_returns_empty() {
         "rust",
     );
     store
-        .replace_file_graph("a.rs", "h1", None, None, &[n], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h1", None, None, &[n], &[])
         .unwrap();
     let siblings = store
         .containment_siblings("a.rs::fn::standalone", 10)
@@ -340,10 +349,18 @@ fn setup_test_graph(store: &mut Store) {
         "tests.rs",
     );
     store
-        .replace_file_graph("a.rs", "h1", None, None, &[src], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h1", None, None, &[src], &[])
         .unwrap();
     store
-        .replace_file_graph("tests.rs", "h2", None, None, &[test_node], &[edge])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "tests.rs",
+            "h2",
+            None,
+            None,
+            &[test_node],
+            &[edge],
+        )
         .unwrap();
 }
 
@@ -409,13 +426,37 @@ fn dead_code_excludes_non_code_language_nodes() {
         "markdown",
     );
     store
-        .replace_file_graph("src/lib.rs", "h1", Some("rust"), None, &[rust_fn], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "src/lib.rs",
+            "h1",
+            Some("rust"),
+            None,
+            &[rust_fn],
+            &[],
+        )
         .unwrap();
     store
-        .replace_file_graph("Cargo.toml", "h2", Some("toml"), None, &[toml_var], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "Cargo.toml",
+            "h2",
+            Some("toml"),
+            None,
+            &[toml_var],
+            &[],
+        )
         .unwrap();
     store
-        .replace_file_graph("README.md", "h3", Some("markdown"), None, &[md_var], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "README.md",
+            "h3",
+            Some("markdown"),
+            None,
+            &[md_var],
+            &[],
+        )
         .unwrap();
 
     let candidates = store.dead_code_candidates(100).unwrap();

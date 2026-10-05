@@ -140,7 +140,9 @@ fn seed_graph(store: &mut Store) {
             edges: edges[2..3].to_vec(),
         },
     ];
-    store.replace_batch(&files).unwrap();
+    store
+        .replace_files_transactional_for_repo("repo_test", &files)
+        .unwrap();
 }
 
 fn saved_source_meta(id: &str) -> SourceMeta {

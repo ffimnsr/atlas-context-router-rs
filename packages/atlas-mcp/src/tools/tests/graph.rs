@@ -133,7 +133,8 @@ fn query_graph_fuzzy_typo_prefers_symbol_over_markdown_file() {
         repo_provenance: None,
     };
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "internal/requestctx/context.go",
             "h1",
             Some("go"),
@@ -162,7 +163,8 @@ fn query_graph_fuzzy_typo_prefers_symbol_over_markdown_file() {
         repo_provenance: None,
     };
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "docs/load_identity_messages.md",
             "h2",
             Some("markdown"),
@@ -223,7 +225,8 @@ fn query_graph_include_files_opt_in_controls_file_results() {
         repo_provenance: None,
     };
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "docs/architecture.md",
             "h",
             Some("markdown"),
@@ -397,7 +400,8 @@ fn query_graph_all_repos_returns_repo_provenance_for_ambiguous_results() {
         )
     };
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "src/service.rs",
             "hash:src/service.rs",
             Some("rust"),
@@ -417,7 +421,8 @@ fn query_graph_all_repos_returns_repo_provenance_for_ambiguous_results() {
         )
     };
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "vendor/dep/src/service.rs",
             "hash:vendor/dep/src/service.rs",
             Some("rust"),
@@ -849,8 +854,10 @@ fn symbol_neighbors_includes_call_edge_sites() {
         "src/api.rs",
     );
     second_call.line = Some(2);
+    let source_repo_id = atlas_repo::stable_repo_id(camino::Utf8Path::new(&fixture.repo_root));
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            &source_repo_id,
             "src/api.rs",
             "hash:src/api.rs",
             Some("rust"),
@@ -1381,7 +1388,8 @@ fn resolve_symbol_returns_ambiguous_success_shape() {
         "src/extra.rs",
     );
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "src/extra.rs",
             "hash:src/extra.rs",
             Some("rust"),

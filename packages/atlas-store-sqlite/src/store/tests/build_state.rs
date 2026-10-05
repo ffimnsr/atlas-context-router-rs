@@ -7,7 +7,7 @@ use super::*;
 #[test]
 fn begin_build_sets_state_building() {
     let store = open_in_memory();
-    store.begin_build("/repo").unwrap();
+    store.begin_build_for_repo("repo_test", "/repo").unwrap();
     let status = store.get_build_status("/repo").unwrap().unwrap();
     assert_eq!(status.state, GraphBuildState::Building);
     assert_eq!(status.nodes_written, 0);
@@ -44,9 +44,10 @@ fn last_indexed_ref_roundtrip_and_status_field() {
 #[test]
 fn finish_build_after_begin_sets_built_with_counters() {
     let store = open_in_memory();
-    store.begin_build("/repo").unwrap();
+    store.begin_build_for_repo("repo_test", "/repo").unwrap();
     store
-        .finish_build(
+        .finish_build_for_repo(
+            "repo_test",
             "/repo",
             BuildFinishStats {
                 state: GraphBuildState::Built,
@@ -82,8 +83,10 @@ fn finish_build_after_begin_sets_built_with_counters() {
 #[test]
 fn fail_build_after_begin_sets_build_failed_with_error() {
     let store = open_in_memory();
-    store.begin_build("/repo").unwrap();
-    store.fail_build("/repo", "disk full").unwrap();
+    store.begin_build_for_repo("repo_test", "/repo").unwrap();
+    store
+        .fail_build_for_repo("repo_test", "/repo", "disk full")
+        .unwrap();
     let status = store.get_build_status("/repo").unwrap().unwrap();
     assert_eq!(status.state, GraphBuildState::BuildFailed);
     assert_eq!(status.last_error.as_deref(), Some("disk full"));
@@ -92,9 +95,10 @@ fn fail_build_after_begin_sets_build_failed_with_error() {
 #[test]
 fn build_recovery_metadata_persists_quarantine_details() {
     let store = open_in_memory();
-    store.begin_build("/repo").unwrap();
+    store.begin_build_for_repo("repo_test", "/repo").unwrap();
     store
-        .finish_build(
+        .finish_build_for_repo(
+            "repo_test",
             "/repo",
             BuildFinishStats {
                 state: GraphBuildState::Built,
@@ -112,7 +116,8 @@ fn build_recovery_metadata_persists_quarantine_details() {
         )
         .unwrap();
     store
-        .set_build_recovery_metadata(
+        .set_build_recovery_metadata_for_repo(
+            "repo_test",
             "/repo",
             Some("auto_quarantine_and_rebuild"),
             Some("/repo/.atlas/worldtree.db.quarantine.20260805T010203Z.0"),
@@ -140,10 +145,11 @@ fn get_build_status_returns_none_when_no_row() {
 #[test]
 fn list_build_statuses_returns_all_repos() {
     let store = open_in_memory();
-    store.begin_build("/repo/a").unwrap();
-    store.begin_build("/repo/b").unwrap();
+    store.begin_build_for_repo("repo_test", "/repo/a").unwrap();
+    store.begin_build_for_repo("repo_test", "/repo/b").unwrap();
     store
-        .finish_build(
+        .finish_build_for_repo(
+            "repo_test",
             "/repo/b",
             BuildFinishStats {
                 state: GraphBuildState::Built,
@@ -173,7 +179,7 @@ fn list_build_statuses_returns_all_repos() {
 fn interrupted_build_state_stays_building() {
     // Simulate a crash: begin_build called but finish/fail never called.
     let store = open_in_memory();
-    store.begin_build("/repo").unwrap();
+    store.begin_build_for_repo("repo_test", "/repo").unwrap();
     // Reopen — state must still be 'building', detectable by doctor.
     let status = store.get_build_status("/repo").unwrap().unwrap();
     assert_eq!(status.state, GraphBuildState::Building);
@@ -182,9 +188,10 @@ fn interrupted_build_state_stays_building() {
 #[test]
 fn counters_overwritten_on_repeated_finish() {
     let store = open_in_memory();
-    store.begin_build("/repo").unwrap();
+    store.begin_build_for_repo("repo_test", "/repo").unwrap();
     store
-        .finish_build(
+        .finish_build_for_repo(
+            "repo_test",
             "/repo",
             BuildFinishStats {
                 state: GraphBuildState::Built,
@@ -202,9 +209,10 @@ fn counters_overwritten_on_repeated_finish() {
         )
         .unwrap();
     // Second build run
-    store.begin_build("/repo").unwrap();
+    store.begin_build_for_repo("repo_test", "/repo").unwrap();
     store
-        .finish_build(
+        .finish_build_for_repo(
+            "repo_test",
             "/repo",
             BuildFinishStats {
                 state: GraphBuildState::Built,
@@ -230,9 +238,10 @@ fn counters_overwritten_on_repeated_finish() {
 #[test]
 fn finish_build_persists_degraded_state_and_stop_reason() {
     let store = open_in_memory();
-    store.begin_build("/repo").unwrap();
+    store.begin_build_for_repo("repo_test", "/repo").unwrap();
     store
-        .finish_build(
+        .finish_build_for_repo(
+            "repo_test",
             "/repo",
             BuildFinishStats {
                 state: GraphBuildState::Degraded,

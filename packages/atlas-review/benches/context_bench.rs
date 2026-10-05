@@ -135,7 +135,7 @@ fn seed_context_graph(store: &mut Store, module_count: usize) -> String {
     }
 
     store
-        .replace_files_transactional(&parsed_files)
+        .replace_files_transactional_for_repo("repo_test", &parsed_files)
         .expect("seed context graph");
 
     let seed_index = module_count / 2;

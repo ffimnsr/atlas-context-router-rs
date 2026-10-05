@@ -97,11 +97,6 @@ fn row_to_build_status(row: &Row<'_>) -> rusqlite::Result<GraphBuildStatus> {
 }
 
 impl Store {
-    /// Mark a build/update as in-progress for `repo_root`.
-    pub fn begin_build(&self, repo_root: &str) -> Result<()> {
-        self.begin_build_for_repo("legacy", repo_root)
-    }
-
     pub fn begin_build_for_repo(&self, source_repo_id: &str, repo_root: &str) -> Result<()> {
         self.conn
             .execute(
@@ -132,11 +127,6 @@ impl Store {
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
         Ok(())
-    }
-
-    /// Record a successful build completion with final counters.
-    pub fn finish_build(&self, repo_root: &str, stats: BuildFinishStats) -> Result<()> {
-        self.finish_build_for_repo("legacy", repo_root, stats)
     }
 
     pub fn finish_build_for_repo(
@@ -187,11 +177,6 @@ impl Store {
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
         Ok(())
-    }
-
-    /// Record a build failure with an error message.
-    pub fn fail_build(&self, repo_root: &str, error: &str) -> Result<()> {
-        self.fail_build_for_repo("legacy", repo_root, error)
     }
 
     pub fn fail_build_for_repo(
@@ -299,20 +284,6 @@ impl Store {
             .filter_map(|r| r.ok())
             .collect();
         Ok(rows)
-    }
-
-    pub fn set_build_recovery_metadata(
-        &self,
-        repo_root: &str,
-        recovery_mode: Option<&str>,
-        quarantine_path: Option<&str>,
-    ) -> Result<()> {
-        self.set_build_recovery_metadata_for_repo(
-            "legacy",
-            repo_root,
-            recovery_mode,
-            quarantine_path,
-        )
     }
 
     pub fn set_build_recovery_metadata_for_repo(

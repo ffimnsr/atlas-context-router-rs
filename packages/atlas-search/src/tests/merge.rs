@@ -107,7 +107,8 @@ fn graph_expand_records_hop_distance_and_seed_source() {
         repo_provenance: None,
     };
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "src/a.rs",
             "ha",
             Some("rust"),
@@ -117,7 +118,15 @@ fn graph_expand_records_hop_distance_and_seed_source() {
         )
         .expect("replace a graph");
     store
-        .replace_file_graph("src/b.rs", "hb", Some("rust"), Some(5), &[node_b], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "src/b.rs",
+            "hb",
+            Some("rust"),
+            Some(5),
+            &[node_b],
+            &[],
+        )
         .expect("replace b graph");
 
     let expanded = graph_expand(

@@ -291,7 +291,8 @@ fn similar_function_analysis_persists_fingerprint_cache() {
 
     let mut store = make_store();
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "src/lib.rs",
             "hash-v1",
             Some("rust"),
@@ -361,10 +362,26 @@ fn fingerprint_cache_invalidates_only_changed_files() {
 
     let mut store = make_store();
     store
-        .replace_file_graph("src/a.rs", "hash-a-v1", Some("rust"), None, &[first], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "src/a.rs",
+            "hash-a-v1",
+            Some("rust"),
+            None,
+            &[first],
+            &[],
+        )
         .unwrap();
     store
-        .replace_file_graph("src/b.rs", "hash-b-v1", Some("rust"), None, &[second], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "src/b.rs",
+            "hash-b-v1",
+            Some("rust"),
+            None,
+            &[second],
+            &[],
+        )
         .unwrap();
     let engine = insights_engine(&store);
     engine
@@ -401,7 +418,8 @@ fn fingerprint_cache_invalidates_only_changed_files() {
     second_v2.line_start = 1;
     second_v2.line_end = 4;
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "src/b.rs",
             "hash-b-v2",
             Some("rust"),

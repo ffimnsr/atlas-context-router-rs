@@ -79,7 +79,7 @@ fn seed_store(store: &mut Store, file_count: usize, nodes_per_file: usize) -> Ve
         .collect();
     let paths: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
     store
-        .replace_files_transactional(&files)
+        .replace_files_transactional_for_repo("repo_test", &files)
         .expect("seed store");
     paths
 }
@@ -94,7 +94,7 @@ fn bench_replace_single_file(c: &mut Criterion) {
         b.iter_batched(
             make_store,
             |mut s| {
-                s.replace_files_transactional(std::slice::from_ref(&file))
+                s.replace_files_transactional_for_repo("repo_test", std::slice::from_ref(&file))
                     .expect("replace");
             },
             BatchSize::SmallInput,
@@ -112,7 +112,8 @@ fn bench_replace_batch(c: &mut Criterion) {
             b.iter_batched(
                 make_store,
                 |mut s| {
-                    s.replace_files_transactional(fs).expect("replace");
+                    s.replace_files_transactional_for_repo("repo_test", fs)
+                        .expect("replace");
                 },
                 BatchSize::SmallInput,
             );
@@ -130,7 +131,8 @@ fn bench_db_write_throughput(c: &mut Criterion) {
         b.iter_batched(
             make_store,
             |mut s| {
-                s.replace_files_transactional(&files).expect("write");
+                s.replace_files_transactional_for_repo("repo_test", &files)
+                    .expect("write");
             },
             BatchSize::SmallInput,
         );
@@ -182,8 +184,16 @@ fn bench_find_dependents(c: &mut Criterion) {
     let paths = seed_store(&mut store, 30, 15);
 
     c.bench_function("store/find_dependents_30_files", |b| {
-        let seed: Vec<&str> = paths[..5].iter().map(String::as_str).collect();
-        b.iter(|| store.find_dependents(&seed).expect("dependents"));
+        let seed_qns: Vec<String> = paths[..5]
+            .iter()
+            .map(|path| format!("{path}::fn::symbol_0"))
+            .collect();
+        let seed: Vec<&str> = seed_qns.iter().map(String::as_str).collect();
+        b.iter(|| {
+            store
+                .find_dependents_for_qnames_for_repo("repo_test", &seed)
+                .expect("dependents")
+        });
     });
 }
 
@@ -259,7 +269,7 @@ fn make_regex_store(file_count: usize, nodes_per_file: usize) -> Store {
             })
             .collect();
         store
-            .replace_file_graph(&file, "h", Some("rust"), None, &nodes, &[])
+            .replace_file_graph_for_repo("repo_test", &file, "h", Some("rust"), None, &nodes, &[])
             .expect("seed regex store");
     }
     store

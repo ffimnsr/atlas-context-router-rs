@@ -254,6 +254,7 @@ impl Store {
 
         issues.extend(self.noncanonical_path_rows(Self::NONCANONICAL_PATH_LIMIT)?);
         issues.extend(self.missing_repo_provenance_rows(Self::NONCANONICAL_PATH_LIMIT)?);
+        issues.extend(self.legacy_identity_rows(Self::NONCANONICAL_PATH_LIMIT)?);
 
         Ok(issues)
     }
@@ -286,6 +287,53 @@ impl Store {
                 let source_repo_id: String = row.get(1).map_err(db_err)?;
                 issues.push(format!(
                     "missing_repo_provenance: table={table} rowid={rowid} source_repo_id={source_repo_id}"
+                ));
+            }
+        }
+
+        Ok(issues)
+    }
+
+    /// Return persisted graph rows that still carry the legacy `source_repo_id`.
+    ///
+    /// Legacy-stamped rows predate the stable multi-repo identity and must not
+    /// be mixed with stable rows: they produce duplicate or dangling graph
+    /// state and break identity checks such as the postprocess graph-built
+    /// gate. Any legacy row requires a rebuild from repository source.
+    pub fn legacy_identity_rows(&self, limit: usize) -> Result<Vec<String>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut issues = Vec::new();
+
+        for table in ["files", "nodes", "edges"] {
+            if issues.len() >= limit {
+                break;
+            }
+            let remaining = (limit - issues.len()) as i64;
+            let sql = format!("SELECT rowid FROM {table} WHERE source_repo_id = 'legacy' LIMIT ?1");
+            let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
+            let mut rows = stmt.query(params![remaining]).map_err(db_err)?;
+            while let Some(row) = rows.next().map_err(db_err)? {
+                let rowid: i64 = row.get(0).map_err(db_err)?;
+                issues.push(format!(
+                    "legacy_repo_identity: table={table} rowid={rowid} source_repo_id=legacy"
+                ));
+            }
+        }
+
+        if issues.len() < limit {
+            let remaining = (limit - issues.len()) as i64;
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT repo_root FROM graph_build_state
+                     WHERE source_repo_id = 'legacy' LIMIT ?1",
+                )
+                .map_err(db_err)?;
+            let mut rows = stmt.query(params![remaining]).map_err(db_err)?;
+            while let Some(row) = rows.next().map_err(db_err)? {
+                let repo_root: String = row.get(0).map_err(db_err)?;
+                issues.push(format!(
+                    "legacy_repo_identity: table=graph_build_state repo_root={repo_root} source_repo_id=legacy"
                 ));
             }
         }

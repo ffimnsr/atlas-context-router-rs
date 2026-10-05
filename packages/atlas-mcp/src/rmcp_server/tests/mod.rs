@@ -237,8 +237,8 @@ fn seed_dangling_graph_edge(fixture: &ToolFixture) {
     let conn = rusqlite::Connection::open(&fixture.db_path).expect("open graph db");
     conn.execute(
         "INSERT INTO edges (
-            kind, source_qualified, target_qualified, file_path, line, confidence, confidence_tier, extra_json
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            kind, source_qualified, target_qualified, file_path, line, confidence, confidence_tier, extra_json, source_repo_id
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         rusqlite::params![
             "contains",
             "missing::source",
@@ -248,9 +248,20 @@ fn seed_dangling_graph_edge(fixture: &ToolFixture) {
             1.0_f64,
             "definite",
             "{}",
+            "repo_test",
         ],
     )
     .expect("seed dangling edge");
+}
+
+fn seed_legacy_graph_row(fixture: &ToolFixture) {
+    let conn = rusqlite::Connection::open(&fixture.db_path).expect("open graph db");
+    conn.execute(
+        "INSERT INTO files (path, language, hash, size, indexed_at, source_repo_id)
+         VALUES ('src/legacy.rs', 'rust', 'h', 0, '2025-01-01T00:00:00Z', 'legacy')",
+        [],
+    )
+    .expect("seed legacy graph row");
 }
 
 fn seed_durable_task(
@@ -314,7 +325,8 @@ fn setup_graph_repo_fixture(
         primary_file,
     );
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             primary_file,
             &format!("hash:{primary_file}"),
             Some("rust"),
@@ -442,7 +454,8 @@ fn seed_schema_graph(db_path: &str) {
         "src/lib.rs",
     );
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "src/lib.rs",
             "hash:src/lib.rs",
             Some("rust"),
@@ -459,7 +472,8 @@ fn seed_schema_graph(db_path: &str) {
         "src/service.rs",
     );
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "src/service.rs",
             "hash:src/service.rs",
             Some("rust"),
@@ -482,7 +496,8 @@ fn seed_schema_graph(db_path: &str) {
         "src/api.rs",
     );
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "src/api.rs",
             "hash:src/api.rs",
             Some("rust"),
@@ -505,7 +520,8 @@ fn seed_schema_graph(db_path: &str) {
         "tests/service_test.rs",
     );
     store
-        .replace_file_graph(
+        .replace_file_graph_for_repo(
+            "repo_test",
             "tests/service_test.rs",
             "hash:tests/service_test.rs",
             Some("rust"),

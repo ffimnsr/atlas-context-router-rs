@@ -55,6 +55,17 @@ fn row_to_postprocess_status(row: &Row<'_>) -> rusqlite::Result<PostprocessStatu
 }
 
 impl Store {
+    /// Resolve the repo identity to record with postprocess lifecycle rows.
+    ///
+    /// Prefers the recorded build identity for the repo root and falls back to
+    /// the single stable identity present in the store; never writes `legacy`.
+    fn postprocess_source_repo_id(&self, repo_root: &str) -> Result<String> {
+        if let Some(status) = self.get_build_status(repo_root)? {
+            return Ok(status.source_repo_id);
+        }
+        Ok(self.single_source_repo_id()?.unwrap_or_default())
+    }
+
     pub fn begin_postprocess(
         &self,
         repo_root: &str,
@@ -63,12 +74,14 @@ impl Store {
         changed_file_count: usize,
     ) -> Result<()> {
         let timestamp = now_ms();
+        let source_repo_id = self.postprocess_source_repo_id(repo_root)?;
         self.conn
             .execute(
                 "INSERT INTO postprocess_state
                     (repo_root, state, mode, stage_filter, changed_file_count, stages_json,
-                     started_at_ms, finished_at_ms, last_error_code, last_error, updated_at_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL, NULL, ?7)
+                     started_at_ms, finished_at_ms, last_error_code, last_error, updated_at_ms,
+                     source_repo_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL, NULL, ?7, ?8)
                  ON CONFLICT(repo_root) DO UPDATE SET
                     state = excluded.state,
                     mode = excluded.mode,
@@ -79,7 +92,8 @@ impl Store {
                     finished_at_ms = NULL,
                     last_error_code = NULL,
                     last_error = NULL,
-                    updated_at_ms = excluded.updated_at_ms",
+                    updated_at_ms = excluded.updated_at_ms,
+                    source_repo_id = excluded.source_repo_id",
                 params![
                     repo_root,
                     PostprocessRunState::Running.as_str(),
@@ -89,6 +103,7 @@ impl Store {
                     serde_json::to_string(&Vec::<PostprocessStageSummary>::new())
                         .map_err(AtlasError::Serde)?,
                     timestamp,
+                    source_repo_id,
                 ],
             )
             .map_err(|error| AtlasError::Db(error.to_string()))?;
@@ -97,12 +112,14 @@ impl Store {
 
     pub fn finish_postprocess(&self, summary: &PostprocessRunSummary) -> Result<()> {
         let updated_at_ms = now_ms();
+        let source_repo_id = self.postprocess_source_repo_id(&summary.repo_root)?;
         self.conn
             .execute(
                 "INSERT INTO postprocess_state
                     (repo_root, state, mode, stage_filter, changed_file_count, stages_json,
-                     started_at_ms, finished_at_ms, last_error_code, last_error, updated_at_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                     started_at_ms, finished_at_ms, last_error_code, last_error, updated_at_ms,
+                     source_repo_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                  ON CONFLICT(repo_root) DO UPDATE SET
                     state = excluded.state,
                     mode = excluded.mode,
@@ -113,7 +130,8 @@ impl Store {
                     finished_at_ms = excluded.finished_at_ms,
                     last_error_code = excluded.last_error_code,
                     last_error = excluded.last_error,
-                    updated_at_ms = excluded.updated_at_ms",
+                    updated_at_ms = excluded.updated_at_ms,
+                    source_repo_id = excluded.source_repo_id",
                 params![
                     summary.repo_root,
                     summary.state.as_str(),
@@ -134,6 +152,7 @@ impl Store {
                         Some(summary.message.clone())
                     },
                     updated_at_ms,
+                    source_repo_id,
                 ],
             )
             .map_err(|error| AtlasError::Db(error.to_string()))?;

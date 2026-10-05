@@ -13,7 +13,15 @@ fn fts_search_finds_indexed_node() {
         "rust",
     );
     store
-        .replace_file_graph("store.rs", "h", Some("rust"), None, &[node], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "store.rs",
+            "h",
+            Some("rust"),
+            None,
+            &[node],
+            &[],
+        )
         .unwrap();
 
     let q = SearchQuery {
@@ -58,7 +66,7 @@ fn fts_search_respects_kind_filter() {
         "rust",
     );
     store
-        .replace_file_graph("a.rs", "h", None, None, &[func, strct], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &[func, strct], &[])
         .unwrap();
 
     let q = SearchQuery {
@@ -144,7 +152,7 @@ fn fts_search_not_found_after_delete() {
         "rust",
     );
     store
-        .replace_file_graph("a.rs", "h", None, None, &[node], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &[node], &[])
         .unwrap();
     store.delete_file_graph("a.rs").unwrap();
 
@@ -179,7 +187,7 @@ fn regex_matches_name() {
         "rust",
     );
     store
-        .replace_file_graph("a.rs", "h", None, None, &[f1, f2], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &[f1, f2], &[])
         .unwrap();
 
     let q = SearchQuery {
@@ -225,7 +233,7 @@ fn regex_matches_qualified_name() {
     );
     let f3 = make_node(NodeKind::Function, "baz", "pkg::util::baz", "a.rs", "rust");
     store
-        .replace_file_graph("a.rs", "h", None, None, &[f1, f2, f3], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &[f1, f2, f3], &[])
         .unwrap();
 
     // FTS text is empty → structural scan, regex filters qualified name
@@ -260,7 +268,7 @@ fn regex_structural_scan_empty_text() {
         "rust",
     );
     store
-        .replace_file_graph("a.rs", "h", None, None, &[f1, s1], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &[f1, s1], &[])
         .unwrap();
 
     // regex matches only lower-case names starting with fn_
@@ -317,7 +325,7 @@ fn regex_combined_with_fts_postfilters() {
         "rust",
     );
     store
-        .replace_file_graph("a.rs", "h", None, None, &[f1, f2, f3], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &[f1, f2, f3], &[])
         .unwrap();
 
     let q = SearchQuery {
@@ -457,13 +465,37 @@ fn seed_regex_store() -> Store {
         ),
     ];
     store
-        .replace_file_graph("http.rs", "h1", Some("rust"), None, &nodes_a, &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "http.rs",
+            "h1",
+            Some("rust"),
+            None,
+            &nodes_a,
+            &[],
+        )
         .unwrap();
     store
-        .replace_file_graph("bench.rs", "h2", Some("rust"), None, &nodes_b, &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "bench.rs",
+            "h2",
+            Some("rust"),
+            None,
+            &nodes_b,
+            &[],
+        )
         .unwrap();
     store
-        .replace_file_graph("auth.rs", "h3", Some("rust"), None, &nodes_c, &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "auth.rs",
+            "h3",
+            Some("rust"),
+            None,
+            &nodes_c,
+            &[],
+        )
         .unwrap();
     store
 }
@@ -580,7 +612,15 @@ fn regex_udf_structural_scan_respects_language_filter() {
         "go",
     );
     store
-        .replace_file_graph("main.go", "h4", Some("go"), None, &[go_node], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "main.go",
+            "h4",
+            Some("go"),
+            None,
+            &[go_node],
+            &[],
+        )
         .unwrap();
 
     // Restrict to go only — must not return rust handle_request.
@@ -770,10 +810,18 @@ fn fts_search_respects_language_filter() {
         "go",
     );
     store
-        .replace_file_graph("a.rs", "h", Some("rust"), None, &[rust_fn], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "a.rs",
+            "h",
+            Some("rust"),
+            None,
+            &[rust_fn],
+            &[],
+        )
         .unwrap();
     store
-        .replace_file_graph("b.go", "h", Some("go"), None, &[go_fn], &[])
+        .replace_file_graph_for_repo("repo_test", "b.go", "h", Some("go"), None, &[go_fn], &[])
         .unwrap();
 
     let q = SearchQuery {
@@ -805,10 +853,10 @@ fn fts_search_respects_file_path_filter() {
         "rust",
     );
     store
-        .replace_file_graph("a.rs", "h", None, None, &[na], &[])
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &[na], &[])
         .unwrap();
     store
-        .replace_file_graph("b.rs", "h", None, None, &[nb], &[])
+        .replace_file_graph_for_repo("repo_test", "b.rs", "h", None, None, &[nb], &[])
         .unwrap();
 
     let q = SearchQuery {
@@ -835,7 +883,15 @@ fn fts_search_respects_is_test_filter() {
     test_node.is_test = true;
     let prod_node = make_node(NodeKind::Function, "foo", "a.rs::fn::foo", "a.rs", "rust");
     store
-        .replace_file_graph("a.rs", "h", None, None, &[test_node, prod_node], &[])
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "a.rs",
+            "h",
+            None,
+            None,
+            &[test_node, prod_node],
+            &[],
+        )
         .unwrap();
 
     // Search for is_test = true should only return test nodes.

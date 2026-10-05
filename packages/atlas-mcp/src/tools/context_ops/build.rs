@@ -116,6 +116,7 @@ fn execute_graph_operation(
     let repo_root_path =
         find_repo_root(Utf8Path::new(repo_root)).context("cannot find git repo root")?;
     let repo_root_str = repo_root_path.as_str();
+    let source_repo_id = stable_repo_id(repo_root_path.as_path());
 
     fn build_status_json(db_path: &str, repo_root: &str) -> serde_json::Value {
         let Ok(store) = Store::open(db_path) else {
@@ -277,7 +278,7 @@ fn execute_graph_operation(
         let full_rebuild = recovery.full_rebuild_required;
 
         if let Ok(s) = Store::open(db_path) {
-            let _ = s.begin_build(repo_root_str);
+            let _ = s.begin_build_for_repo(&source_repo_id, repo_root_str);
         }
 
         crate::progress::report("detecting changed files", None);
@@ -345,7 +346,8 @@ fn execute_graph_operation(
                         } else {
                             GraphBuildState::Built
                         };
-                    let _ = s.finish_build(
+                    let _ = s.finish_build_for_repo(
+                        &source_repo_id,
                         repo_root_str,
                         BuildFinishStats {
                             state,
@@ -364,15 +366,17 @@ fn execute_graph_operation(
                             budget_stop_reason: sum.budget_counters.budget_stop_reason.clone(),
                         },
                     );
-                    let _ = s.set_build_recovery_metadata(
+                    let _ = s.set_build_recovery_metadata_for_repo(
+                        &source_repo_id,
                         repo_root_str,
                         Some(recovery.recovery_mode.as_str()),
                         recovery.quarantine_path.as_deref(),
                     );
                 }
                 Err(e) => {
-                    let _ = s.fail_build(repo_root_str, &e.to_string());
-                    let _ = s.set_build_recovery_metadata(
+                    let _ = s.fail_build_for_repo(&source_repo_id, repo_root_str, &e.to_string());
+                    let _ = s.set_build_recovery_metadata_for_repo(
+                        &source_repo_id,
                         repo_root_str,
                         Some(recovery.recovery_mode.as_str()),
                         recovery.quarantine_path.as_deref(),
@@ -529,7 +533,7 @@ fn execute_graph_operation(
         };
 
         if let Ok(s) = Store::open(db_path) {
-            let _ = s.begin_build(repo_root_str);
+            let _ = s.begin_build_for_repo(&source_repo_id, repo_root_str);
         }
 
         crate::progress::report("scanning repository files", None);
@@ -563,7 +567,8 @@ fn execute_graph_operation(
                         } else {
                             GraphBuildState::Built
                         };
-                    let _ = s.finish_build(
+                    let _ = s.finish_build_for_repo(
+                        &source_repo_id,
                         repo_root_str,
                         BuildFinishStats {
                             state,
@@ -582,15 +587,17 @@ fn execute_graph_operation(
                             budget_stop_reason: sum.budget_counters.budget_stop_reason.clone(),
                         },
                     );
-                    let _ = s.set_build_recovery_metadata(
+                    let _ = s.set_build_recovery_metadata_for_repo(
+                        &source_repo_id,
                         repo_root_str,
                         Some(recovery.recovery_mode.as_str()),
                         recovery.quarantine_path.as_deref(),
                     );
                 }
                 Err(e) => {
-                    let _ = s.fail_build(repo_root_str, &e.to_string());
-                    let _ = s.set_build_recovery_metadata(
+                    let _ = s.fail_build_for_repo(&source_repo_id, repo_root_str, &e.to_string());
+                    let _ = s.set_build_recovery_metadata_for_repo(
+                        &source_repo_id,
                         repo_root_str,
                         Some(recovery.recovery_mode.as_str()),
                         recovery.quarantine_path.as_deref(),
