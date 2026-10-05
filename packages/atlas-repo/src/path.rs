@@ -287,7 +287,7 @@ pub fn normalize_repo_file_path(
 /// When the path is missing on disk (for example after `rm src/lib.rs`), the
 /// input is canonicalized syntactically instead of failing, so change
 /// consumers can classify it as a deletion. Missing-path prefix handling is
-/// documented on [`change::resolve_missing_change_path`].
+/// documented on `change::resolve_missing_change_path`.
 pub fn normalize_repo_change_path(
     repo_root: &Utf8Path,
     raw: &str,

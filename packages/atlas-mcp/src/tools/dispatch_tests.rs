@@ -1,7 +1,7 @@
 use super::*;
 use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind};
 use atlas_store_sqlite::Store;
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::Validator;
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -208,7 +208,7 @@ fn every_tool_descriptor_name_routes_through_dispatcher() {
     }
 }
 
-fn assert_matches_output_schema(name: &str, response: &serde_json::Value, schema: &JSONSchema) {
+fn assert_matches_output_schema(name: &str, response: &serde_json::Value, schema: &Validator) {
     let structured = response
         .get("structuredContent")
         .expect("structuredContent")
@@ -217,12 +217,15 @@ fn assert_matches_output_schema(name: &str, response: &serde_json::Value, schema
         structured.is_object(),
         "{name} structuredContent must be object when outputSchema exists"
     );
-    if let Err(errors) = schema.validate(&structured) {
-        let details = errors
-            .map(|error| error.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        panic!("{name} output schema mismatch:\n{details}\nvalue={structured:#}");
+    let errors = schema
+        .iter_errors(&structured)
+        .map(|error| error.to_string())
+        .collect::<Vec<_>>();
+    if !errors.is_empty() {
+        panic!(
+            "{name} output schema mismatch:\n{}\nvalue={structured:#}",
+            errors.join("\n")
+        );
     }
 }
 
@@ -438,9 +441,7 @@ fn tools_with_output_schema_emit_schema_compatible_structured_content() {
             continue;
         };
         let schema_value = serde_json::Value::Object((**output_schema).clone());
-        let schema = JSONSchema::options()
-            .with_draft(Draft::Draft202012)
-            .compile(&schema_value)
+        let schema = jsonschema::validator_for(&schema_value)
             .unwrap_or_else(|error| panic!("{} output schema should compile: {error}", tool.name));
         let name = tool.name.as_ref();
         let args = schema_test_args(name, saved_source_id);

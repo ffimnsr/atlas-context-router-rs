@@ -42,7 +42,7 @@ pub fn run(repo_root: &Path) -> Result<()> {
     const PLATFORM_KEYS: [&str; 3] = ["copilot", "claude", "codex"];
 
     let platform_selections = MultiSelect::with_theme(&theme)
-        .items(&PLATFORM_NAMES)
+        .items(PLATFORM_NAMES)
         .defaults(&[false, false, true])
         .interact()?;
 

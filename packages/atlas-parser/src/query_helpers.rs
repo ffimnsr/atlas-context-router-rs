@@ -71,7 +71,7 @@ pub fn run_query<'tree>(
 
     while let Some(query_match) = matches.next() {
         let mut captures = query_match
-            .captures
+            .captures()
             .iter()
             .enumerate()
             .map(|(ordinal, capture)| QueryCapture {

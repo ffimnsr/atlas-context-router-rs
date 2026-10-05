@@ -18,12 +18,19 @@ Versioning policy may evolve while Atlas is still moving quickly, but release no
 - record MCP `build_graph`/`update_graph` lifecycle state and `atlas doctor` file hashes under the stable repo identity; `postprocess_graph` now fails closed with `legacy_repo_identity` instead of falling back to legacy rows
 - reject `source_repo_id = 'legacy'` graph rows as `logical_inconsistency`; explicit build/update quarantines and rebuilds them under the stable identity; migration 019 drops the legacy column default from graph tables
 - resolve unscoped store lookups (file owners, node signatures, rename/delete) through a single stable repo identity and fail closed when the store holds several
+- canonicalize the repo root before reasoning build-state and insights-snapshot lookups so symlinked roots (git `--show-toplevel` resolves, for example, macOS `/var` -> `/private/var`) still resolve `assess_risk` targets; covered by a symlinked-root regression test
+- repair a private intra-doc link in `atlas-repo` that failed the docs job under `RUSTDOCFLAGS=-D warnings`
 
 ### Maintenance
 
 - replace hand-rolled Levenshtein edit-distance code in MCP tool suggestions, contentstore vocabulary correction, and search fuzzy matching with `strsim`, preserving the `cap + 1` early-exit contract in `atlas-search`
 - consolidate duplicated helper implementations into shared modules: parser call-edge builders and file nodes (`lang/common.rs`, `ast_helpers.rs`), Tarjan SCC (`engine/scc.rs`), per-file repo/owner annotation (`annotate.rs`), store row queries (`store/helpers.rs`), and the decision lookup query (`atlas-review`)
 - repair the `cargo deny` gate: drop obsolete per-section `version` keys in `deny.toml`, declare the workspace `MIT OR Apache-2.0` license on all crates, pin workspace path dependencies with versions, allow permissive transitive licenses (BSD-3-Clause, CC0-1.0, CDLA-Permissive-2.0, ISC), and clear all advisories (`anyhow`, `crossbeam-epoch`, `rustls`, `rustls-webpki`, yanked `chacha20`); three no-upgrade unmaintained transitives are narrowly ignored with rationale
+- upgrade the tree-sitter stack to 0.27 (`tree-sitter`, `tree-sitter-loader`, `tree-sitter-highlight`, `tree-sitter-tags`) and align `fuzz`; the core crate and loader must move in lockstep because both link the native `tree-sitter` library, which previously made `cargo outdated`'s latest-version probe fail with a `links` resolution conflict
+- drop the unused `parser` feature from `tree-sitter-md` so it no longer links a second `tree-sitter` runtime, and migrate to the `QueryMatch::captures()` accessor added in tree-sitter 0.27
+- remove the obsolete `jsonschema` `draft202012` feature and move the `atlas-cli`/`atlas-mcp` dev-dependency to 0.58; contract tests now use `jsonschema::validator_for` draft auto-detection
+- refresh direct dependencies: `console` 0.16, `dialoguer` 0.12, `indicatif` 0.18, `signal-hook` 0.4, `jsonwebtoken` 11 (`aws-lc-rs` backend), `reqwest` 0.13 (rustls), `rmcp` 3.5, `ignore` 0.4.33, `grep-searcher` 0.1.17, `tokio` 1.53, `tokio-stream` 0.1.19, `libc` 0.2.190, `windows-sys` 0.61; `tower-http` 0.7 stays blocked because `reqwest` 0.13 and `rmcp` 3.5 both pin 0.6
+- drop the unused `windows-sys` target dependency from `atlas-cli` and the stale `#[allow(deprecated)]` around `std::env::home_dir`; allow `Zlib` in `deny.toml` for `foldhash` 0.2 and remove the obsolete `number_prefix` advisory ignore now that `indicatif` 0.18 no longer pulls it
 
 ## 1.7.6 - 2026-09-10
 

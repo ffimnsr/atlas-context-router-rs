@@ -1,5 +1,4 @@
 use super::*;
-use jsonschema::JSONSchema;
 use std::fs;
 
 fn schema_root() -> std::path::PathBuf {
@@ -43,16 +42,18 @@ fn assert_valid_against_schema(schema_file: &str, command: &str, output: Output)
     let schema = load_schema(schema_file);
     assert_schema_metadata(&schema, schema_file, command);
 
-    let compiled = JSONSchema::options()
-        .compile(&schema)
+    let compiled = jsonschema::validator_for(&schema)
         .unwrap_or_else(|err| panic!("compile {schema_file} failed: {err}"));
     let value = read_json_output(output);
-    if let Err(errors) = compiled.validate(&value) {
-        let details = errors
-            .map(|err| err.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        panic!("schema validation failed for {schema_file}:\n{details}\nvalue={value:#}");
+    let errors = compiled
+        .iter_errors(&value)
+        .map(|err| err.to_string())
+        .collect::<Vec<_>>();
+    if !errors.is_empty() {
+        panic!(
+            "schema validation failed for {schema_file}:\n{}\nvalue={value:#}",
+            errors.join("\n")
+        );
     }
 }
 

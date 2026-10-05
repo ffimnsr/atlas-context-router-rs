@@ -29,10 +29,7 @@ pub(super) fn scope_root(repo_root: &Path, scope: InstallScope) -> Result<PathBu
 fn user_home_dir() -> Result<PathBuf> {
     std::env::var("HOME")
         .map(PathBuf::from)
-        .or_else(|_| {
-            #[allow(deprecated)]
-            std::env::home_dir().ok_or(std::env::VarError::NotPresent)
-        })
+        .or_else(|_| std::env::home_dir().ok_or(std::env::VarError::NotPresent))
         .context("cannot determine home directory")
 }
 

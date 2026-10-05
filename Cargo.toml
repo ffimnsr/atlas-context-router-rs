@@ -75,7 +75,9 @@ rusqlite = { version = "0.32", features = ["bundled-full"] }
 atlas-db-utils = { path = "packages/atlas-db-utils", version = "1.0.0" }
 
 # Tree-sitter
-tree-sitter = "0.26"
+# Keep `tree-sitter` and `tree-sitter-loader` on the same 0.x minor: both link
+# the native `tree-sitter` library, so mixing versions fails resolution.
+tree-sitter = "0.27"
 tree-sitter-rust = "0.24"
 tree-sitter-go = "0.25"
 tree-sitter-python = "0.25"
@@ -85,7 +87,7 @@ tree-sitter-json = "0.24"
 tree-sitter-html = "0.23.2"
 tree-sitter-css = "0.25.0"
 tree-sitter-bash = "0.25.1"
-tree-sitter-md = { version = "0.5.3", features = ["parser"] }
+tree-sitter-md = "0.5.3"
 tree-sitter-java = "0.23.5"
 tree-sitter-c-sharp = "0.23.5"
 tree-sitter-php = "0.24.2"
@@ -102,7 +104,7 @@ static_assertions = "1"
 proptest = "1"
 
 # HTTP client
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 tokio = { version = "1", features = ["rt", "time"] }
 
 # regex

@@ -549,13 +549,13 @@ impl Drop for WinHandleGuard {
 #[cfg(windows)]
 fn win_process_owner_sid(pid: u32) -> Result<Vec<u8>> {
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) };
-    if process == 0 {
+    if process.is_null() {
         return Err(std::io::Error::last_os_error())
             .with_context(|| format!("cannot open process {pid}"));
     }
     let _process_guard = WinHandleGuard(process);
 
-    let mut token: HANDLE = 0;
+    let mut token: HANDLE = std::ptr::null_mut();
     if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
         return Err(std::io::Error::last_os_error()).context("cannot open process token");
     }

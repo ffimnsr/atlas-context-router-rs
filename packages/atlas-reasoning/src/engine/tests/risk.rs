@@ -751,3 +751,65 @@ fn risk_assessment_low_medium_high_boundaries_are_stable() {
     assert_eq!(medium_analysis.classification, RiskClassification::Medium);
     assert_eq!(high_analysis.classification, RiskClassification::High);
 }
+
+/// Symlinked repo roots must key build-state lookups by canonical path.
+///
+/// Git reports the physical repo root (`--show-toplevel` resolves symlinks, for
+/// example macOS `/var` -> `/private/var`), so build state is persisted under
+/// the canonical path. A second source repo id disables the single-repo
+/// fallback, which forces the lookup to canonicalize the symlinked root.
+#[cfg(unix)]
+#[test]
+fn risk_assessment_canonicalizes_symlinked_repo_root() {
+    let real_root = make_repo_root();
+    write_repo_file(&real_root, "src/lib.rs", "pub fn target() {}\n");
+    let symlink_root = real_root.with_file_name(format!(
+        "{}-symlink",
+        real_root
+            .file_name()
+            .expect("temp repo root has a file name")
+            .to_string_lossy()
+    ));
+    std::os::unix::fs::symlink(&real_root, &symlink_root).expect("create repo root symlink");
+
+    let mut store = make_store();
+    let target = node(
+        0,
+        "target",
+        "src/lib.rs::fn::target",
+        "src/lib.rs",
+        NodeKind::Function,
+    );
+    seed_graph(&mut store, vec![target], vec![]);
+
+    let other = node(
+        1,
+        "other",
+        "src/other.rs::fn::other",
+        "src/other.rs",
+        NodeKind::Function,
+    );
+    store
+        .replace_file_graph_for_repo(
+            "repo_other",
+            "src/other.rs",
+            "hash",
+            Some("rust"),
+            None,
+            std::slice::from_ref(&other),
+            &[],
+        )
+        .expect("seed second repo");
+
+    let canonical = atlas_repo::canonical_filesystem_path(
+        camino::Utf8Path::from_path(&real_root).expect("utf8 temp root"),
+    )
+    .expect("canonical temp root");
+    store
+        .begin_build_for_repo("repo_test", canonical.as_str())
+        .expect("record build state under canonical root");
+
+    let engine = insights_engine(&store);
+    let analysis = assess_risk(&engine, &symlink_root, "src/lib.rs::fn::target");
+    assert_eq!(analysis.target.qualified_name, "src/lib.rs::fn::target");
+}

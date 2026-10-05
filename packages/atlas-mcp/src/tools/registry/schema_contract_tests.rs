@@ -2,7 +2,6 @@
 
 use super::tool_list;
 use crate::descriptors::JSON_SCHEMA_2020_12_URI;
-use jsonschema::{Draft, JSONSchema};
 use std::collections::BTreeSet;
 
 #[test]
@@ -39,20 +38,14 @@ fn tools_list_emitted_schemas_compile_under_json_schema_2020_12() {
             input_schema["$schema"],
             serde_json::json!(JSON_SCHEMA_2020_12_URI)
         );
-        JSONSchema::options()
-            .with_draft(Draft::Draft202012)
-            .compile(input_schema)
-            .expect("input schema compiles");
+        jsonschema::validator_for(input_schema).expect("input schema compiles");
 
         if let Some(output_schema) = tool.get("outputSchema") {
             assert_eq!(
                 output_schema["$schema"],
                 serde_json::json!(JSON_SCHEMA_2020_12_URI)
             );
-            JSONSchema::options()
-                .with_draft(Draft::Draft202012)
-                .compile(output_schema)
-                .expect("output schema compiles");
+            jsonschema::validator_for(output_schema).expect("output schema compiles");
         }
     }
 }

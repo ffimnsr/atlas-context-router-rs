@@ -8,8 +8,6 @@ ignore = [
     # Unmaintained, no safe upgrade; transitive pins tracked for upstream bumps:
     # instant via notify-types -> notify (atlas-engine)
     "RUSTSEC-2024-0384",
-    # number_prefix via indicatif (atlas-cli)
-    "RUSTSEC-2025-0119",
     # paste via tokenizers (atlas-token-count)
     "RUSTSEC-2024-0436",
 ]
@@ -25,6 +23,8 @@ allow = [
     "ISC",
     "MIT",
     "Unicode-3.0",
+    # foldhash 0.2 via hashbrown (rmcp/jsonschema graph)
+    "Zlib",
 ]
 
 [bans]

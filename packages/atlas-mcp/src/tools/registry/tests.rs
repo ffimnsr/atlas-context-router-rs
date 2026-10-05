@@ -8,15 +8,11 @@ use super::{
     tool_result_contract,
 };
 use crate::descriptors::JSON_SCHEMA_2020_12_URI;
-use jsonschema::{Draft, JSONSchema};
 use serde_json::json;
 use std::collections::BTreeSet;
 
 fn compile_schema(schema: &serde_json::Value) {
-    JSONSchema::options()
-        .with_draft(Draft::Draft202012)
-        .compile(schema)
-        .expect("valid 2020-12 schema");
+    jsonschema::validator_for(schema).expect("valid 2020-12 schema");
 }
 
 fn required_field_names(schema: &serde_json::Value) -> BTreeSet<String> {
