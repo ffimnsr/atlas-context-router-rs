@@ -1,6 +1,7 @@
 [package]
 name = "atlas-review"
 version = "1.7.6"
+license.workspace = true
 edition = "2024"
 description = "Review context assembly and risk summarization for Atlas code changes"
 publish = false

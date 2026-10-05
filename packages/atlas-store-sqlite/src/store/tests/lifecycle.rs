@@ -118,6 +118,53 @@ fn migration_016_preserves_rows_and_allows_same_path_across_repos() {
 }
 
 #[test]
+fn migration_020_repo_scopes_chunks_and_drops_ambiguous_rows() {
+    let conn = open_unmigrated_in_memory();
+    apply_migrations_through(&conn, 19);
+    conn.execute(
+        "INSERT INTO nodes (kind, name, qualified_name, file_path, source_repo_id)
+         VALUES ('function', 'unique', 'unique.rs::fn::unique', 'unique.rs', 'repo_a'),
+                ('function', 'shared', 'shared.rs::fn::shared', 'shared.rs', 'repo_a'),
+                ('function', 'shared', 'shared.rs::fn::shared', 'shared.rs', 'repo_b')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO retrieval_chunks (node_qn, chunk_idx, text)
+         VALUES ('unique.rs::fn::unique', 0, 'unique chunk'),
+                ('shared.rs::fn::shared', 0, 'shared chunk'),
+                ('orphan.rs::fn::orphan', 0, 'orphan chunk')",
+        [],
+    )
+    .unwrap();
+
+    let mut store = Store {
+        conn,
+        _thread_bound: std::marker::PhantomData,
+    };
+    store.migrate().unwrap();
+
+    // Only the uniquely-owned qname survives; the multi-owner and orphan rows
+    // cannot be attributed correctly and are regenerated on the next index.
+    let mut stmt = store
+        .conn
+        .prepare(
+            "SELECT source_repo_id, node_qn FROM retrieval_chunks
+             ORDER BY source_repo_id, node_qn",
+        )
+        .unwrap();
+    let rows: Vec<(String, String)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<std::result::Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        [("repo_a".to_string(), "unique.rs::fn::unique".to_string())]
+    );
+}
+
+#[test]
 fn schema_version_stored() {
     let store = open_in_memory();
     let version: i32 = store

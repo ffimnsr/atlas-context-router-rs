@@ -6,6 +6,13 @@ use super::{
     helpers::{parse_repo_provenance, row_to_node},
 };
 
+/// Direction of a [`Store::directed_edges`] lookup.
+#[derive(Clone, Copy)]
+enum EdgeDirection {
+    Inbound,
+    Outbound,
+}
+
 fn row_to_node_and_edge(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Node, atlas_core::Edge)> {
     // -- node --
     let node_kind_str: String = row.get(1)?;
@@ -105,6 +112,49 @@ impl Store {
         Ok(rows)
     }
 
+    /// Shared implementation for directed edge lookups by qualified name.
+    ///
+    /// `direction` selects which side of the edge joins the node and filters;
+    /// `calls_only` narrows to `calls` edges (caller/callee queries).
+    fn directed_edges(
+        &self,
+        qname: &str,
+        limit: usize,
+        direction: EdgeDirection,
+        calls_only: bool,
+    ) -> Result<Vec<(Node, atlas_core::Edge)>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let (join_column, filter_column, order_column) = match direction {
+            EdgeDirection::Inbound => ("source_qualified", "target_qualified", "source_qualified"),
+            EdgeDirection::Outbound => ("target_qualified", "source_qualified", "target_qualified"),
+        };
+        let kind_filter = if calls_only {
+            " AND e.kind = 'calls'"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path,
+                    n.line_start, n.line_end, n.language, n.parent_name,
+                    n.params, n.return_type, n.modifiers, n.is_test,
+                    n.file_hash, n.extra_json,
+                    e.id, e.kind, e.source_qualified, e.target_qualified,
+                    e.file_path, e.line, e.confidence, e.confidence_tier, e.extra_json
+             FROM edges e
+             JOIN nodes n ON n.qualified_name = e.{join_column}
+             WHERE e.{filter_column} = ?1{kind_filter}
+             ORDER BY e.confidence DESC, e.{order_column}
+             LIMIT ?2"
+        );
+        let mut stmt = self.conn.prepare_cached(&sql).map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![qname, limit as i64], row_to_node_and_edge)
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
     /// Return nodes that call `qname` (i.e. edges of kind `calls` with
     /// `target_qualified = qname`), paired with their edges, bounded by
     /// `limit`.  Results ordered by edge confidence descending then
@@ -114,30 +164,7 @@ impl Store {
         qname: &str,
         limit: usize,
     ) -> Result<Vec<(Node, atlas_core::Edge)>> {
-        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path,
-                        n.line_start, n.line_end, n.language, n.parent_name,
-                        n.params, n.return_type, n.modifiers, n.is_test,
-                        n.file_hash, n.extra_json,
-                        e.id, e.kind, e.source_qualified, e.target_qualified,
-                        e.file_path, e.line, e.confidence, e.confidence_tier, e.extra_json
-                 FROM edges e
-                 JOIN nodes n ON n.qualified_name = e.source_qualified
-                 WHERE e.target_qualified = ?1
-                   AND e.kind = 'calls'
-                 ORDER BY e.confidence DESC, e.source_qualified
-                 LIMIT ?2",
-            )
-            .map_err(db_err)?;
-        let rows = stmt
-            .query_map(params![qname, limit as i64], row_to_node_and_edge)
-            .map_err(db_err)?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
+        self.directed_edges(qname, limit, EdgeDirection::Inbound, true)
     }
 
     /// Return nodes called by `qname` (i.e. edges of kind `calls` with
@@ -149,30 +176,7 @@ impl Store {
         qname: &str,
         limit: usize,
     ) -> Result<Vec<(Node, atlas_core::Edge)>> {
-        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path,
-                        n.line_start, n.line_end, n.language, n.parent_name,
-                        n.params, n.return_type, n.modifiers, n.is_test,
-                        n.file_hash, n.extra_json,
-                        e.id, e.kind, e.source_qualified, e.target_qualified,
-                        e.file_path, e.line, e.confidence, e.confidence_tier, e.extra_json
-                 FROM edges e
-                 JOIN nodes n ON n.qualified_name = e.target_qualified
-                 WHERE e.source_qualified = ?1
-                   AND e.kind = 'calls'
-                 ORDER BY e.confidence DESC, e.target_qualified
-                 LIMIT ?2",
-            )
-            .map_err(db_err)?;
-        let rows = stmt
-            .query_map(params![qname, limit as i64], row_to_node_and_edge)
-            .map_err(db_err)?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
+        self.directed_edges(qname, limit, EdgeDirection::Outbound, true)
     }
 
     /// Return nodes connected to `qname` via `imports` edges (either
@@ -295,29 +299,7 @@ impl Store {
         qname: &str,
         limit: usize,
     ) -> Result<Vec<(Node, atlas_core::Edge)>> {
-        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path,
-                        n.line_start, n.line_end, n.language, n.parent_name,
-                        n.params, n.return_type, n.modifiers, n.is_test,
-                        n.file_hash, n.extra_json,
-                        e.id, e.kind, e.source_qualified, e.target_qualified,
-                        e.file_path, e.line, e.confidence, e.confidence_tier, e.extra_json
-                 FROM edges e
-                 JOIN nodes n ON n.qualified_name = e.source_qualified
-                 WHERE e.target_qualified = ?1
-                 ORDER BY e.confidence DESC, e.source_qualified
-                 LIMIT ?2",
-            )
-            .map_err(db_err)?;
-        let rows = stmt
-            .query_map(params![qname, limit as i64], row_to_node_and_edge)
-            .map_err(db_err)?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
+        self.directed_edges(qname, limit, EdgeDirection::Inbound, false)
     }
 
     /// All edges sourcing from `qname` (outbound), any kind, paired with the
@@ -327,29 +309,7 @@ impl Store {
         qname: &str,
         limit: usize,
     ) -> Result<Vec<(Node, atlas_core::Edge)>> {
-        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path,
-                        n.line_start, n.line_end, n.language, n.parent_name,
-                        n.params, n.return_type, n.modifiers, n.is_test,
-                        n.file_hash, n.extra_json,
-                        e.id, e.kind, e.source_qualified, e.target_qualified,
-                        e.file_path, e.line, e.confidence, e.confidence_tier, e.extra_json
-                 FROM edges e
-                 JOIN nodes n ON n.qualified_name = e.target_qualified
-                 WHERE e.source_qualified = ?1
-                 ORDER BY e.confidence DESC, e.target_qualified
-                 LIMIT ?2",
-            )
-            .map_err(db_err)?;
-        let rows = stmt
-            .query_map(params![qname, limit as i64], row_to_node_and_edge)
-            .map_err(db_err)?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
+        self.directed_edges(qname, limit, EdgeDirection::Outbound, false)
     }
 
     // -------------------------------------------------------------------------

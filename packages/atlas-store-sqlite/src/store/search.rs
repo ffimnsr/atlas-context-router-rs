@@ -56,7 +56,7 @@ impl Store {
             }
             if let Some(kind) = &query.kind {
                 filters.push("n.kind = ?".to_string());
-                params.push(Box::new(kind.clone()));
+                params.push(Box::new(atlas_core::kinds::normalize_kind_alias(kind)));
             } else if !query.include_files {
                 filters.push("n.kind != 'file'".to_string());
             }
@@ -136,7 +136,7 @@ impl Store {
             }
             if let Some(kind) = &query.kind {
                 filters.push("n.kind = ?".to_string());
-                params.push(Box::new(kind.clone()));
+                params.push(Box::new(atlas_core::kinds::normalize_kind_alias(kind)));
             } else if !query.include_files {
                 filters.push("n.kind != 'file'".to_string());
             }

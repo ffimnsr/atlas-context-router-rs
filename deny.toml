@@ -4,20 +4,34 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+ignore = [
+    # Unmaintained, no safe upgrade; transitive pins tracked for upstream bumps:
+    # instant via notify-types -> notify (atlas-engine)
+    "RUSTSEC-2024-0384",
+    # number_prefix via indicatif (atlas-cli)
+    "RUSTSEC-2025-0119",
+    # paste via tokenizers (atlas-token-count)
+    "RUSTSEC-2024-0436",
+]
 
 [licenses]
 version = 2
 confidence-threshold = 0.8
-allow = ["Apache-2.0", "MIT", "Unicode-3.0"]
+allow = [
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+]
 
 [bans]
-version = 2
 multiple-versions = "warn"
 wildcards = "deny"
 highlight = "all"
 
 [sources]
-version = 2
 unknown-registry = "deny"
 unknown-git = "deny"

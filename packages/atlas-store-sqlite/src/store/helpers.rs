@@ -2,7 +2,9 @@ use atlas_core::{
     AtlasError, Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile, RepoProvenance, Result,
 };
 use atlas_repo::{CanonicalRepoPath, stable_repo_fingerprint};
-use rusqlite::Row;
+use rusqlite::{Row, params};
+
+use super::Store;
 
 #[derive(Debug, Clone)]
 pub(super) struct CanonicalizedGraphData {
@@ -280,6 +282,47 @@ fn looks_like_safe_fts_term(token: &str) -> bool {
         && stem
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+impl Store {
+    /// Run a single-row lookup with a cached prepared statement.
+    ///
+    /// `sql` is caller-defined constant text, never user input.
+    pub(super) fn query_one_row<T>(
+        &self,
+        sql: &str,
+        value: &dyn rusqlite::ToSql,
+        row_mapper: fn(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+    ) -> Result<Option<T>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self.conn.prepare_cached(sql).map_err(db_err)?;
+        let mut rows = stmt.query_map(params![value], row_mapper).map_err(db_err)?;
+        match rows.next() {
+            Some(Ok(row)) => Ok(Some(row)),
+            Some(Err(error)) => Err(AtlasError::Db(error.to_string())),
+            None => Ok(None),
+        }
+    }
+
+    /// Run a multi-row query with an optional bound parameter and a cached
+    /// prepared statement.
+    ///
+    /// `sql` is caller-defined constant text, never user input.
+    pub(super) fn query_rows<T>(
+        &self,
+        sql: &str,
+        value: Option<&dyn rusqlite::ToSql>,
+        row_mapper: fn(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+    ) -> Result<Vec<T>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self.conn.prepare_cached(sql).map_err(db_err)?;
+        let mapped = match value {
+            Some(value) => stmt.query_map(params![value], row_mapper),
+            None => stmt.query_map([], row_mapper),
+        }
+        .map_err(db_err)?;
+        Ok(mapped.filter_map(|r| r.ok()).collect())
+    }
 }
 
 #[cfg(test)]

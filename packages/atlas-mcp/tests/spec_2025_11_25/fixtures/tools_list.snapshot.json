@@ -14,7 +14,6 @@
     "batch_query_graph",
     "broker_status",
     "build_graph",
-    "update_graph",
     "compact_session",
     "concept_clusters",
     "cross_file_links",
@@ -25,6 +24,7 @@
     "doctor",
     "explain_change",
     "explain_query",
+    "feedback_record",
     "find_complex_functions",
     "find_duplicates",
     "find_large_functions",
@@ -40,6 +40,7 @@
     "infer_modules",
     "label_components",
     "list_graph_stats",
+    "list_symbols",
     "man",
     "memory_recall",
     "memory_store",
@@ -66,6 +67,7 @@
     "tool_list",
     "tool_search",
     "traverse_graph",
+    "update_graph",
     "wake_up"
   ]
 }

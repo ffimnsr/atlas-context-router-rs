@@ -277,6 +277,33 @@ pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
                 ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
             ],
         )),
+        "list_symbols" => Some(typed_schema_with_descriptions::<ListSymbolsArgsSchema>(&[
+            (
+                "properties/kind",
+                "Filter by node kind (e.g. 'function', 'struct'). Accepts aliases like 'fn'.",
+            ),
+            (
+                "properties/language",
+                "Filter by language (e.g. 'rust', 'python').",
+            ),
+            (
+                "properties/subpath",
+                "Restrict results to nodes whose file_path starts with this prefix (e.g. 'src/auth', 'packages/atlas-core').",
+            ),
+            (
+                "properties/repo_id",
+                "Restrict results to one repo by stable repo id in multi-repo graphs.",
+            ),
+            (
+                "properties/limit",
+                "Maximum symbols per page (default 100, max 500).",
+            ),
+            (
+                "properties/offset",
+                "Number of matching symbols to skip before this page (default 0).",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
         _ => None,
     }
 }

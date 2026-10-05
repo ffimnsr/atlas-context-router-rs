@@ -45,6 +45,7 @@ const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "infer_modules",
     "label_components",
     "list_graph_stats",
+    "list_symbols",
     "man",
     "memory_recall",
     "memory_store",
@@ -237,6 +238,7 @@ fn parity_args(tool_name: &str, source_id: &str) -> Value {
         "debug_graph" => json!({ "output_format": "json" }),
         "explain_query" => json!({ "text": "compute", "output_format": "json" }),
         "resolve_symbol" => json!({ "name": "compute", "output_format": "json" }),
+        "list_symbols" => json!({ "kind": "function", "limit": 5, "output_format": "json" }),
         "analyze_safety" => {
             json!({ "symbol": "src/service.rs::fn::compute", "output_format": "json" })
         }

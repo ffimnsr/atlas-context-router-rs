@@ -1,6 +1,7 @@
 [package]
 name = "atlas-history"
 version = "1.7.6"
+license.workspace = true
 edition = "2024"
 description = "Historical graph metadata ingestion and querying for Atlas"
 publish = false

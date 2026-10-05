@@ -1,5 +1,7 @@
 use atlas_core::{Edge, Node, NodeKind, ParsedFile};
 
+use crate::ast_helpers::file_node;
+use crate::lang::common::contains_edge;
 use crate::traits::{LangParser, ParseContext};
 
 mod calls;
@@ -10,8 +12,8 @@ mod tests;
 
 use calls::resolve_go_calls;
 use declarations::{
-    contains_edge, file_node, find_package, package_node, visit_function, visit_imports,
-    visit_method, visit_type_decl, visit_value_decl,
+    find_package, package_node, visit_function, visit_imports, visit_method, visit_type_decl,
+    visit_value_decl,
 };
 
 // SQ1 migration checklist:
@@ -40,7 +42,7 @@ impl LangParser for GoParser {
         let mut edges: Vec<Edge> = Vec::new();
 
         let line_count = ctx.source.iter().filter(|&&b| b == b'\n').count() as u32 + 1;
-        nodes.push(file_node(ctx.rel_path, ctx.file_hash, line_count));
+        nodes.push(file_node(ctx.rel_path, ctx.file_hash, line_count, "go"));
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();

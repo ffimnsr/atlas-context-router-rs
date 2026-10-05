@@ -1,6 +1,7 @@
 [package]
 name = "atlas-refactor"
 version = "1.7.6"
+license.workspace = true
 edition = "2024"
 description = "Smart refactoring core for Atlas — deterministic rename, dead-code removal, import cleanup, and extract-function detection"
 publish = false

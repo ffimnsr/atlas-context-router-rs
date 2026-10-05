@@ -40,6 +40,42 @@ impl NodeKind {
     }
 }
 
+/// Canonicalize a user-supplied node kind or alias to its graph kind string.
+///
+/// Accepts canonical `NodeKind::as_str` values plus common aliases (`fn`,
+/// `func`, `record`, `iface`, `mod`, `var`, `field`, `const`, `use`, `pkg`).
+/// Unknown input is lowercased and returned unchanged so callers can keep
+/// treating it as a filter that simply matches nothing. CLI and MCP kind
+/// filters share this table through this single function.
+pub fn normalize_kind_alias(input: &str) -> String {
+    match input.to_ascii_lowercase().as_str() {
+        "fn" | "func" | "function" => "function",
+        "method" | "meth" => "method",
+        "class" => "class",
+        "struct" | "record" => "struct",
+        "interface" | "iface" => "interface",
+        "trait" => "trait",
+        "enum" => "enum",
+        "module" | "mod" => "module",
+        "variable" | "var" | "field" => "variable",
+        "constant" | "const" => "constant",
+        "test" => "test",
+        "import" | "use" => "import",
+        "package" | "pkg" => "package",
+        "file" => "file",
+        other => other,
+    }
+    .to_owned()
+}
+
+/// Parse a user-supplied kind or alias into a [`NodeKind`].
+///
+/// Accepts canonical names and aliases (`fn`, `record`, ...) in any case.
+/// Unknown input returns `None` so callers can warn or skip explicitly.
+pub fn parse_kind_alias(input: &str) -> Option<NodeKind> {
+    normalize_kind_alias(input).parse().ok()
+}
+
 impl std::fmt::Display for NodeKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
@@ -179,6 +215,65 @@ mod tests {
     fn node_kind_unknown_string_errors() {
         assert!(NodeKind::from_str("unknown_kind").is_err());
         assert!(NodeKind::from_str("").is_err());
+    }
+
+    #[test]
+    fn normalize_kind_alias_canonicalizes_aliases_and_lowercases_unknown() {
+        let cases = [
+            ("fn", "function"),
+            ("FUNC", "function"),
+            ("function", "function"),
+            ("record", "struct"),
+            ("iface", "interface"),
+            ("mod", "module"),
+            ("var", "variable"),
+            ("field", "variable"),
+            ("const", "constant"),
+            ("use", "import"),
+            ("pkg", "package"),
+            ("test", "test"),
+            ("Function", "function"),
+            ("Mystery", "mystery"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                normalize_kind_alias(input),
+                expected,
+                "normalize_kind_alias({input})"
+            );
+        }
+        // Every canonical kind resolves to itself through the alias table.
+        for (kind, canonical) in [
+            (NodeKind::File, "file"),
+            (NodeKind::Package, "package"),
+            (NodeKind::Module, "module"),
+            (NodeKind::Import, "import"),
+            (NodeKind::Class, "class"),
+            (NodeKind::Interface, "interface"),
+            (NodeKind::Struct, "struct"),
+            (NodeKind::Enum, "enum"),
+            (NodeKind::Function, "function"),
+            (NodeKind::Method, "method"),
+            (NodeKind::Variable, "variable"),
+            (NodeKind::Constant, "constant"),
+            (NodeKind::Trait, "trait"),
+            (NodeKind::Test, "test"),
+        ] {
+            assert_eq!(normalize_kind_alias(canonical), canonical);
+            assert_eq!(normalize_kind_alias(kind.as_str()), canonical);
+        }
+    }
+
+    #[test]
+    fn parse_kind_alias_accepts_aliases_and_rejects_unknown() {
+        assert_eq!(parse_kind_alias("fn"), Some(NodeKind::Function));
+        assert_eq!(parse_kind_alias("FUNC"), Some(NodeKind::Function));
+        assert_eq!(parse_kind_alias("function"), Some(NodeKind::Function));
+        assert_eq!(parse_kind_alias("record"), Some(NodeKind::Struct));
+        assert_eq!(parse_kind_alias("iface"), Some(NodeKind::Interface));
+        assert_eq!(parse_kind_alias("mod"), Some(NodeKind::Module));
+        assert_eq!(parse_kind_alias("mystery"), None);
+        assert_eq!(parse_kind_alias(""), None);
     }
 
     #[test]

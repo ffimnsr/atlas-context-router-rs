@@ -1,6 +1,7 @@
 [package]
 name = "atlas-contextsave"
 version = "1.7.6"
+license.workspace = true
 edition = "2024"
 description = "Context save/restore coordinator for Atlas context memory integration"
 publish = false

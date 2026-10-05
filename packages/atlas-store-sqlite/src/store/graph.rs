@@ -1,5 +1,6 @@
 use atlas_core::{
     AtlasError, BudgetManager, BudgetPolicy, Edge, FileRecord, ImpactResult, Node, Result,
+    kinds::normalize_kind_alias,
 };
 use rusqlite::params;
 
@@ -10,6 +11,75 @@ use super::{
         row_to_node,
     },
 };
+
+/// Maximum page size accepted by [`Store::list_nodes`].
+///
+/// Larger requests clamp so a single call cannot materialize an unbounded
+/// slice of the graph.
+pub const MAX_NODE_LIST_LIMIT: usize = 10_000;
+
+/// Optional filters for [`Store::list_nodes`].
+///
+/// Non-`None` values combine with `AND`. `kind` accepts canonical names and
+/// aliases (`fn`, `record`, ...); the store normalizes it internally. `subpath`
+/// is a canonical repo-relative path prefix (for example `packages/atlas-core`);
+/// callers normalize it at the consumer boundary per the path identity
+/// invariant. `repo_id` matches `nodes.source_repo_id` for multi-repo graphs.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NodeListFilter<'a> {
+    pub kind: Option<&'a str>,
+    pub language: Option<&'a str>,
+    pub subpath: Option<&'a str>,
+    pub repo_id: Option<&'a str>,
+}
+
+/// One deterministic page of nodes plus the total number of matching rows.
+#[derive(Clone, Debug)]
+pub struct NodeListPage {
+    pub nodes: Vec<Node>,
+    pub total: u64,
+    pub limit: usize,
+    pub offset: usize,
+}
+
+impl NodeListPage {
+    /// Offset for the next page, or `None` when this page reaches the end.
+    pub fn next_offset(&self) -> Option<usize> {
+        let consumed = self.offset.saturating_add(self.nodes.len());
+        if (consumed as u64) < self.total {
+            Some(consumed)
+        } else {
+            None
+        }
+    }
+
+    pub fn has_more(&self) -> bool {
+        self.next_offset().is_some()
+    }
+}
+
+/// Smallest string strictly greater than every string starting with `prefix`.
+///
+/// Turns a path-prefix filter into a half-open range
+/// (`file_path >= prefix AND file_path < upper`) so SQLite can use the
+/// `file_path` index instead of a full-table `substr()` scan. `None` means no
+/// upper bound exists because the prefix is all maximal scalar values
+/// (practically unreachable for repo paths); callers fall back to the exact
+/// `substr()` comparison in that case.
+pub(super) fn prefix_upper_bound(prefix: &str) -> Option<String> {
+    let mut chars: Vec<char> = prefix.chars().collect();
+    while let Some(last) = chars.pop() {
+        let mut candidate = last as u32 + 1;
+        while candidate <= 0x10FFFF {
+            if let Some(next) = char::from_u32(candidate) {
+                chars.push(next);
+                return Some(chars.into_iter().collect());
+            }
+            candidate += 1;
+        }
+    }
+    None
+}
 
 impl Store {
     fn sort_impact_result(result: &mut ImpactResult) {
@@ -129,6 +199,79 @@ impl Store {
             .filter_map(|r| r.ok())
             .collect();
         Ok(rows)
+    }
+
+    /// One deterministic page of nodes matching `filter`, plus the total
+    /// match count for the same filter.
+    ///
+    /// Pagination is offset-based over a stable `(file_path, line_start,
+    /// qualified_name)` ordering, so repeated calls with the same offset see
+    /// the same slice while the graph is unchanged. `limit` clamps to
+    /// `1..=`[`MAX_NODE_LIST_LIMIT`]. A `subpath` filter compiles to an indexed
+    /// half-open range on `file_path`.
+    pub fn list_nodes(
+        &self,
+        filter: &NodeListFilter<'_>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<NodeListPage> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let limit = limit.clamp(1, MAX_NODE_LIST_LIMIT);
+        // Alias normalization lives here as well as at consumer boundaries so a
+        // raw `fn`/`record` filter cannot silently match nothing.
+        let kind = filter.kind.map(normalize_kind_alias);
+        let subpath_upper = filter.subpath.and_then(prefix_upper_bound);
+        let where_clause = "WHERE (?1 IS NULL OR kind = ?1)
+                   AND (?2 IS NULL OR language = ?2)
+                   AND (?3 IS NULL OR ((?4 IS NOT NULL AND file_path >= ?3 AND file_path < ?4)
+                        OR (?4 IS NULL AND substr(file_path, 1, length(?3)) = ?3)))
+                   AND (?5 IS NULL OR source_repo_id = ?5)";
+        let count_sql = format!("SELECT COUNT(*) FROM nodes {where_clause}");
+        let total: u64 = self
+            .conn
+            .query_row(
+                &count_sql,
+                params![
+                    kind,
+                    filter.language,
+                    filter.subpath,
+                    subpath_upper,
+                    filter.repo_id
+                ],
+                |row| row.get(0),
+            )
+            .map_err(db_err)?;
+        let page_sql = format!(
+            "SELECT id, kind, name, qualified_name, file_path, line_start, line_end,
+                    language, parent_name, params, return_type, modifiers,
+                    is_test, file_hash, extra_json
+             FROM nodes {where_clause}
+             ORDER BY file_path, line_start, qualified_name
+             LIMIT ?6 OFFSET ?7"
+        );
+        let mut stmt = self.conn.prepare(&page_sql).map_err(db_err)?;
+        let rows = stmt
+            .query_map(
+                params![
+                    kind,
+                    filter.language,
+                    filter.subpath,
+                    subpath_upper,
+                    filter.repo_id,
+                    limit as i64,
+                    offset as i64
+                ],
+                row_to_node,
+            )
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(NodeListPage {
+            nodes: rows,
+            total,
+            limit,
+            offset,
+        })
     }
 
     /// All edges in the graph, ordered by source, target, kind, then file path.

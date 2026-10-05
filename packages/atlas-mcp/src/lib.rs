@@ -66,6 +66,7 @@
 //! | `debug_graph`             | Graph internals: node/edge kinds, top files, anomalies   |
 //! | `explain_query`           | Explain how query_graph resolves a given search input    |
 //! | `resolve_symbol`          | Resolve symbol name to exact qualified_name with aliases |
+//! | `list_symbols`            | Deterministic paginated symbol listing with filters      |
 //! | `analyze_safety`          | Refactor-safety score: fan-in, fan-out, test adjacency   |
 //! | `analyze_remove`          | Removal-impact analysis with confidence-tiered results   |
 //! | `analyze_dead_code`       | Dead-code candidates with certainty tiers and blockers   |

@@ -4,41 +4,15 @@ use super::*;
 // Fuzzy matching
 // ---------------------------------------------------------------------------
 
-/// Compute the edit distance (Levenshtein) between two strings, capped at
-/// `cap + 1` so we can bail out early for clearly dissimilar strings.
+/// Compute the Levenshtein edit distance between two strings, capped at
+/// `cap + 1` so callers can reject clearly dissimilar strings early.
 pub(super) fn edit_distance(a: &str, b: &str, cap: usize) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    let m = a.len();
-    let n = b.len();
-
-    // Quick bounds check — if length difference alone exceeds cap, bail.
-    if m.abs_diff(n) > cap {
+    // Cheap bound: a length difference above the cap can never be within it.
+    if a.chars().count().abs_diff(b.chars().count()) > cap {
         return cap + 1;
     }
-
-    // Two-row DP (space-efficient).
-    let mut prev: Vec<usize> = (0..=n).collect();
-    let mut curr = vec![0usize; n + 1];
-
-    for i in 1..=m {
-        curr[0] = i;
-        let mut row_min = i;
-        for j in 1..=n {
-            curr[j] = if a[i - 1] == b[j - 1] {
-                prev[j - 1]
-            } else {
-                1 + prev[j - 1].min(prev[j]).min(curr[j - 1])
-            };
-            row_min = row_min.min(curr[j]);
-        }
-        // Early exit if entire row exceeds cap.
-        if row_min > cap {
-            return cap + 1;
-        }
-        std::mem::swap(&mut prev, &mut curr);
-    }
-    prev[n]
+    let distance = strsim::levenshtein(a, b);
+    if distance > cap { cap + 1 } else { distance }
 }
 
 /// Return the edit-distance threshold for a query of length `len`.

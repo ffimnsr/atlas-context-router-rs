@@ -1,5 +1,7 @@
 use tree_sitter::{Node, Tree};
 
+use atlas_core::{Node as CoreNode, NodeId, NodeKind};
+
 /// Walk the tree and collect every node matching `kind`.
 pub fn find_all<'a>(tree: &'a Tree, kind: &str) -> Vec<Node<'a>> {
     let mut result = Vec::new();
@@ -56,6 +58,28 @@ pub fn has_ancestor_kind(mut node: Node<'_>, kind: &str, max_depth: usize) -> bo
         }
     }
     false
+}
+
+/// Build the synthetic `File` node emitted once per parsed file.
+pub fn file_node(rel_path: &str, file_hash: &str, line_end: u32, language: &str) -> CoreNode {
+    CoreNode {
+        id: NodeId::UNSET,
+        kind: NodeKind::File,
+        name: rel_path.rsplit('/').next().unwrap_or(rel_path).to_owned(),
+        qualified_name: rel_path.to_owned(),
+        file_path: rel_path.to_owned(),
+        line_start: 1,
+        line_end,
+        language: language.to_owned(),
+        parent_name: None,
+        params: None,
+        return_type: None,
+        modifiers: None,
+        is_test: false,
+        file_hash: file_hash.to_owned(),
+        extra_json: serde_json::Value::Null,
+        repo_provenance: None,
+    }
 }
 
 #[cfg(test)]
@@ -133,5 +157,20 @@ mod tests {
         exercise_common_helpers(root, &source, root.kind());
         let _ = find_all(&tree, "pair");
         let _ = find_all(&tree, "string");
+    }
+
+    #[test]
+    fn file_node_matches_parser_contract() {
+        let node = file_node("src/lib.rs", "hash123", 42, "rust");
+        assert_eq!(node.kind, atlas_core::NodeKind::File);
+        assert_eq!(node.name, "lib.rs");
+        assert_eq!(node.qualified_name, "src/lib.rs");
+        assert_eq!(node.file_path, "src/lib.rs");
+        assert_eq!(node.line_start, 1);
+        assert_eq!(node.line_end, 42);
+        assert_eq!(node.language, "rust");
+        assert_eq!(node.file_hash, "hash123");
+        assert!(node.parent_name.is_none());
+        assert_eq!(node.extra_json, serde_json::Value::Null);
     }
 }

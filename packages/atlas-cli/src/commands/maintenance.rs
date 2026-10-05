@@ -38,27 +38,6 @@ fn json_value_from_toml(value: &TomlValue) -> serde_json::Value {
     serde_json::to_value(value).unwrap_or(serde_json::Value::Null)
 }
 
-fn flatten_toml(prefix: Option<&str>, value: &TomlValue, out: &mut Vec<(String, TomlValue)>) {
-    match value {
-        TomlValue::Table(table) => {
-            let mut keys = table.keys().cloned().collect::<Vec<_>>();
-            keys.sort();
-            for key in keys {
-                let child_prefix = match prefix {
-                    Some(prefix) => format!("{prefix}.{key}"),
-                    None => key.clone(),
-                };
-                flatten_toml(Some(&child_prefix), &table[&key], out);
-            }
-        }
-        other => {
-            if let Some(prefix) = prefix {
-                out.push((prefix.to_owned(), other.clone()));
-            }
-        }
-    }
-}
-
 fn flatten_runtime_json(
     prefix: Option<&str>,
     value: &serde_json::Value,
@@ -191,9 +170,9 @@ fn config_sources(
             .context("cannot parse raw config for source tracing")
             .unwrap_or(TomlValue::Table(Default::default()));
         let mut flattened = Vec::new();
-        flatten_toml(None, &parsed, &mut flattened);
+        flatten_runtime_json(None, &json_value_from_toml(&parsed), &mut flattened);
         for (key, value) in flattened {
-            explicit.insert(key, json_value_from_toml(&value));
+            explicit.insert(key, value);
         }
     }
 

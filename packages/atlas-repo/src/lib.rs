@@ -27,8 +27,9 @@ pub use hash::hash_file;
 pub use owners::{PackageOwners, WorkspaceRoot, discover_package_owners};
 pub use path::{
     CanonicalRepoPath, NormalizedRepoPath, RepoPathError, canonical_absolute_path,
-    canonical_filesystem_path, normalize_case, normalize_repo_file_path, normalize_unicode,
-    repo_relative, to_forward_slashes,
+    canonical_filesystem_path, missing_change_path_candidates, normalize_case,
+    normalize_repo_change_path, normalize_repo_file_path, normalize_unicode, repo_relative,
+    to_forward_slashes,
 };
 pub use registry::{
     REPO_REGISTRY_FILE_NAME, REPO_REGISTRY_SCHEMA_VERSION, RepoDependency, RepoRegistration,

@@ -3,7 +3,7 @@ use tracing::debug;
 
 use atlas_core::{AtlasError, Result};
 
-use super::util::{fts5_escape, levenshtein, proximity_rerank, rrf_merge};
+use super::util::{fts5_escape, proximity_rerank, rrf_merge};
 use super::{ChunkResult, ContentStore, SearchFilters};
 
 impl ContentStore {
@@ -188,7 +188,7 @@ impl ContentStore {
                 return Ok(None);
             }
 
-            let dist = levenshtein(&term_low, &candidate);
+            let dist = strsim::levenshtein(&term_low, &candidate);
             if dist <= 2 {
                 let better = best.as_ref().is_none_or(|(_, best_freq, best_dist)| {
                     dist < *best_dist || (dist == *best_dist && freq as u32 > *best_freq)

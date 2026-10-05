@@ -6,7 +6,8 @@ use std::collections::{HashMap, HashSet};
 use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile};
 use tree_sitter::Node as TsNode;
 
-use crate::ast_helpers::{end_line, node_text, start_line};
+use crate::ast_helpers::{end_line, file_node, node_text, start_line};
+use crate::lang::common::contains_edge;
 use crate::query_helpers::{compile_static_query, run_query};
 use crate::traits::{LangParser, ParseContext};
 
@@ -385,42 +386,6 @@ fn is_void_html_tag(tag: &str) -> bool {
             | "track"
             | "wbr"
     )
-}
-
-fn file_node(rel_path: &str, file_hash: &str, line_end: u32, language: &str) -> Node {
-    Node {
-        id: NodeId::UNSET,
-        kind: NodeKind::File,
-        name: rel_path.rsplit('/').next().unwrap_or(rel_path).to_owned(),
-        qualified_name: rel_path.to_owned(),
-        file_path: rel_path.to_owned(),
-        line_start: 1,
-        line_end,
-        language: language.to_owned(),
-        parent_name: None,
-        params: None,
-        return_type: None,
-        modifiers: None,
-        is_test: false,
-        file_hash: file_hash.to_owned(),
-        extra_json: serde_json::Value::Null,
-        repo_provenance: None,
-    }
-}
-
-fn contains_edge(parent_qn: &str, child_qn: &str, file_path: &str, line: u32) -> Edge {
-    Edge {
-        id: 0,
-        kind: EdgeKind::Contains,
-        source_qn: parent_qn.to_owned(),
-        target_qn: child_qn.to_owned(),
-        file_path: file_path.to_owned(),
-        line: Some(line),
-        confidence: 1.0,
-        confidence_tier: Some("definite".to_owned()),
-        extra_json: serde_json::Value::Null,
-        repo_provenance: None,
-    }
 }
 
 #[cfg(test)]

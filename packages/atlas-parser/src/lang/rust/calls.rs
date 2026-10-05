@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use tree_sitter::Node as TsNode;
 
-use atlas_core::{Edge, EdgeKind, Node, NodeKind};
+use atlas_core::{Edge, Node, NodeKind};
 
 use crate::ast_helpers::{node_text, start_line};
+use crate::lang::common::{call_edge, caller_simple_name};
 
 use super::facts::{RustNodeKey, node_key, rust_query_matches};
 
@@ -255,41 +256,4 @@ fn is_self_call(caller_qn: &str, callee_name: &str, receiver: Option<&str>) -> b
         return false;
     }
     caller_simple_name(caller_qn) == callee_name
-}
-
-fn caller_simple_name(caller_qn: &str) -> &str {
-    caller_qn
-        .rsplit("::")
-        .next()
-        .unwrap_or(caller_qn)
-        .rsplit('.')
-        .next()
-        .unwrap_or(caller_qn)
-}
-
-fn call_edge(
-    caller_qn: &str,
-    callee_qn: &str,
-    rel_path: &str,
-    line: u32,
-    text: &str,
-    receiver: Option<&str>,
-    same_file: bool,
-) -> Edge {
-    Edge {
-        id: 0,
-        kind: EdgeKind::Calls,
-        source_qn: caller_qn.to_owned(),
-        target_qn: callee_qn.to_owned(),
-        file_path: rel_path.to_owned(),
-        line: Some(line),
-        confidence: if same_file { 0.8 } else { 0.3 },
-        confidence_tier: Some(if same_file { "same_file" } else { "text" }.to_owned()),
-        extra_json: serde_json::json!({
-            "callee_text": text,
-            "callee_name": caller_simple_name(callee_qn),
-            "receiver_text": receiver,
-        }),
-        repo_provenance: None,
-    }
 }

@@ -93,6 +93,7 @@ pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
         | "analyze_dead_code"
         | "analyze_dependency"
         | "resolve_symbol"
+        | "list_symbols"
         | "search_files"
         | "search_content"
         | "read_file_excerpt"

@@ -212,113 +212,80 @@ fn scope_file_count(
     }
 }
 
-fn build_flows_stage(
-    store: &Store,
+/// Fetch member qualified names once per stage item and return
+/// `(items_touching_changed_files, total_memberships)`.
+///
+/// Each stage used to fetch members twice per item: once to test whether the
+/// item was in scope, once to count memberships.  Collecting the qualified
+/// names once halves the store round trips in changed-only mode.
+fn scoped_membership_counts<T>(
     mode: PostprocessExecutionMode,
-    stats: &GraphStats,
+    items: &[T],
     changed_files: &[String],
-) -> anyhow::Result<PostprocessStageSummary> {
-    let started = Instant::now();
-    let scope_count = scope_file_count(mode, stats, changed_files);
-    let flows = store.list_flows().context("cannot list flows")?;
-    let touched_flow_count =
+    mut member_qns: impl FnMut(&T) -> Vec<String>,
+) -> (usize, usize) {
+    let members_by_item = items.iter().map(&mut member_qns).collect::<Vec<_>>();
+    let touched_count =
         if mode == PostprocessExecutionMode::ChangedOnly && !changed_files.is_empty() {
-            flows
+            members_by_item
                 .iter()
-                .filter(|flow| {
-                    store
-                        .get_flow_members(flow.id)
-                        .map(|members| {
-                            members.iter().any(|member| {
-                                let path = qn_file_path(&member.node_qualified_name);
-                                changed_files.iter().any(|file| file == path)
-                            })
-                        })
-                        .unwrap_or(false)
+                .filter(|members| {
+                    members.iter().any(|member| {
+                        let path = qn_file_path(member);
+                        changed_files.iter().any(|file| file == path)
+                    })
                 })
                 .count()
         } else {
-            flows.len()
+            items.len()
         };
-    let membership_count = flows
-        .iter()
-        .map(|flow| {
-            store
-                .get_flow_members(flow.id)
-                .map(|members| members.len())
-                .unwrap_or_default()
-        })
-        .sum::<usize>();
-    Ok(PostprocessStageSummary {
-        stage: POSTPROCESS_STAGE_FLOWS.to_string(),
-        status: PostprocessStageStatus::Completed,
-        mode,
-        affected_file_count: scope_count,
-        item_count: touched_flow_count,
-        elapsed_ms: started.elapsed().as_millis() as u64,
-        error_code: None,
-        message: Some("flow summaries refreshed".to_string()),
-        details: serde_json::json!({
-            "flow_count": flows.len(),
-            "memberships": membership_count,
-            "flow_count_in_scope": touched_flow_count,
-        }),
-    })
+    let membership_count = members_by_item.iter().map(Vec::len).sum();
+    (touched_count, membership_count)
 }
 
-fn build_communities_stage(
+/// Static labels for [`build_membership_stage`].
+struct MembershipStageSpec {
+    stage: &'static str,
+    message: &'static str,
+    count_key: &'static str,
+    scope_key: &'static str,
+}
+
+/// Build a membership-stage summary for flows/communities from shared inputs.
+///
+/// `list` loads the stage items and `members` maps one item to its member
+/// qualified names; the two stages differ only in those closures and labels.
+fn build_membership_stage<T>(
     store: &Store,
     mode: PostprocessExecutionMode,
     stats: &GraphStats,
     changed_files: &[String],
+    spec: MembershipStageSpec,
+    list: impl Fn(&Store) -> anyhow::Result<Vec<T>>,
+    members: impl Fn(&Store, &T) -> Vec<String>,
 ) -> anyhow::Result<PostprocessStageSummary> {
     let started = Instant::now();
     let scope_count = scope_file_count(mode, stats, changed_files);
-    let communities = store
-        .list_communities()
-        .context("cannot list communities")?;
-    let touched_community_count =
-        if mode == PostprocessExecutionMode::ChangedOnly && !changed_files.is_empty() {
-            communities
-                .iter()
-                .filter(|community| {
-                    store
-                        .get_community_nodes(community.id)
-                        .map(|members| {
-                            members.iter().any(|member| {
-                                let path = qn_file_path(&member.node_qualified_name);
-                                changed_files.iter().any(|file| file == path)
-                            })
-                        })
-                        .unwrap_or(false)
-                })
-                .count()
-        } else {
-            communities.len()
-        };
-    let membership_count = communities
-        .iter()
-        .map(|community| {
-            store
-                .get_community_nodes(community.id)
-                .map(|members| members.len())
-                .unwrap_or_default()
-        })
-        .sum::<usize>();
+    let items = list(store)?;
+    let (touched_count, membership_count) =
+        scoped_membership_counts(mode, &items, changed_files, |item| members(store, item));
+    let mut details = serde_json::Map::new();
+    details.insert(spec.count_key.to_owned(), serde_json::json!(items.len()));
+    details.insert(spec.scope_key.to_owned(), serde_json::json!(touched_count));
+    details.insert(
+        "memberships".to_owned(),
+        serde_json::json!(membership_count),
+    );
     Ok(PostprocessStageSummary {
-        stage: POSTPROCESS_STAGE_COMMUNITIES.to_string(),
+        stage: spec.stage.to_string(),
         status: PostprocessStageStatus::Completed,
         mode,
         affected_file_count: scope_count,
-        item_count: touched_community_count,
+        item_count: touched_count,
         elapsed_ms: started.elapsed().as_millis() as u64,
         error_code: None,
-        message: Some("community summaries refreshed".to_string()),
-        details: serde_json::json!({
-            "community_count": communities.len(),
-            "community_count_in_scope": touched_community_count,
-            "memberships": membership_count,
-        }),
+        message: Some(spec.message.to_owned()),
+        details: serde_json::Value::Object(details),
     })
 }
 
@@ -487,10 +454,48 @@ pub fn postprocess_graph(
     let run_started = Instant::now();
     for stage in selected_stages {
         let stage_result = match stage.as_str() {
-            POSTPROCESS_STAGE_FLOWS => build_flows_stage(&store, mode, &stats, &changed_files),
-            POSTPROCESS_STAGE_COMMUNITIES => {
-                build_communities_stage(&store, mode, &stats, &changed_files)
-            }
+            POSTPROCESS_STAGE_FLOWS => build_membership_stage(
+                &store,
+                mode,
+                &stats,
+                &changed_files,
+                MembershipStageSpec {
+                    stage: POSTPROCESS_STAGE_FLOWS,
+                    message: "flow summaries refreshed",
+                    count_key: "flow_count",
+                    scope_key: "flow_count_in_scope",
+                },
+                |store| store.list_flows().context("cannot list flows"),
+                |store, flow| {
+                    store
+                        .get_flow_members(flow.id)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|member| member.node_qualified_name)
+                        .collect()
+                },
+            ),
+            POSTPROCESS_STAGE_COMMUNITIES => build_membership_stage(
+                &store,
+                mode,
+                &stats,
+                &changed_files,
+                MembershipStageSpec {
+                    stage: POSTPROCESS_STAGE_COMMUNITIES,
+                    message: "community summaries refreshed",
+                    count_key: "community_count",
+                    scope_key: "community_count_in_scope",
+                },
+                |store| store.list_communities().context("cannot list communities"),
+                |store, community| {
+                    store
+                        .get_community_nodes(community.id)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|member| member.node_qualified_name)
+                        .collect()
+                },
+            ),
             POSTPROCESS_STAGE_ARCHITECTURE_METRICS => Ok(build_architecture_metrics_stage(
                 mode,
                 &stats,

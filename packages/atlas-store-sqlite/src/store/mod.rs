@@ -2,6 +2,7 @@ use rusqlite::Connection;
 
 mod build_state;
 mod context;
+mod file_scan;
 mod graph;
 mod helpers;
 mod history;
@@ -14,6 +15,7 @@ mod search;
 mod taxonomy;
 
 pub use self::build_state::{BuildFinishStats, GraphBuildState, GraphBuildStatus};
+pub use self::graph::{MAX_NODE_LIST_LIMIT, NodeListFilter, NodeListPage};
 pub use self::history::{
     HistoricalEdge, HistoricalNode, HistoryStatusSummary, StoredCommit, StoredEdgeHistory,
     StoredNodeHistory, StoredSnapshot, StoredSnapshotFile, StoredSnapshotMembershipBlob,

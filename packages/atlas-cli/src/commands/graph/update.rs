@@ -74,9 +74,12 @@ fn run_registered_updates(
                     let normalized = files
                         .iter()
                         .map(|path| {
-                            atlas_repo::normalize_repo_file_path(registration.root.as_path(), path)
-                                .map(|resolved| resolved.canonical)
-                                .with_context(|| format!("invalid explicit update path '{path}'"))
+                            atlas_repo::normalize_repo_change_path(
+                                registration.root.as_path(),
+                                path,
+                            )
+                            .map(|resolved| resolved.canonical)
+                            .with_context(|| format!("invalid explicit update path '{path}'"))
                         })
                         .collect::<Result<Vec<_>>>()?;
                     UpdateTarget::Files(normalized)
@@ -326,7 +329,7 @@ pub fn run_update(cli: &Cli) -> Result<()> {
             let normalized = explicit_files
                 .iter()
                 .map(|path| {
-                    atlas_repo::normalize_repo_file_path(repo_root_path.as_path(), path)
+                    atlas_repo::normalize_repo_change_path(repo_root_path.as_path(), path)
                         .map(|resolved| resolved.canonical)
                         .with_context(|| format!("invalid explicit update path '{path}'"))
                 })

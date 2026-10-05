@@ -18,6 +18,8 @@ mod query;
 mod reasoning;
 mod repo;
 mod session;
+mod shell_symbols;
+mod symbols;
 mod wake_up;
 
 pub use changes::{run_detect_changes, run_explain_change, run_impact, run_review_context};
@@ -41,6 +43,7 @@ pub use query::{run_embed, run_explain_query, run_query};
 pub use reasoning::{run_analyze, run_refactor};
 pub use repo::run_repo;
 pub use session::run_session;
+pub use symbols::run_symbols;
 pub use wake_up::run_wake_up;
 
 pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");

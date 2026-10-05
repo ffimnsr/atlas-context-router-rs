@@ -86,6 +86,7 @@ pub(crate) const TYPED_GRAPH_SCHEMA_TOOLS: &[&str] = &[
     "cross_file_links",
     "concept_clusters",
     "explain_query",
+    "list_symbols",
 ];
 
 #[cfg(test)]

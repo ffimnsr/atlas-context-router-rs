@@ -4,6 +4,7 @@ use tree_sitter::Node as TsNode;
 use atlas_core::{Edge, EdgeKind, Node, NodeKind};
 
 use crate::ast_helpers::{field_text, node_text, start_line};
+use crate::lang::common::{call_target, caller_simple_name};
 
 use super::declarations::{find_descendant_kind, method_receiver, normalize_receiver_type};
 
@@ -262,7 +263,9 @@ fn walk_go_calls<'a>(
             if let Some(caller_scope) = scope.last().cloned() {
                 // In Go, call_expression.function can be identifier or selector_expression.
                 let function = node.child_by_field_name("function");
-                let called = function.and_then(|f| go_call_target(f, source));
+                let called = function.and_then(|f| {
+                    call_target(f, source, "selector_expression", "field", "operand")
+                });
                 if let Some((text, name, receiver)) = called {
                     let receiver_type = function.and_then(|function_node| {
                         selector_receiver_type(
@@ -695,7 +698,7 @@ fn infer_call_expression_type(
     caller_scope: &CallableScope,
 ) -> Option<String> {
     let function = expr.child_by_field_name("function")?;
-    let called = go_call_target(function, source)?;
+    let called = call_target(function, source, "selector_expression", "field", "operand")?;
     let (_, callee_name, receiver) = called;
     let receiver_type = selector_receiver_type(
         function,
@@ -800,37 +803,6 @@ fn method_receiver_from_qn(qn: &str) -> Option<&str> {
     let (_, method_part) = qn.split_once("::method::")?;
     let (receiver, _) = method_part.rsplit_once('.')?;
     (!receiver.is_empty()).then_some(receiver)
-}
-
-fn go_call_target(node: TsNode<'_>, source: &[u8]) -> Option<(String, String, Option<String>)> {
-    match node.kind() {
-        "identifier" => {
-            let name = node_text(node, source).to_owned();
-            Some((name.clone(), name, None))
-        }
-        "selector_expression" => {
-            let field = node.child_by_field_name("field")?;
-            let receiver = node.child_by_field_name("operand")?;
-            let callee_name = node_text(field, source).to_owned();
-            let receiver_text = node_text(receiver, source).to_owned();
-            Some((
-                node_text(node, source).to_owned(),
-                callee_name,
-                Some(receiver_text),
-            ))
-        }
-        _ => None,
-    }
-}
-
-fn caller_simple_name(caller_qn: &str) -> &str {
-    caller_qn
-        .rsplit("::")
-        .next()
-        .unwrap_or(caller_qn)
-        .rsplit('.')
-        .next()
-        .unwrap_or(caller_qn)
 }
 
 #[allow(clippy::too_many_arguments)]

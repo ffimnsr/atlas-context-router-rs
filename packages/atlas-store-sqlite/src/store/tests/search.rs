@@ -49,6 +49,61 @@ fn fts_search_empty_query_returns_empty() {
 }
 
 #[test]
+fn fts_search_kind_accepts_aliases() {
+    let mut store = open_in_memory();
+    let func = make_node(
+        NodeKind::Function,
+        "process",
+        "a.rs::fn::process",
+        "a.rs",
+        "rust",
+    );
+    let strct = make_node(
+        NodeKind::Struct,
+        "ProcessConfig",
+        "a.rs::struct::ProcessConfig",
+        "a.rs",
+        "rust",
+    );
+    store
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &[func, strct], &[])
+        .unwrap();
+
+    let canonical = store
+        .search(&SearchQuery {
+            text: "process".to_string(),
+            kind: Some("function".to_string()),
+            limit: 10,
+            ..Default::default()
+        })
+        .unwrap();
+    let aliased = store
+        .search(&SearchQuery {
+            text: "process".to_string(),
+            kind: Some("fn".to_string()),
+            limit: 10,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(aliased.len(), canonical.len());
+    assert_eq!(aliased[0].node.name, "process");
+    assert_eq!(aliased[0].node.kind, NodeKind::Function);
+
+    // Regression: the structural scan path (empty text + regex) also honors aliases.
+    let structural = store
+        .search(&SearchQuery {
+            text: String::new(),
+            regex_pattern: Some("Process".to_string()),
+            kind: Some("record".to_string()),
+            limit: 10,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(structural.len(), 1);
+    assert_eq!(structural[0].node.name, "ProcessConfig");
+}
+
+#[test]
 fn fts_search_respects_kind_filter() {
     let mut store = open_in_memory();
     let func = make_node(

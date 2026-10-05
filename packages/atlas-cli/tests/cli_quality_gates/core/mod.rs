@@ -17,6 +17,7 @@ mod health;
 mod history;
 mod hooks;
 mod insights;
+mod listing;
 mod man;
 mod memory;
 mod postprocess;

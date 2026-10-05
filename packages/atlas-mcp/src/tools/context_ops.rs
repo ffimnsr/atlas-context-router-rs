@@ -32,23 +32,6 @@ fn context_ranking_evidence_legend_json() -> serde_json::Value {
     atlas_core::context_ranking_evidence_legend()
 }
 
-fn context_decision_lookup_query(request: &ContextRequest) -> Option<String> {
-    match &request.target {
-        ContextTarget::QualifiedName { qname } => Some(qname.clone()),
-        ContextTarget::SymbolName { name } => Some(name.clone()),
-        ContextTarget::FilePath { path } => Some(path.clone()),
-        ContextTarget::ChangedFiles { paths } => {
-            let joined = paths.iter().take(3).cloned().collect::<Vec<_>>().join(" ");
-            (!joined.is_empty()).then_some(joined)
-        }
-        ContextTarget::ChangedSymbols { qnames } => {
-            let joined = qnames.iter().take(3).cloned().collect::<Vec<_>>().join(" ");
-            (!joined.is_empty()).then_some(joined)
-        }
-        ContextTarget::EdgeQuerySeed { source_qname, .. } => Some(source_qname.clone()),
-    }
-}
-
 mod build;
 mod changes;
 mod explain;

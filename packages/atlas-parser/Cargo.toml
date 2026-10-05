@@ -1,6 +1,7 @@
 [package]
 name = "atlas-parser"
 version = "1.7.6"
+license.workspace = true
 edition = "2024"
 description = "Tree-sitter based source parsing and parser registry for Atlas"
 publish = false

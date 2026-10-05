@@ -23,6 +23,10 @@ enum CheckFileOutcome {
     Accept,
     SkipBySize,
     SkipOther,
+    /// The path vanished between listing and inspection (deleted in the worktree
+    /// mid-scan). Expected during incremental deletes, so it is not an error
+    /// and produces no warning.
+    Disappeared,
 }
 
 /// Directory/path patterns that are always ignored regardless of `.atlasignore`.
@@ -173,6 +177,12 @@ where
             }
             Ok(CheckFileOutcome::SkipOther) => {
                 tracing::debug!("skipping '{}': too large, binary, or symlink", rel_path);
+            }
+            Ok(CheckFileOutcome::Disappeared) => {
+                tracing::debug!(
+                    "skipping '{}': file disappeared before inspection",
+                    rel_path
+                );
             }
             Err(e) => {
                 tracing::warn!("skipping '{}': {}", rel_path, e);
@@ -427,10 +437,17 @@ fn git_submodule_paths(repo_root: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
 /// concern. If a symlink target should be analysed, it should be tracked directly.
 fn check_file(abs: &Utf8Path, max_bytes: u64) -> Result<CheckFileOutcome> {
     // Use symlink_metadata so we can detect symlinks without following them.
-    let sym_meta = abs
-        .as_std_path()
-        .symlink_metadata()
-        .with_context(|| format!("symlink_metadata for '{abs}'"))?;
+    // A missing path is a normal race during incremental updates that delete
+    // files while a scan is in flight; it is skipped without a warning.
+    let sym_meta = match abs.as_std_path().symlink_metadata() {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(CheckFileOutcome::Disappeared);
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("symlink_metadata for '{abs}'"));
+        }
+    };
 
     if sym_meta.file_type().is_symlink() {
         tracing::debug!("skipping '{}': symlink", abs);
@@ -442,10 +459,22 @@ fn check_file(abs: &Utf8Path, max_bytes: u64) -> Result<CheckFileOutcome> {
     if sym_meta.len() > max_bytes {
         return Ok(CheckFileOutcome::SkipBySize);
     }
-    if is_binary(abs)? {
-        return Ok(CheckFileOutcome::SkipOther);
+    match is_binary(abs) {
+        Ok(true) => Ok(CheckFileOutcome::SkipOther),
+        Ok(false) => Ok(CheckFileOutcome::Accept),
+        // The file can also vanish between metadata and open; treat the same
+        // way as a missing metadata entry instead of warning.
+        Err(error)
+            if error.chain().any(|cause| {
+                cause
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+            }) =>
+        {
+            Ok(CheckFileOutcome::Disappeared)
+        }
+        Err(error) => Err(error),
     }
-    Ok(CheckFileOutcome::Accept)
 }
 
 /// Sniff first `BINARY_SNIFF_BYTES` for null bytes.
@@ -637,6 +666,17 @@ mod tests {
     }
 
     // --- symlink policy ------------------------------------------------------
+
+    #[test]
+    fn missing_file_is_skipped_without_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        let missing = root.join("gone.rs");
+        assert!(matches!(
+            check_file(&missing, DEFAULT_MAX_FILE_BYTES).unwrap(),
+            CheckFileOutcome::Disappeared
+        ));
+    }
 
     #[test]
     fn symlink_is_skipped() {

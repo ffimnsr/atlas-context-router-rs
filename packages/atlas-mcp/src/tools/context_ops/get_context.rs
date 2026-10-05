@@ -142,7 +142,7 @@ pub(crate) fn tool_get_context(
     let include_context_ranking_evidence = output_format == crate::output::OutputFormat::Json;
     let packaged = package_context_result(&result, include_context_ranking_evidence);
     let mut packaged_value = serde_json::to_value(&packaged)?;
-    let linked_decisions = context_decision_lookup_query(&request)
+    let linked_decisions = atlas_review::decision_lookup_query(&request)
         .map(|query| {
             let hits = search_decisions_best_effort(
                 repo_root,

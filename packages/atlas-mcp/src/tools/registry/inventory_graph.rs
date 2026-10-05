@@ -165,5 +165,22 @@ pub(super) fn tools() -> Vec<Value> {
                     "required": ["name"]
                 }
         }),
+        json!({
+                "name": "list_symbols",
+                "description": "Deterministic paginated symbol inventory for this repo. Filter by kind, language, file-path prefix, or repo id and page with limit/offset; returns total match count plus next_offset so agents can enumerate the graph without FTS ranking. Ordering is stable file path, line, qualified name. Multi-repo databases list every indexed repo; symbols carry repo_id when recorded.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "kind":     { "type": "string",  "description": "Filter by node kind (e.g. 'function', 'struct'). Accepts aliases like 'fn'." },
+                        "language": { "type": "string",  "description": "Filter by language (e.g. 'rust', 'python')." },
+                        "subpath":  { "type": "string",  "description": "Restrict results to nodes whose file_path starts with this prefix (e.g. 'src/auth', 'packages/atlas-core')." },
+                        "repo_id":  { "type": "string",  "description": "Restrict results to one repo by stable repo id in multi-repo graphs." },
+                        "limit":    { "type": "integer", "description": "Maximum symbols per page (default 100, max 500)." },
+                        "offset":   { "type": "integer", "description": "Number of matching symbols to skip before this page (default 0)." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+        }),
     ]
 }

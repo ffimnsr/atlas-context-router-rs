@@ -7,6 +7,9 @@ fn edit_distance_basic() {
     assert_eq!(edit_distance("abc", "xyz", 10), 3);
     // Cap early-exit: length diff > cap
     assert_eq!(edit_distance("short", "muchlongerstring", 2), 3);
+    // Cap branch: same length, distance above cap still reports cap + 1.
+    assert_eq!(edit_distance("abcdef", "xyzuvw", 2), 3);
+    assert_eq!(edit_distance("fox", "fog", 1), 1);
 }
 
 #[test]

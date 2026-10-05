@@ -19,6 +19,12 @@ Versioning policy may evolve while Atlas is still moving quickly, but release no
 - reject `source_repo_id = 'legacy'` graph rows as `logical_inconsistency`; explicit build/update quarantines and rebuilds them under the stable identity; migration 019 drops the legacy column default from graph tables
 - resolve unscoped store lookups (file owners, node signatures, rename/delete) through a single stable repo identity and fail closed when the store holds several
 
+### Maintenance
+
+- replace hand-rolled Levenshtein edit-distance code in MCP tool suggestions, contentstore vocabulary correction, and search fuzzy matching with `strsim`, preserving the `cap + 1` early-exit contract in `atlas-search`
+- consolidate duplicated helper implementations into shared modules: parser call-edge builders and file nodes (`lang/common.rs`, `ast_helpers.rs`), Tarjan SCC (`engine/scc.rs`), per-file repo/owner annotation (`annotate.rs`), store row queries (`store/helpers.rs`), and the decision lookup query (`atlas-review`)
+- repair the `cargo deny` gate: drop obsolete per-section `version` keys in `deny.toml`, declare the workspace `MIT OR Apache-2.0` license on all crates, pin workspace path dependencies with versions, allow permissive transitive licenses (BSD-3-Clause, CC0-1.0, CDLA-Permissive-2.0, ISC), and clear all advisories (`anyhow`, `crossbeam-epoch`, `rustls`, `rustls-webpki`, yanked `chacha20`); three no-upgrade unmaintained transitives are narrowly ignored with rationale
+
 ## 1.7.6 - 2026-09-10
 
 ### Features

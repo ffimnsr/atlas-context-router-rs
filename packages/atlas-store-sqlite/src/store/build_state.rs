@@ -3,6 +3,10 @@ use rusqlite::{Row, params};
 
 use super::Store;
 
+/// Canonical column list for `graph_build_state` row mapping; shared by the
+/// single-repo and multi-repo build status queries.
+const BUILD_STATUS_COLUMNS: &str = "repo_root, state, source_repo_id, files_discovered, files_processed, files_accepted, files_skipped_by_byte_budget, files_failed, bytes_accepted, bytes_skipped, nodes_written, edges_written, budget_stop_reason, last_built_at, last_error, recovery_mode, quarantine_path, updated_at, last_indexed_ref";
+
 /// Lifecycle state of the graph build for a given repo root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GraphBuildState {
@@ -242,48 +246,16 @@ impl Store {
 
     /// Return the build status for a single repo root, or `None` if no record exists.
     pub fn get_build_status(&self, repo_root: &str) -> Result<Option<GraphBuildStatus>> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT repo_root, state, source_repo_id, files_discovered, files_processed,
-                    files_accepted, files_skipped_by_byte_budget, files_failed,
-                    bytes_accepted, bytes_skipped, nodes_written, edges_written,
-                    budget_stop_reason, last_built_at, last_error, recovery_mode,
-                    quarantine_path, updated_at, last_indexed_ref
-                 FROM graph_build_state
-                 WHERE repo_root = ?1",
-            )
-            .map_err(|e| AtlasError::Db(e.to_string()))?;
-        let mut rows = stmt
-            .query_map(params![repo_root], row_to_build_status)
-            .map_err(|e| AtlasError::Db(e.to_string()))?;
-        match rows.next() {
-            Some(Ok(status)) => Ok(Some(status)),
-            Some(Err(e)) => Err(AtlasError::Db(e.to_string())),
-            None => Ok(None),
-        }
+        let sql =
+            format!("SELECT {BUILD_STATUS_COLUMNS} FROM graph_build_state WHERE repo_root = ?1");
+        self.query_one_row(&sql, &repo_root, row_to_build_status)
     }
 
     /// Return build statuses for all repos recorded in this database.
     pub fn list_build_statuses(&self) -> Result<Vec<GraphBuildStatus>> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT repo_root, state, source_repo_id, files_discovered, files_processed,
-                    files_accepted, files_skipped_by_byte_budget, files_failed,
-                    bytes_accepted, bytes_skipped, nodes_written, edges_written,
-                    budget_stop_reason, last_built_at, last_error, recovery_mode,
-                    quarantine_path, updated_at, last_indexed_ref
-                 FROM graph_build_state
-                 ORDER BY repo_root",
-            )
-            .map_err(|e| AtlasError::Db(e.to_string()))?;
-        let rows = stmt
-            .query_map([], row_to_build_status)
-            .map_err(|e| AtlasError::Db(e.to_string()))?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
+        let sql =
+            format!("SELECT {BUILD_STATUS_COLUMNS} FROM graph_build_state ORDER BY repo_root");
+        self.query_rows(&sql, None, row_to_build_status)
     }
 
     pub fn set_build_recovery_metadata_for_repo(

@@ -738,6 +738,7 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `tool_help` | Runtime manual for one visible exported MCP tool by exact name |
 | `man` | Namespace-aware manual alias for exported MCP tools |
 | `query_graph` | Keyword search with optional `regex` SQL-UDF filter; returns compact symbol list |
+| `list_symbols` | Paginated symbol inventory with kind/language/subpath filters and total counts |
 | `batch_query_graph` | Run up to 20 `query_graph` searches in a single round-trip |
 | `search_files` | File-path discovery for config, templates, SQL, Markdown, and other non-code assets |
 | `search_content` | Literal or regex content search outside graph-symbol lookup |

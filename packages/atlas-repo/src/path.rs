@@ -6,6 +6,10 @@ use std::process::Command;
 use thiserror::Error;
 use unicode_normalization::UnicodeNormalization;
 
+mod change;
+
+pub use change::missing_change_path_candidates;
+
 /// Git environment variables that encode the *caller's* repository context.
 ///
 /// These must be stripped when spawning git subprocesses that target a
@@ -273,6 +277,27 @@ pub fn normalize_repo_file_path(
                 candidates: candidates.into_iter().map(|(path, _)| path).collect(),
             })
         }
+    }
+}
+
+/// Resolve a boundary file-path input for change workflows where the file may
+/// already be gone.
+///
+/// Behaves exactly like [`normalize_repo_file_path`] while the path exists.
+/// When the path is missing on disk (for example after `rm src/lib.rs`), the
+/// input is canonicalized syntactically instead of failing, so change
+/// consumers can classify it as a deletion. Missing-path prefix handling is
+/// documented on [`change::resolve_missing_change_path`].
+pub fn normalize_repo_change_path(
+    repo_root: &Utf8Path,
+    raw: &str,
+) -> std::result::Result<NormalizedRepoPath, RepoPathError> {
+    match normalize_repo_file_path(repo_root, raw) {
+        Ok(resolved) => Ok(resolved),
+        Err(RepoPathError::PathNotFound { .. }) => {
+            change::resolve_missing_change_path(repo_root, raw)
+        }
+        Err(other) => Err(other),
     }
 }
 
@@ -749,6 +774,55 @@ mod tests {
         let resolved = normalize_repo_file_path(root, "other-repo-name/packages/a/x.rs").unwrap();
         assert_eq!(resolved.canonical, "packages/a/x.rs");
         assert_eq!(resolved.reason, "stripped_foreign_root_prefix");
+    }
+
+    #[test]
+    fn normalize_repo_change_path_allows_missing_paths_but_stays_strict_otherwise() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join("src").as_std_path()).unwrap();
+        std::fs::write(root.join("src/lib.rs").as_std_path(), "").unwrap();
+
+        // Existing paths keep existence-based resolution semantics.
+        let existing = normalize_repo_change_path(root, "src/lib.rs").unwrap();
+        assert_eq!(existing.canonical, "src/lib.rs");
+        assert_eq!(existing.reason, "direct");
+
+        // Deleted files fall back to syntactic canonical identity.
+        let missing = normalize_repo_change_path(root, "src/gone.rs").unwrap();
+        assert_eq!(missing.canonical, "src/gone.rs");
+        assert_eq!(missing.reason, "missing_path");
+
+        let missing_abs =
+            normalize_repo_change_path(root, root.join("src/abs_gone.rs").as_str()).unwrap();
+        assert_eq!(missing_abs.canonical, "src/abs_gone.rs");
+
+        // Duplicated repo-dir prefixes are stripped deterministically even for
+        // deleted files. Foreign prefixes without the repo name or ancestor-
+        // chain evidence stay literal because existence is what disambiguates
+        // them for existing paths.
+        let repo_name = root.file_name().unwrap();
+        let prefixed =
+            normalize_repo_change_path(root, &format!("{repo_name}/src/gone2.rs")).unwrap();
+        assert_eq!(prefixed.canonical, "src/gone2.rs");
+        assert_eq!(
+            prefixed.reason,
+            "missing_path_stripped_duplicated_root_prefix"
+        );
+        let foreign = normalize_repo_change_path(root, "other-repo/src/gone3.rs").unwrap();
+        assert_eq!(foreign.canonical, "other-repo/src/gone3.rs");
+
+        // Escaping, empty, and out-of-root absolute inputs still fail closed.
+        assert!(normalize_repo_change_path(root, "../outside.rs").is_err());
+        assert_eq!(
+            normalize_repo_change_path(root, "   ").unwrap_err(),
+            RepoPathError::Empty
+        );
+        let outside = Utf8Path::new("/definitely/not/the/repo/a.rs");
+        assert!(matches!(
+            normalize_repo_change_path(root, outside.as_str()).unwrap_err(),
+            RepoPathError::NotUnderRepoRoot { .. }
+        ));
     }
 
     #[test]

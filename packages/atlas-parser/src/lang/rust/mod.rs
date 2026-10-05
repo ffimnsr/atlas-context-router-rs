@@ -1,5 +1,6 @@
 use atlas_core::{Edge, Node, ParsedFile};
 
+use crate::ast_helpers::file_node;
 use crate::traits::{LangParser, ParseContext};
 
 mod calls;
@@ -11,7 +12,7 @@ mod references;
 mod tests;
 
 use calls::resolve_same_file_calls;
-use emitter::{RustDefinitionEmitter, file_node};
+use emitter::RustDefinitionEmitter;
 use facts::RustSyntaxFacts;
 use references::resolve_same_file_references;
 
@@ -45,7 +46,7 @@ impl LangParser for RustParser {
                 (ln, false)
             }
         });
-        nodes.push(file_node(ctx.rel_path, ctx.file_hash, file_lines));
+        nodes.push(file_node(ctx.rel_path, ctx.file_hash, file_lines, "rust"));
 
         if let Some(ref tree) = tree {
             let syntax_facts = RustSyntaxFacts::extract(tree.root_node(), ctx.source)

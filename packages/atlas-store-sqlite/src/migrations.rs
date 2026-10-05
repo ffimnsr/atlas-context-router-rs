@@ -98,9 +98,14 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "019_drop_legacy_source_repo_defaults",
         up_sql: include_str!("migrations/019_drop_legacy_source_repo_defaults.sql"),
     },
+    Migration {
+        version: 20,
+        name: "020_retrieval_chunks_repo_scope",
+        up_sql: include_str!("migrations/020_retrieval_chunks_repo_scope.sql"),
+    },
 ];
 
-pub const LATEST_VERSION: i32 = 19;
+pub const LATEST_VERSION: i32 = 20;
 
 pub const MIGRATION_SET: MigrationSet = MigrationSet {
     db_kind: "worldtree",

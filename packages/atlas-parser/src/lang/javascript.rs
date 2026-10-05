@@ -2,7 +2,10 @@ use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile};
 use std::collections::{HashMap, HashSet};
 use tree_sitter::{Language, Node as TsNode};
 
-use crate::ast_helpers::{end_line, node_text, start_line};
+use crate::ast_helpers::{end_line, file_node, node_text, start_line};
+use crate::lang::common::{
+    call_edge, call_target, callable_qn_map, caller_simple_name, contains_edge,
+};
 use crate::query_helpers::{compile_static_query, run_query};
 use crate::traits::{LangParser, ParseContext};
 
@@ -214,42 +217,6 @@ fn parse_source(
 // ---------------------------------------------------------------------------
 // Node constructors
 // ---------------------------------------------------------------------------
-
-fn file_node(rel_path: &str, file_hash: &str, line_end: u32, lang: &str) -> Node {
-    Node {
-        id: NodeId::UNSET,
-        kind: NodeKind::File,
-        name: rel_path.rsplit('/').next().unwrap_or(rel_path).to_owned(),
-        qualified_name: rel_path.to_owned(),
-        file_path: rel_path.to_owned(),
-        line_start: 1,
-        line_end,
-        language: lang.to_owned(),
-        parent_name: None,
-        params: None,
-        return_type: None,
-        modifiers: None,
-        is_test: false,
-        file_hash: file_hash.to_owned(),
-        extra_json: serde_json::Value::Null,
-        repo_provenance: None,
-    }
-}
-
-fn contains_edge(parent_qn: &str, child_qn: &str, file_path: &str, line: u32) -> Edge {
-    Edge {
-        id: 0,
-        kind: EdgeKind::Contains,
-        source_qn: parent_qn.to_owned(),
-        target_qn: child_qn.to_owned(),
-        file_path: file_path.to_owned(),
-        line: Some(line),
-        confidence: 1.0,
-        confidence_tier: Some("definite".to_owned()),
-        extra_json: serde_json::Value::Null,
-        repo_provenance: None,
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Visitors
@@ -858,15 +825,7 @@ fn resolve_js_calls(
     facts: &JsTsSyntaxFacts,
     nodes: &[Node],
 ) -> Vec<Edge> {
-    let mut callables: HashMap<String, String> = HashMap::new();
-    for n in nodes {
-        if matches!(
-            n.kind,
-            NodeKind::Function | NodeKind::Method | NodeKind::Test
-        ) {
-            callables.insert(n.name.clone(), n.qualified_name.clone());
-        }
-    }
+    let callables = callable_qn_map(nodes, true);
     let mut edges = Vec::new();
     let mut scope: Vec<String> = Vec::new();
     walk_js_calls(
@@ -940,14 +899,14 @@ fn walk_js_calls<'a>(
     {
         let called = node
             .child_by_field_name("function")
-            .and_then(|f| js_call_target(f, source));
+            .and_then(|f| call_target(f, source, "member_expression", "property", "object"));
         if let Some((text, name, receiver)) = called
             && !is_self_call(&caller_qn, &name, receiver.as_deref())
         {
             if let Some(callee_qn) = callables.get(&name)
                 && *callee_qn != caller_qn
             {
-                edges.push(js_call_edge(
+                edges.push(call_edge(
                     &caller_qn,
                     callee_qn,
                     rel_path,
@@ -957,7 +916,7 @@ fn walk_js_calls<'a>(
                     true,
                 ));
             } else if !text.is_empty() {
-                edges.push(js_call_edge(
+                edges.push(call_edge(
                     &caller_qn,
                     &text,
                     rel_path,
@@ -977,7 +936,7 @@ fn walk_js_calls<'a>(
         if let Some(callee_qn) = callables.get(&name)
             && *callee_qn != caller_qn
         {
-            edges.push(js_call_edge(
+            edges.push(call_edge(
                 &caller_qn,
                 callee_qn,
                 rel_path,
@@ -987,7 +946,7 @@ fn walk_js_calls<'a>(
                 true,
             ));
         } else if !text.is_empty() {
-            edges.push(js_call_edge(
+            edges.push(call_edge(
                 &caller_qn,
                 &text,
                 rel_path,
@@ -1002,27 +961,6 @@ fn walk_js_calls<'a>(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         walk_js_calls(child, source, rel_path, facts, callables, scope, edges);
-    }
-}
-
-fn js_call_target(node: TsNode<'_>, source: &[u8]) -> Option<(String, String, Option<String>)> {
-    match node.kind() {
-        "identifier" => {
-            let name = node_text(node, source).to_owned();
-            Some((name.clone(), name, None))
-        }
-        "member_expression" => {
-            let property = node.child_by_field_name("property")?;
-            let object = node.child_by_field_name("object")?;
-            let callee_name = node_text(property, source).to_owned();
-            let receiver_text = node_text(object, source).to_owned();
-            Some((
-                node_text(node, source).to_owned(),
-                callee_name,
-                Some(receiver_text),
-            ))
-        }
-        _ => None,
     }
 }
 
@@ -1051,43 +989,6 @@ fn is_self_call(caller_qn: &str, callee_name: &str, receiver: Option<&str>) -> b
         return false;
     }
     caller_simple_name(caller_qn) == callee_name
-}
-
-fn caller_simple_name(caller_qn: &str) -> &str {
-    caller_qn
-        .rsplit("::")
-        .next()
-        .unwrap_or(caller_qn)
-        .rsplit('.')
-        .next()
-        .unwrap_or(caller_qn)
-}
-
-fn js_call_edge(
-    caller: &str,
-    callee: &str,
-    rel_path: &str,
-    line: u32,
-    text: &str,
-    receiver: Option<&str>,
-    same_file: bool,
-) -> Edge {
-    Edge {
-        id: 0,
-        kind: EdgeKind::Calls,
-        source_qn: caller.to_owned(),
-        target_qn: callee.to_owned(),
-        file_path: rel_path.to_owned(),
-        line: Some(line),
-        confidence: if same_file { 0.8 } else { 0.3 },
-        confidence_tier: Some(if same_file { "same_file" } else { "text" }.to_owned()),
-        extra_json: serde_json::json!({
-            "callee_text": text,
-            "callee_name": caller_simple_name(callee),
-            "receiver_text": receiver,
-        }),
-        repo_provenance: None,
-    }
 }
 
 // ---------------------------------------------------------------------------

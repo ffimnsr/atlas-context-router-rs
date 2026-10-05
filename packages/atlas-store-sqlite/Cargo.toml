@@ -1,6 +1,7 @@
 [package]
 name = "atlas-store-sqlite"
 version = "1.7.6"
+license.workspace = true
 edition = "2024"
 description = "SQLite graph store and migrations for Atlas code graph persistence"
 publish = false

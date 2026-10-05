@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use atlas_core::{
     BudgetManager, BudgetPolicy, BudgetStatus, InsightFinding, InsightSummary, NodeKind,
+    kinds::parse_kind_alias,
 };
 use atlas_reasoning::{
     AnalysisRankingPrimitives, AnalysisTrimmingPrimitives, ComponentLabelRequest,
@@ -631,9 +632,11 @@ pub(super) fn tool_analyze_dead_code(
     let requested_limit = u64_arg(args, "limit").unwrap_or(50) as usize;
     let summary = bool_arg(args, "summary").unwrap_or(false);
     let exclude_kind_strs = string_array_arg(args, "exclude_kind").unwrap_or_default();
+    // Accept the same kind aliases as `list_symbols` (`fn`, `record`, ...);
+    // `excluded_kinds` in the response keeps the caller-provided values.
     let exclude_kinds: Vec<NodeKind> = exclude_kind_strs
         .iter()
-        .filter_map(|k| k.parse().ok())
+        .filter_map(|k| parse_kind_alias(k))
         .collect();
     // `code_only` is always true at the store level; the flag is accepted for
     // forward compatibility but has no effect on the current implementation.

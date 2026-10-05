@@ -236,6 +236,19 @@ pub(crate) struct QueryGraphArgsSchema {
 #[allow(dead_code)]
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct ListSymbolsArgsSchema {
+    kind: Option<String>,
+    language: Option<String>,
+    subpath: Option<String>,
+    repo_id: Option<String>,
+    limit: Option<u64>,
+    offset: Option<u64>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct BatchQueryGraphItemArgsSchema {
     text: Option<String>,
     kind: Option<String>,

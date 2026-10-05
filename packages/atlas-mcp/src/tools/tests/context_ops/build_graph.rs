@@ -91,6 +91,40 @@ fn update_graph_accepts_staged_base_and_files() {
 }
 
 #[test]
+fn update_graph_files_missing_path_is_deletion() {
+    let fixture = setup_git_mcp_fixture();
+    let repo_root = std::path::Path::new(&fixture.repo_root);
+    std::fs::remove_file(repo_root.join("src/service.rs")).expect("remove deleted file");
+
+    // `change_source.files` may reference files deleted before the call ran:
+    // they must classify as deletions instead of failing canonicalization.
+    let resp = call(
+        "update_graph",
+        Some(&serde_json::json!({
+            "change_source": { "kind": "files", "files": ["src/service.rs"] },
+            "output_format": "json"
+        })),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("update_graph deleted file");
+
+    assert_ne!(resp["isError"], serde_json::json!(true));
+    assert_eq!(
+        resp.pointer("/structuredContent/files_deleted"),
+        Some(&serde_json::json!(1))
+    );
+    assert_eq!(
+        resp.pointer("/structuredContent/parse_error_count"),
+        Some(&serde_json::json!(0))
+    );
+    assert_eq!(
+        resp.pointer("/structuredContent/warnings"),
+        Some(&serde_json::json!([]))
+    );
+}
+
+#[test]
 fn update_graph_rejects_missing_or_null_change_source() {
     let fixture = setup_git_mcp_fixture();
     for args in [

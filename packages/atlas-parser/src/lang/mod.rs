@@ -1,5 +1,6 @@
 pub mod bash;
 pub mod c;
+pub(crate) mod common;
 pub mod cpp;
 pub mod csharp;
 pub mod css;

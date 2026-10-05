@@ -20,6 +20,7 @@ mod graph;
 mod health;
 mod readiness;
 mod registry;
+mod symbols;
 
 pub(super) struct McpFixture {
     pub(super) _dir: TempDir,

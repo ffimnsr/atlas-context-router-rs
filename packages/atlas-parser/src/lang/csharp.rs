@@ -7,7 +7,8 @@ use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile};
 use regex::Regex;
 use tree_sitter::Node as TsNode;
 
-use crate::ast_helpers::{end_line, node_text, start_line};
+use crate::ast_helpers::{end_line, file_node, node_text, start_line};
+use crate::lang::common::{contains_edge, tier_edge};
 use crate::query_helpers::{compile_static_query, run_query};
 use crate::traits::{LangParser, ParseContext};
 
@@ -106,7 +107,7 @@ impl LangParser for CSharpParser {
         let mut nodes = Vec::new();
         let mut edges = Vec::new();
         let line_count = ctx.source.iter().filter(|&&b| b == b'\n').count() as u32 + 1;
-        nodes.push(file_node(ctx.rel_path, ctx.file_hash, line_count));
+        nodes.push(file_node(ctx.rel_path, ctx.file_hash, line_count, "csharp"));
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
@@ -459,7 +460,8 @@ fn emit_using(
         repo_provenance: None,
     });
     edges.push(contains_edge(parent_qn, &qn, ctx.rel_path, line));
-    edges.push(imports_edge(
+    edges.push(tier_edge(
+        EdgeKind::Imports,
         parent_qn,
         &qn,
         ctx.rel_path,
@@ -543,7 +545,8 @@ fn walk_calls(
         && let Some(callee) = invocation_name(node, ctx.source)
         && let Some(target_qn) = methods.get(&callee)
     {
-        edges.push(call_edge(
+        edges.push(tier_edge(
+            EdgeKind::Calls,
             owner_qn,
             target_qn,
             ctx.rel_path,
@@ -587,72 +590,6 @@ fn node_key(node: TsNode<'_>) -> CSharpNodeKey {
     CSharpNodeKey {
         start_byte: node.start_byte(),
         end_byte: node.end_byte(),
-    }
-}
-
-fn file_node(rel_path: &str, file_hash: &str, line_end: u32) -> Node {
-    Node {
-        id: NodeId::UNSET,
-        kind: NodeKind::File,
-        name: rel_path.rsplit('/').next().unwrap_or(rel_path).to_owned(),
-        qualified_name: rel_path.to_owned(),
-        file_path: rel_path.to_owned(),
-        line_start: 1,
-        line_end,
-        language: "csharp".to_owned(),
-        parent_name: None,
-        params: None,
-        return_type: None,
-        modifiers: None,
-        is_test: false,
-        file_hash: file_hash.to_owned(),
-        extra_json: serde_json::Value::Null,
-        repo_provenance: None,
-    }
-}
-
-fn contains_edge(parent_qn: &str, child_qn: &str, file_path: &str, line: u32) -> Edge {
-    Edge {
-        id: 0,
-        kind: EdgeKind::Contains,
-        source_qn: parent_qn.to_owned(),
-        target_qn: child_qn.to_owned(),
-        file_path: file_path.to_owned(),
-        line: Some(line),
-        confidence: 1.0,
-        confidence_tier: Some("definite".to_owned()),
-        extra_json: serde_json::Value::Null,
-        repo_provenance: None,
-    }
-}
-
-fn imports_edge(source_qn: &str, target_qn: &str, file_path: &str, line: u32, tier: &str) -> Edge {
-    Edge {
-        id: 0,
-        kind: EdgeKind::Imports,
-        source_qn: source_qn.to_owned(),
-        target_qn: target_qn.to_owned(),
-        file_path: file_path.to_owned(),
-        line: Some(line),
-        confidence: 1.0,
-        confidence_tier: Some(tier.to_owned()),
-        extra_json: serde_json::Value::Null,
-        repo_provenance: None,
-    }
-}
-
-fn call_edge(source_qn: &str, target_qn: &str, file_path: &str, line: u32, tier: &str) -> Edge {
-    Edge {
-        id: 0,
-        kind: EdgeKind::Calls,
-        source_qn: source_qn.to_owned(),
-        target_qn: target_qn.to_owned(),
-        file_path: file_path.to_owned(),
-        line: Some(line),
-        confidence: 1.0,
-        confidence_tier: Some(tier.to_owned()),
-        extra_json: serde_json::Value::Null,
-        repo_provenance: None,
     }
 }
 

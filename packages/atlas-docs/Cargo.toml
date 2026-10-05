@@ -1,6 +1,7 @@
 [package]
 name = "atlas-docs"
 version = "1.7.6"
+license.workspace = true
 edition = "2024"
 description = "Markdown documentation generation and dependency diagram export for Atlas code graphs"
 

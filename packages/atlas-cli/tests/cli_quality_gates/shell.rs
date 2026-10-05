@@ -67,6 +67,10 @@ fn shell_help_lists_slash_commands() {
     assert!(stdout.contains("/query"), "help missing /query: {stdout}");
     assert!(stdout.contains("/stats"), "help missing /stats: {stdout}");
     assert!(
+        stdout.contains("/symbols"),
+        "help missing /symbols: {stdout}"
+    );
+    assert!(
         stdout.contains("/changes"),
         "help missing /changes: {stdout}"
     );
@@ -155,6 +159,32 @@ fn shell_session_status_runs_without_error() {
     assert!(
         stdout.contains("Session status:") || stdout.contains("No active session"),
         "unexpected session output: {stdout}"
+    );
+}
+
+#[test]
+fn shell_symbols_lists_functions_with_paging_hint() {
+    let repo = setup_fixture_repo();
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let stdout = run_shell_with_input(
+        repo.path(),
+        b"/symbols --kind function --limit 1\nexit\n",
+    );
+    assert!(stdout.contains("Symbols:"), "missing symbols header: {stdout}");
+    assert!(
+        stdout.contains("next: /symbols --offset 1 --limit 1 --kind function"),
+        "next-page hint must preserve filters: {stdout}"
+    );
+
+    let filtered = run_shell_with_input(
+        repo.path(),
+        b"/symbols --kind function --subpath src --limit 1\nexit\n",
+    );
+    assert!(
+        filtered.contains("--subpath src"),
+        "subpath filter must survive normalization and the paging hint: {filtered}"
     );
 }
 

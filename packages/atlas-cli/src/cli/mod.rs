@@ -224,6 +224,41 @@ pub enum Command {
         all_repos: bool,
     },
 
+    /// List graph symbols with deterministic ordering and pagination.
+    Symbols {
+        /// Filter by node kind (e.g. `function`, `struct`); accepts aliases like `fn`.
+        #[arg(long)]
+        kind: Option<String>,
+
+        /// Filter by language.
+        #[arg(long)]
+        language: Option<String>,
+
+        /// Filter by a file path prefix (subpath within the repo).
+        #[arg(long)]
+        subpath: Option<String>,
+
+        /// Restrict listing to one registered repo by stable repo id.
+        #[arg(long)]
+        repo_id: Option<String>,
+
+        /// Maximum symbols per page.
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+
+        /// Number of matching symbols to skip before this page starts.
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+
+        /// Allow listing on a stale graph; prints a freshness warning.
+        #[arg(long)]
+        allow_stale: bool,
+
+        /// Allow listing on a partial (degraded) graph.
+        #[arg(long)]
+        allow_partial: bool,
+    },
+
     /// Show runtime manual for one visible exported MCP tool.
     Man {
         /// Manual namespace. Must be `mcp`.

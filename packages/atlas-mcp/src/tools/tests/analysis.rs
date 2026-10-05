@@ -234,6 +234,36 @@ fn analyze_dead_code_exclude_kind_echoed_in_response() {
 }
 
 #[test]
+fn analyze_dead_code_exclude_kind_accepts_aliases() {
+    let fixture = setup_mcp_fixture();
+
+    let canonical = call(
+        "analyze_dead_code",
+        Some(&serde_json::json!({ "exclude_kind": ["function"], "output_format": "json" })),
+        "/repo",
+        &fixture.db_path,
+    )
+    .expect("analyze_dead_code canonical exclude_kind call");
+    let aliased = call(
+        "analyze_dead_code",
+        Some(&serde_json::json!({ "exclude_kind": ["fn"], "output_format": "json" })),
+        "/repo",
+        &fixture.db_path,
+    )
+    .expect("analyze_dead_code aliased exclude_kind call");
+
+    let canonical: serde_json::Value =
+        serde_json::from_str(&unwrap_tool_text(canonical)).expect("parse canonical json");
+    let aliased: serde_json::Value =
+        serde_json::from_str(&unwrap_tool_text(aliased)).expect("parse aliased json");
+
+    assert_eq!(
+        aliased["summary"]["candidate_count"], canonical["summary"]["candidate_count"],
+        "'fn' must exclude the same candidates as 'function'"
+    );
+}
+
+#[test]
 fn analyze_remove_response_includes_compact_file_and_edge_omit_counts() {
     let fixture = setup_mcp_fixture();
     let args =

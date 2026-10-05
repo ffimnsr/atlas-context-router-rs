@@ -287,6 +287,7 @@ fn tool_output_schema_for(name: &str) -> Option<Value> {
         "analyze_dead_code" => Some(analyze_dead_code_output_schema()),
         "analyze_dependency" => Some(analyze_dependency_output_schema()),
         "resolve_symbol" => Some(resolve_symbol_output_schema()),
+        "list_symbols" => Some(list_symbols_output_schema()),
         "search_files" => Some(search_files_output_schema()),
         "search_content" => Some(search_content_output_schema()),
         "read_file_excerpt" => Some(read_file_excerpt_output_schema()),

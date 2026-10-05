@@ -3,7 +3,7 @@ use atlas_adapters::{
     AdapterHooks, CliAdapter, PendingEvent, extract_decision_event_with_details,
     extract_reasoning_event,
 };
-use atlas_core::GraphToolRequirement;
+use atlas_core::{GraphToolRequirement, kinds::parse_kind_alias};
 use atlas_reasoning::{
     AnalysisRankingPrimitives, AnalysisTrimmingPrimitives, ReasoningEngine,
     sort_dead_code_candidates, sort_dependency_result, sort_refactor_safety_result,
@@ -234,8 +234,23 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                         .unwrap_or_else(|| raw.to_owned())
                 });
                 let allowlist_refs: Vec<&str> = allowlist.iter().map(String::as_str).collect();
-                let exclude_kinds: Vec<atlas_core::NodeKind> =
-                    exclude_kind.iter().filter_map(|k| k.parse().ok()).collect();
+                // Accept the same kind aliases as `--kind` (`fn`, `record`, ...).
+                // Unknown values are surfaced instead of being dropped silently.
+                let mut exclude_kinds: Vec<atlas_core::NodeKind> =
+                    Vec::with_capacity(exclude_kind.len());
+                let mut unrecognized_exclude_kinds: Vec<&str> = Vec::new();
+                for raw in exclude_kind {
+                    match parse_kind_alias(raw) {
+                        Some(kind) => exclude_kinds.push(kind),
+                        None => unrecognized_exclude_kinds.push(raw.as_str()),
+                    }
+                }
+                if !unrecognized_exclude_kinds.is_empty() {
+                    eprintln!(
+                        "warning: ignoring unrecognized --exclude-kind values: {}",
+                        unrecognized_exclude_kinds.join(", ")
+                    );
+                }
                 let mut candidates = engine
                     .detect_dead_code(
                         &allowlist_refs,

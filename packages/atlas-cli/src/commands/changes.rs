@@ -37,7 +37,7 @@ fn normalize_explicit_files(
     explicit_files
         .iter()
         .map(|path| {
-            atlas_repo::normalize_repo_file_path(repo_root, path)
+            atlas_repo::normalize_repo_change_path(repo_root, path)
                 .map(|resolved| resolved.canonical)
                 .with_context(|| format!("invalid explicit file path '{path}'"))
         })

@@ -813,6 +813,40 @@ fn analyze_dead_code_cli_and_mcp_share_ordering_primitives() {
 }
 
 #[test]
+fn analyze_dead_code_exclude_kind_accepts_aliases() {
+    // Dedicated repo with a genuinely dead private fn: the baseline keeps it
+    // as a candidate while `--exclude-kind fn` must drop it.
+    let repo = setup_repo(&[(
+        "src/lib.rs",
+        "pub fn live() -> u32 {\n    1\n}\n\nfn dead() -> u32 {\n    42\n}\n",
+    )]);
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let baseline = read_json_data_output(
+        "analyze_dead_code",
+        run_atlas(repo.path(), &["--json", "analyze", "dead-code"]),
+    );
+    assert!(
+        !baseline.as_array().expect("candidates array").is_empty(),
+        "fixture must produce a dead-code candidate"
+    );
+
+    let excluded = read_json_data_output(
+        "analyze_dead_code",
+        run_atlas(
+            repo.path(),
+            &["--json", "analyze", "dead-code", "--exclude-kind", "fn"],
+        ),
+    );
+    assert_eq!(
+        excluded.as_array().expect("candidates array").len(),
+        0,
+        "--exclude-kind fn must exclude function candidates"
+    );
+}
+
+#[test]
 fn analyze_dependency_cli_and_mcp_share_ordering_primitives() {
     let repo = setup_repo(&[
         (

@@ -14,6 +14,7 @@ mod patterns;
 mod removal;
 mod rename;
 mod risk;
+mod scc;
 
 #[cfg(test)]
 mod tests;

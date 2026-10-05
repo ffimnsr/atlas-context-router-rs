@@ -1425,7 +1425,7 @@ pub(crate) fn suggest_tool_names(input: &str) -> Vec<String> {
             let hay = tool.name.to_ascii_lowercase();
             let starts_with = hay.starts_with(&needle);
             let contains = hay.contains(&needle);
-            let distance = levenshtein(&needle, &hay);
+            let distance = strsim::levenshtein(&needle, &hay);
             (starts_with, contains, distance, tool.name)
         })
         .collect::<Vec<_>>();
@@ -1444,35 +1444,6 @@ pub(crate) fn suggest_tool_names(input: &str) -> Vec<String> {
         .take(MAX_SUGGESTIONS)
         .map(|(_, _, _, name)| name.to_string())
         .collect()
-}
-
-fn levenshtein(left: &str, right: &str) -> usize {
-    if left == right {
-        return 0;
-    }
-    if left.is_empty() {
-        return right.chars().count();
-    }
-    if right.is_empty() {
-        return left.chars().count();
-    }
-
-    let right_chars = right.chars().collect::<Vec<_>>();
-    let mut prev = (0..=right_chars.len()).collect::<Vec<_>>();
-    let mut curr = vec![0usize; right_chars.len() + 1];
-
-    for (left_idx, left_char) in left.chars().enumerate() {
-        curr[0] = left_idx + 1;
-        for (right_idx, right_char) in right_chars.iter().enumerate() {
-            let cost = usize::from(left_char != *right_char);
-            curr[right_idx + 1] = (curr[right_idx] + 1)
-                .min(prev[right_idx + 1] + 1)
-                .min(prev[right_idx] + cost);
-        }
-        std::mem::swap(&mut prev, &mut curr);
-    }
-
-    prev[right_chars.len()]
 }
 
 fn tool_result_contract_label(tool_name: &str) -> &'static str {

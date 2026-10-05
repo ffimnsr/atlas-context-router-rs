@@ -5,16 +5,17 @@ use std::fs;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use atlas_core::{BudgetReport, BuildUpdateBudgetCounters, PackageOwner, model::ParsedFile};
+use atlas_core::{BudgetReport, BuildUpdateBudgetCounters, model::ParsedFile};
 use atlas_parser::{ExternalParserConfig, ParserRegistry};
 use atlas_repo::{
     collect_supported_files_with_stats, discover_package_owners, find_repo_root, hash_file,
-    head_ref, stable_repo_fingerprint, stable_repo_id,
+    head_ref, stable_repo_id,
 };
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 use rayon::prelude::*;
 
+use crate::annotate::{annotate_parsed_file_owner, annotate_parsed_file_repo};
 use crate::build_budget::{BuildBudgetDecision, BuildBudgetTracker};
 use crate::call_resolution::reconcile_call_targets;
 use crate::config::BuildRunBudget;
@@ -388,107 +389,6 @@ pub fn build_graph(
 #[allow(dead_code)]
 pub fn resolve_repo_root(start_dir: &str) -> Result<camino::Utf8PathBuf> {
     find_repo_root(Utf8Path::new(start_dir)).context("cannot find git repo root")
-}
-
-fn annotate_parsed_file_repo(
-    parsed_file: &mut ParsedFile,
-    repo_id: &str,
-    repo_root: &str,
-    namespace_qnames: bool,
-) {
-    if namespace_qnames {
-        for node in &mut parsed_file.nodes {
-            let original = node.qualified_name.clone();
-            node.qualified_name = namespace_qname(repo_id, &original);
-            node.parent_name = node
-                .parent_name
-                .as_deref()
-                .map(|parent| namespace_qname(repo_id, parent));
-        }
-        for edge in &mut parsed_file.edges {
-            edge.source_qn = namespace_qname(repo_id, &edge.source_qn);
-            edge.target_qn = namespace_qname(repo_id, &edge.target_qn);
-        }
-    }
-
-    let repo_provenance = atlas_core::RepoProvenance::new(repo_id.to_owned())
-        .with_repo_fingerprint(stable_repo_fingerprint(Utf8Path::new(repo_root), None))
-        .with_repo_root(repo_root.to_owned());
-
-    for node in &mut parsed_file.nodes {
-        let mut extra = node.extra_json.as_object().cloned().unwrap_or_default();
-        extra.insert(
-            "repo_id".to_owned(),
-            serde_json::Value::String(repo_id.to_owned()),
-        );
-        extra.insert(
-            "repo_root".to_owned(),
-            serde_json::Value::String(repo_root.to_owned()),
-        );
-        extra.insert(
-            "repo_provenance".to_owned(),
-            serde_json::to_value(&repo_provenance).unwrap_or(serde_json::Value::Null),
-        );
-        node.extra_json = serde_json::Value::Object(extra);
-        node.repo_provenance = Some(repo_provenance.clone());
-    }
-    for edge in &mut parsed_file.edges {
-        let mut extra = edge.extra_json.as_object().cloned().unwrap_or_default();
-        extra.insert(
-            "repo_id".to_owned(),
-            serde_json::Value::String(repo_id.to_owned()),
-        );
-        extra.insert(
-            "repo_root".to_owned(),
-            serde_json::Value::String(repo_root.to_owned()),
-        );
-        extra.insert(
-            "repo_provenance".to_owned(),
-            serde_json::to_value(&repo_provenance).unwrap_or(serde_json::Value::Null),
-        );
-        edge.extra_json = serde_json::Value::Object(extra);
-        edge.repo_provenance = Some(repo_provenance.clone());
-    }
-}
-
-fn namespace_qname(repo_id: &str, qname: &str) -> String {
-    if qname.starts_with("repo::") {
-        qname.to_owned()
-    } else {
-        format!("repo::{repo_id}::{qname}")
-    }
-}
-
-fn annotate_parsed_file_owner(parsed_file: &mut ParsedFile, owner: Option<&PackageOwner>) {
-    let Some(owner) = owner else {
-        return;
-    };
-    for node in &mut parsed_file.nodes {
-        let mut extra = node.extra_json.as_object().cloned().unwrap_or_default();
-        extra.insert(
-            "owner_id".to_owned(),
-            serde_json::Value::String(owner.owner_id.clone()),
-        );
-        extra.insert(
-            "owner_kind".to_owned(),
-            serde_json::Value::String(owner.kind.as_str().to_owned()),
-        );
-        extra.insert(
-            "owner_root".to_owned(),
-            serde_json::Value::String(owner.root.clone()),
-        );
-        extra.insert(
-            "owner_manifest_path".to_owned(),
-            serde_json::Value::String(owner.manifest_path.clone()),
-        );
-        if let Some(package_name) = &owner.package_name {
-            extra.insert(
-                "owner_name".to_owned(),
-                serde_json::Value::String(package_name.clone()),
-            );
-        }
-        node.extra_json = serde_json::Value::Object(extra);
-    }
 }
 
 #[cfg(test)]

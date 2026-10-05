@@ -9,6 +9,7 @@ use serde_json::json;
 
 use super::InsightsEngine;
 use super::metrics::{FileMetric, ModuleMetric, NodeMetric};
+use super::scc::strongly_connected_components;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArchitectureModuleNode {
@@ -578,81 +579,6 @@ fn build_module_adjacency(
         neighbors.dedup();
     }
     adjacency
-}
-
-fn strongly_connected_components(adjacency: &BTreeMap<String, Vec<String>>) -> Vec<Vec<String>> {
-    struct TarjanState {
-        index: usize,
-        stack: Vec<String>,
-        on_stack: HashSet<String>,
-        indices: HashMap<String, usize>,
-        lowlink: HashMap<String, usize>,
-        components: Vec<Vec<String>>,
-    }
-
-    fn strong_connect(
-        node: &str,
-        adjacency: &BTreeMap<String, Vec<String>>,
-        state: &mut TarjanState,
-    ) {
-        let current_index = state.index;
-        state.indices.insert(node.to_owned(), current_index);
-        state.lowlink.insert(node.to_owned(), current_index);
-        state.index += 1;
-        state.stack.push(node.to_owned());
-        state.on_stack.insert(node.to_owned());
-
-        let neighbors = adjacency.get(node).cloned().unwrap_or_default();
-        for neighbor in neighbors {
-            if !state.indices.contains_key(&neighbor) {
-                strong_connect(&neighbor, adjacency, state);
-                let low_neighbor = state.lowlink[&neighbor];
-                let low_node = state.lowlink[node];
-                state
-                    .lowlink
-                    .insert(node.to_owned(), low_node.min(low_neighbor));
-            } else if state.on_stack.contains(&neighbor) {
-                let neighbor_index = state.indices[&neighbor];
-                let low_node = state.lowlink[node];
-                state
-                    .lowlink
-                    .insert(node.to_owned(), low_node.min(neighbor_index));
-            }
-        }
-
-        if state.lowlink[node] == state.indices[node] {
-            let mut component = Vec::new();
-            while let Some(item) = state.stack.pop() {
-                state.on_stack.remove(&item);
-                component.push(item.clone());
-                if item == node {
-                    break;
-                }
-            }
-            component.sort();
-            state.components.push(component);
-        }
-    }
-
-    let mut state = TarjanState {
-        index: 0,
-        stack: Vec::new(),
-        on_stack: HashSet::new(),
-        indices: HashMap::new(),
-        lowlink: HashMap::new(),
-        components: Vec::new(),
-    };
-
-    for node in adjacency.keys() {
-        if !state.indices.contains_key(node) {
-            strong_connect(node, adjacency, &mut state);
-        }
-    }
-
-    state
-        .components
-        .sort_by(|left, right| left.first().cmp(&right.first()));
-    state.components
 }
 
 fn deterministic_cycle_path(

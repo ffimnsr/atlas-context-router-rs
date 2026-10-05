@@ -433,7 +433,7 @@ fn fuzzy_name_distance(query: &str, candidate: &str) -> Option<usize> {
         return None;
     }
     let threshold = fuzzy_distance_threshold(query, candidate);
-    let distance = levenshtein(query, candidate);
+    let distance = strsim::levenshtein(query, candidate);
     (distance <= threshold).then_some(distance)
 }
 
@@ -445,7 +445,7 @@ fn fuzzy_name_token_match(query: &str, candidate: &str) -> Option<(String, Strin
                 if candidate_token.contains(token) || token == candidate_token {
                     return None;
                 }
-                let distance = levenshtein(token, candidate_token);
+                let distance = strsim::levenshtein(token, candidate_token);
                 (distance <= fuzzy_distance_threshold(token, candidate_token)).then_some((
                     token.to_owned(),
                     candidate_token.to_owned(),
@@ -467,35 +467,6 @@ fn fuzzy_distance_threshold(left: &str, right: &str) -> usize {
         5..=8 => 2,
         _ => 3,
     }
-}
-
-fn levenshtein(left: &str, right: &str) -> usize {
-    if left == right {
-        return 0;
-    }
-    if left.is_empty() {
-        return right.chars().count();
-    }
-    if right.is_empty() {
-        return left.chars().count();
-    }
-
-    let right_chars = right.chars().collect::<Vec<_>>();
-    let mut prev = (0..=right_chars.len()).collect::<Vec<_>>();
-    let mut curr = vec![0usize; right_chars.len() + 1];
-
-    for (left_idx, left_ch) in left.chars().enumerate() {
-        curr[0] = left_idx + 1;
-        for (right_idx, right_ch) in right_chars.iter().enumerate() {
-            let cost = usize::from(left_ch != *right_ch);
-            curr[right_idx + 1] = (prev[right_idx + 1] + 1)
-                .min(curr[right_idx] + 1)
-                .min(prev[right_idx] + cost);
-        }
-        std::mem::swap(&mut prev, &mut curr);
-    }
-
-    prev[right_chars.len()]
 }
 
 #[cfg(test)]

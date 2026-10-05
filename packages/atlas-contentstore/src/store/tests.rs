@@ -1,6 +1,6 @@
 use tempfile::NamedTempFile;
 
-use super::util::{is_corruption_error, levenshtein, rrf_merge};
+use super::util::{is_corruption_error, rrf_merge};
 use super::*;
 
 // Compile-time enforcement: `ContentStore` must not implement `Send` or `Sync`.
@@ -308,14 +308,6 @@ fn rrf_merge_deduplicates() {
     let merged = rrf_merge(&a, &b);
     assert_eq!(merged.len(), 3, "RRF merge should deduplicate");
     assert_eq!(merged[0].chunk_id, "chunk-alpha");
-}
-
-#[test]
-fn levenshtein_distances() {
-    assert_eq!(levenshtein("kitten", "sitting"), 3);
-    assert_eq!(levenshtein("fox", "fog"), 1);
-    assert_eq!(levenshtein("identical", "identical"), 0);
-    assert_eq!(levenshtein("", "abc"), 3);
 }
 
 #[test]

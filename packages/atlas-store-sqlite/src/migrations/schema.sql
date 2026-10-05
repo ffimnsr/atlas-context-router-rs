@@ -1,5 +1,5 @@
--- schema_version: 19
-PRAGMA user_version = 19;
+-- schema_version: 20
+PRAGMA user_version = 20;
 
 -- table: atlas_provenance
 CREATE TABLE atlas_provenance ( singleton_key INTEGER PRIMARY KEY CHECK(singleton_key = 1), db_kind TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL, last_opened_by TEXT NOT NULL, last_opened_at TEXT NOT NULL );
@@ -71,7 +71,7 @@ CREATE TABLE postprocess_state ( repo_root TEXT PRIMARY KEY, state TEXT NOT NULL
 CREATE TABLE repos ( repo_id INTEGER PRIMARY KEY, root_path TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL );
 
 -- table: retrieval_chunks
-CREATE TABLE retrieval_chunks ( id INTEGER PRIMARY KEY, node_qn TEXT NOT NULL, chunk_idx INTEGER NOT NULL DEFAULT 0, text TEXT NOT NULL, embedding BLOB, -- little-endian f32 bytes; NULL until computed UNIQUE(node_qn, chunk_idx) );
+CREATE TABLE "retrieval_chunks" ( id INTEGER PRIMARY KEY, source_repo_id TEXT NOT NULL, node_qn TEXT NOT NULL, chunk_idx INTEGER NOT NULL DEFAULT 0, text TEXT NOT NULL, embedding BLOB, -- little-endian f32 bytes; NULL until computed UNIQUE(source_repo_id, node_qn, chunk_idx) );
 
 -- table: schema_migrations
 CREATE TABLE schema_migrations ( id INTEGER PRIMARY KEY, version INTEGER NOT NULL, name TEXT NOT NULL, direction TEXT NOT NULL CHECK(direction IN ('up', 'down')), atlas_version TEXT NOT NULL, applied_at TEXT NOT NULL );

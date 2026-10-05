@@ -14,7 +14,7 @@ use atlas_core::model::{
 };
 use atlas_impact::analyze as advanced_impact;
 use atlas_repo::{DiffTarget, changed_files, find_repo_root};
-use atlas_review::{ContextEngine, normalize_qn_kind_tokens, query_parser};
+use atlas_review::{ContextEngine, decision_lookup_query, normalize_qn_kind_tokens, query_parser};
 use atlas_search as search;
 use atlas_search::semantic as sem;
 use atlas_session::{DecisionSearchHit, SessionId, SessionStore};
@@ -29,6 +29,8 @@ use super::{
     load_token_counter, payload_accounting_text, print_json, query_display_path,
     readiness_overrides, resolve_repo,
 };
+
+use super::shell_symbols::render_shell_symbols_output;
 
 fn parse_intent_str(s: &str) -> Option<ContextIntent> {
     match s {
@@ -84,23 +86,6 @@ fn context_session_hints(repo: &str, frontend: &str) -> (Vec<String>, Vec<String
     }
 
     (files, vec![])
-}
-
-fn decision_lookup_query(request: &ContextRequest) -> Option<String> {
-    match &request.target {
-        ContextTarget::QualifiedName { qname } => Some(qname.clone()),
-        ContextTarget::SymbolName { name } => Some(name.clone()),
-        ContextTarget::FilePath { path } => Some(path.clone()),
-        ContextTarget::ChangedFiles { paths } => {
-            let joined = paths.iter().take(3).cloned().collect::<Vec<_>>().join(" ");
-            (!joined.is_empty()).then_some(joined)
-        }
-        ContextTarget::ChangedSymbols { qnames } => {
-            let joined = qnames.iter().take(3).cloned().collect::<Vec<_>>().join(" ");
-            (!joined.is_empty()).then_some(joined)
-        }
-        ContextTarget::EdgeQuerySeed { source_qname, .. } => Some(source_qname.clone()),
-    }
 }
 
 fn search_linked_decisions(repo: &str, request: &ContextRequest) -> Vec<DecisionSearchHit> {
@@ -651,13 +636,13 @@ pub fn run_context(cli: &Cli) -> Result<()> {
 /// Tokens starting with `--` are flags. A flag is a boolean flag when the
 /// next token also starts with `--` or there is no next token; otherwise the
 /// following token becomes its value. All other tokens are positionals.
-struct ShellArgs {
+pub(crate) struct ShellArgs {
     flags: HashMap<String, Option<String>>,
     positionals: Vec<String>,
 }
 
 impl ShellArgs {
-    fn parse(input: &str) -> Self {
+    pub(crate) fn parse(input: &str) -> Self {
         let mut flags: HashMap<String, Option<String>> = HashMap::new();
         let mut positionals = Vec::new();
         let tokens: Vec<&str> = input.split_whitespace().collect();
@@ -680,21 +665,21 @@ impl ShellArgs {
         Self { flags, positionals }
     }
 
-    fn flag_bool(&self, name: &str) -> bool {
+    pub(crate) fn flag_bool(&self, name: &str) -> bool {
         self.flags.contains_key(name)
     }
 
-    fn flag_val(&self, name: &str) -> Option<&str> {
+    pub(crate) fn flag_val(&self, name: &str) -> Option<&str> {
         self.flags.get(name)?.as_deref()
     }
 
-    fn flag_u32(&self, name: &str, default: u32) -> u32 {
+    pub(crate) fn flag_u32(&self, name: &str, default: u32) -> u32 {
         self.flag_val(name)
             .and_then(|v| v.parse().ok())
             .unwrap_or(default)
     }
 
-    fn flag_usize(&self, name: &str, default: usize) -> usize {
+    pub(crate) fn flag_usize(&self, name: &str, default: usize) -> usize {
         self.flag_val(name)
             .and_then(|v| v.parse().ok())
             .unwrap_or(default)
@@ -1452,6 +1437,8 @@ const SHELL_HELP: &str = "\
 Slash commands:
   /query <text>                        full-text graph search
   /stats                               node/edge counts and language breakdown
+  /symbols [--kind <K>] [--limit N] [--offset N]
+                                       paginated symbol listing
   /changes [--base <ref>] [--staged]   changed files from git diff
   /impact [--base <ref>] [--staged] [--max-depth N] [--max-nodes N] [files...]
                                        blast radius from changed files
@@ -1558,6 +1545,8 @@ pub fn run_shell(cli: &Cli) -> Result<()> {
             render_shell_query_output(&store, query_text.trim(), fuzzy)?
         } else if input == "/stats" {
             render_shell_stats_output(&store)?
+        } else if let Some(rest) = input.strip_prefix("/symbols") {
+            render_shell_symbols_output(&store, &repo, &ShellArgs::parse(rest.trim()))?
         } else if let Some(rest) = input.strip_prefix("/changes") {
             render_shell_changes_output(&store, &repo, &ShellArgs::parse(rest.trim()))?
         } else if let Some(rest) = input.strip_prefix("/impact") {

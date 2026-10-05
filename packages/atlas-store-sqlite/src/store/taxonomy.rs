@@ -53,6 +53,13 @@ fn row_to_community(row: &rusqlite::Row<'_>) -> rusqlite::Result<Community> {
     })
 }
 
+fn row_to_community_node(row: &rusqlite::Row<'_>) -> rusqlite::Result<CommunityNode> {
+    Ok(CommunityNode {
+        community_id: row.get(0)?,
+        node_qualified_name: row.get(1)?,
+    })
+}
+
 impl Store {
     // --- Flows ---------------------------------------------------------------
 
@@ -85,50 +92,32 @@ impl Store {
 
     /// Return all flows ordered by name.
     pub fn list_flows(&self) -> Result<Vec<Flow>> {
-        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, name, kind, description, extra_json, created_at, updated_at
-                 FROM flows ORDER BY name",
-            )
-            .map_err(db_err)?;
-        let rows = stmt
-            .query_map([], row_to_flow)
-            .map_err(db_err)?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
+        self.query_rows(
+            "SELECT id, name, kind, description, extra_json, created_at, updated_at
+             FROM flows ORDER BY name",
+            None,
+            row_to_flow,
+        )
     }
 
     /// Return a single flow by id, or `None` if not found.
     pub fn get_flow(&self, flow_id: i64) -> Result<Option<Flow>> {
-        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, name, kind, description, extra_json, created_at, updated_at
-                 FROM flows WHERE id = ?1",
-            )
-            .map_err(db_err)?;
-        let mut rows = stmt
-            .query_map(params![flow_id], row_to_flow)
-            .map_err(db_err)?;
-        Ok(rows.next().and_then(|r| r.ok()))
+        self.query_one_row(
+            "SELECT id, name, kind, description, extra_json, created_at, updated_at
+             FROM flows WHERE id = ?1",
+            &flow_id,
+            row_to_flow,
+        )
     }
 
     /// Return a single flow by name, or `None` if not found.
     pub fn get_flow_by_name(&self, name: &str) -> Result<Option<Flow>> {
-        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, name, kind, description, extra_json, created_at, updated_at
-                 FROM flows WHERE name = ?1",
-            )
-            .map_err(db_err)?;
-        let mut rows = stmt.query_map(params![name], row_to_flow).map_err(db_err)?;
-        Ok(rows.next().and_then(|r| r.ok()))
+        self.query_one_row(
+            "SELECT id, name, kind, description, extra_json, created_at, updated_at
+             FROM flows WHERE name = ?1",
+            &name,
+            row_to_flow,
+        )
     }
 
     /// Add a node to a flow.  `position` and `role` are optional metadata.
@@ -169,22 +158,14 @@ impl Store {
 
     /// Return all members of a flow ordered by position then qualified name.
     pub fn get_flow_members(&self, flow_id: i64) -> Result<Vec<FlowMembership>> {
-        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT flow_id, node_qualified_name, position, role, extra_json
-                 FROM flow_memberships
-                 WHERE flow_id = ?1
-                 ORDER BY position ASC NULLS LAST, node_qualified_name ASC",
-            )
-            .map_err(db_err)?;
-        let rows = stmt
-            .query_map(params![flow_id], row_to_flow_membership)
-            .map_err(db_err)?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
+        self.query_rows(
+            "SELECT flow_id, node_qualified_name, position, role, extra_json
+             FROM flow_memberships
+             WHERE flow_id = ?1
+             ORDER BY position ASC NULLS LAST, node_qualified_name ASC",
+            Some(&flow_id),
+            row_to_flow_membership,
+        )
     }
 
     /// Return all flows that include `node_qn` as a member.
@@ -244,55 +225,35 @@ impl Store {
 
     /// Return all communities ordered by name.
     pub fn list_communities(&self) -> Result<Vec<Community>> {
-        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, name, algorithm, level, parent_community_id, extra_json,
-                        created_at, updated_at
-                 FROM communities ORDER BY name",
-            )
-            .map_err(db_err)?;
-        let rows = stmt
-            .query_map([], row_to_community)
-            .map_err(db_err)?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
+        self.query_rows(
+            "SELECT id, name, algorithm, level, parent_community_id, extra_json,
+                    created_at, updated_at
+             FROM communities ORDER BY name",
+            None,
+            row_to_community,
+        )
     }
 
     /// Return a single community by id, or `None` if not found.
     pub fn get_community(&self, community_id: i64) -> Result<Option<Community>> {
-        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, name, algorithm, level, parent_community_id, extra_json,
-                        created_at, updated_at
-                 FROM communities WHERE id = ?1",
-            )
-            .map_err(db_err)?;
-        let mut rows = stmt
-            .query_map(params![community_id], row_to_community)
-            .map_err(db_err)?;
-        Ok(rows.next().and_then(|r| r.ok()))
+        self.query_one_row(
+            "SELECT id, name, algorithm, level, parent_community_id, extra_json,
+                    created_at, updated_at
+             FROM communities WHERE id = ?1",
+            &community_id,
+            row_to_community,
+        )
     }
 
     /// Return a single community by name, or `None` if not found.
     pub fn get_community_by_name(&self, name: &str) -> Result<Option<Community>> {
-        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, name, algorithm, level, parent_community_id, extra_json,
-                        created_at, updated_at
-                 FROM communities WHERE name = ?1",
-            )
-            .map_err(db_err)?;
-        let mut rows = stmt
-            .query_map(params![name], row_to_community)
-            .map_err(db_err)?;
-        Ok(rows.next().and_then(|r| r.ok()))
+        self.query_one_row(
+            "SELECT id, name, algorithm, level, parent_community_id, extra_json,
+                    created_at, updated_at
+             FROM communities WHERE name = ?1",
+            &name,
+            row_to_community,
+        )
     }
 
     /// Add a node to a community.  No-op if already a member.
@@ -323,27 +284,14 @@ impl Store {
 
     /// Return all node qualified names belonging to a community.
     pub fn get_community_nodes(&self, community_id: i64) -> Result<Vec<CommunityNode>> {
-        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT community_id, node_qualified_name
-                 FROM community_nodes
-                 WHERE community_id = ?1
-                 ORDER BY node_qualified_name ASC",
-            )
-            .map_err(db_err)?;
-        let rows = stmt
-            .query_map(params![community_id], |row| {
-                Ok(CommunityNode {
-                    community_id: row.get(0)?,
-                    node_qualified_name: row.get(1)?,
-                })
-            })
-            .map_err(db_err)?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
+        self.query_rows(
+            "SELECT community_id, node_qualified_name
+             FROM community_nodes
+             WHERE community_id = ?1
+             ORDER BY node_qualified_name ASC",
+            Some(&community_id),
+            row_to_community_node,
+        )
     }
 
     /// Return all communities that include `node_qn` as a member.

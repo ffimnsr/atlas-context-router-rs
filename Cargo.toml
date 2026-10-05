@@ -27,6 +27,7 @@ resolver = "2"
 
 [workspace.package]
 rust-version = "1.95"
+license = "MIT OR Apache-2.0"
 
 [workspace.lints.clippy]
 dbg_macro = "warn"
@@ -107,6 +108,9 @@ tokio = { version = "1", features = ["rt", "time"] }
 # regex
 regex = { version = "1", default-features = false, features = ["std", "unicode-perl", "unicode-case"] }
 
+# fuzzy matching
+strsim = "0.11"
+
 # concurrency
 rayon = "1"
 notify = "7"
@@ -117,13 +121,13 @@ notify = "7"
 tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
 
 # internal crates
-atlas-core      = { path = "packages/atlas-core" }
-atlas-engine    = { path = "packages/atlas-engine" }
-atlas-mcp       = { path = "packages/atlas-mcp" }
-atlas-reasoning = { path = "packages/atlas-reasoning" }
-atlas-agent-events = { path = "packages/atlas-agent-events" }
-atlas-docs      = { path = "packages/atlas-docs" }
-atlas-token-count = { path = "packages/atlas-token-count" }
+atlas-core      = { path = "packages/atlas-core", version = "1.7.6" }
+atlas-engine    = { path = "packages/atlas-engine", version = "1.7.6" }
+atlas-mcp       = { path = "packages/atlas-mcp", version = "1.7.6" }
+atlas-reasoning = { path = "packages/atlas-reasoning", version = "1.7.6" }
+atlas-agent-events = { path = "packages/atlas-agent-events", version = "1.7.6" }
+atlas-docs      = { path = "packages/atlas-docs", version = "1.7.6" }
+atlas-token-count = { path = "packages/atlas-token-count", version = "1.7.6" }
 
 [profile.dev]
 debug = 1

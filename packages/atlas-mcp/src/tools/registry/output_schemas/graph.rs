@@ -6,6 +6,78 @@
 use crate::descriptors::normalized_tool_output_schema;
 use serde_json::Value;
 
+pub(crate) fn list_symbols_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "tool": { "type": "string" },
+            "symbols": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "qualified_name": { "type": "string" },
+                        "name": { "type": "string" },
+                        "kind": { "type": "string" },
+                        "language": { "type": "string" },
+                        "file": { "type": "string" },
+                        "line_start": { "type": "integer" },
+                        "line_end": { "type": "integer" },
+                        "parent": { "type": "string" },
+                        "signature": { "type": "string" },
+                        "return_type": { "type": "string" },
+                        "repo_id": { "type": "string" },
+                        "is_test": { "type": "boolean" }
+                    },
+                    "required": [
+                        "qualified_name",
+                        "name",
+                        "kind",
+                        "language",
+                        "file",
+                        "line_start",
+                        "line_end",
+                        "is_test"
+                    ]
+                }
+            },
+            "total": { "type": "integer" },
+            "limit": { "type": "integer" },
+            "offset": { "type": "integer" },
+            "returned": { "type": "integer" },
+            "has_more": { "type": "boolean" },
+            "next_offset": { "type": ["integer", "null"] },
+            "filters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "kind": { "type": ["string", "null"] },
+                    "language": { "type": ["string", "null"] },
+                    "subpath": { "type": ["string", "null"] },
+                    "repo_id": { "type": ["string", "null"] }
+                },
+                "required": ["kind", "language", "subpath", "repo_id"]
+            },
+            "truncated": { "type": "boolean" },
+            "warnings": { "type": "array", "items": { "type": "string" } }
+        }),
+        &[
+            "tool",
+            "symbols",
+            "total",
+            "limit",
+            "offset",
+            "returned",
+            "has_more",
+            "next_offset",
+            "filters",
+            "truncated",
+            "warnings",
+        ],
+        None,
+    )
+}
+
 pub(crate) fn explain_query_input_schema() -> Value {
     serde_json::json!({
         "type": "object",

@@ -1,5 +1,6 @@
 #![doc = include_str!("../README.md")]
 
+mod annotate;
 mod build_budget;
 mod call_resolution;
 pub mod config;
@@ -11,6 +12,7 @@ mod build;
 mod postprocess;
 mod repo_graph;
 mod update;
+mod update_files;
 pub mod watch;
 
 pub use build::{BuildOptions, BuildSummary, build_graph};

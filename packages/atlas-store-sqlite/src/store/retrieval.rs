@@ -29,16 +29,24 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
 impl Store {
     /// Insert or update the text for a single retrieval chunk.
     ///
-    /// Embeddings are not touched; call `Store::set_chunk_embedding()`
-    /// separately.
-    pub fn upsert_chunk(&self, node_qn: &str, chunk_idx: i32, text: &str) -> Result<()> {
+    /// Chunk identity is `(source_repo_id, node_qn, chunk_idx)` so two repos
+    /// that share an un-namespaced qname keep independent chunks. Embeddings
+    /// are not touched; call `Store::set_chunk_embedding()` separately.
+    pub fn upsert_chunk(
+        &self,
+        source_repo_id: &str,
+        node_qn: &str,
+        chunk_idx: i32,
+        text: &str,
+    ) -> Result<()> {
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         self.conn
             .execute(
-                "INSERT INTO retrieval_chunks (node_qn, chunk_idx, text)
-                 VALUES (?1, ?2, ?3)
-                 ON CONFLICT(node_qn, chunk_idx) DO UPDATE SET text = excluded.text",
-                params![node_qn, chunk_idx, text],
+                "INSERT INTO retrieval_chunks (source_repo_id, node_qn, chunk_idx, text)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(source_repo_id, node_qn, chunk_idx)
+                 DO UPDATE SET text = excluded.text",
+                params![source_repo_id, node_qn, chunk_idx, text],
             )
             .map_err(db_err)?;
         Ok(())
@@ -47,18 +55,19 @@ impl Store {
     /// Delete all retrieval chunks whose symbol belongs to `file_path` within
     /// `source_repo_id`.
     ///
-    /// Call before re-indexing a file so stale / renamed symbols are removed.
-    /// Repo-scoped: identical relative paths in other repos must not lose
-    /// their chunks.
+    /// Call before re-indexing or deleting a file so stale / renamed symbols
+    /// are removed. Chunks are repo-scoped, so identical relative paths (and
+    /// identical qnames) in other repos never lose their chunks.
     pub fn delete_chunks_for_file(&self, source_repo_id: &str, file_path: &str) -> Result<()> {
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         self.conn
             .execute(
                 "DELETE FROM retrieval_chunks
-                 WHERE node_qn IN (
-                     SELECT qualified_name FROM nodes
-                     WHERE source_repo_id = ?1 AND file_path = ?2
-                 )",
+                 WHERE source_repo_id = ?1
+                   AND node_qn IN (
+                       SELECT qualified_name FROM nodes
+                       WHERE source_repo_id = ?1 AND file_path = ?2
+                   )",
                 params![source_repo_id, file_path],
             )
             .map_err(db_err)?;
@@ -82,18 +91,20 @@ impl Store {
                 .conn
                 .prepare(
                     "DELETE FROM retrieval_chunks
-                     WHERE node_qn IN (
-                         SELECT qualified_name FROM nodes
-                         WHERE source_repo_id = ?1 AND file_path = ?2
-                     )",
+                     WHERE source_repo_id = ?1
+                       AND node_qn IN (
+                           SELECT qualified_name FROM nodes
+                           WHERE source_repo_id = ?1 AND file_path = ?2
+                       )",
                 )
                 .map_err(db_err)?;
             let mut upsert_stmt = self
                 .conn
                 .prepare(
-                    "INSERT INTO retrieval_chunks (node_qn, chunk_idx, text)
-                     VALUES (?1, ?2, ?3)
-                     ON CONFLICT(node_qn, chunk_idx) DO UPDATE SET text = excluded.text",
+                    "INSERT INTO retrieval_chunks (source_repo_id, node_qn, chunk_idx, text)
+                     VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(source_repo_id, node_qn, chunk_idx)
+                     DO UPDATE SET text = excluded.text",
                 )
                 .map_err(db_err)?;
 
@@ -104,7 +115,12 @@ impl Store {
                     .map_err(db_err)?;
                 for node in &parsed_file.nodes {
                     upsert_stmt
-                        .execute(params![node.qualified_name, 0, node.chunk_text()])
+                        .execute(params![
+                            source_repo_id,
+                            node.qualified_name,
+                            0,
+                            node.chunk_text()
+                        ])
                         .map_err(db_err)?;
                     written += 1;
                 }

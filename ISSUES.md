@@ -1630,6 +1630,7 @@ Implementation anchors:
 ## Additional Backlog
 
 - [x] add canonical `docs/error_codes.md` file and make README, MCP responses, and tests reference that single error-code catalog
+- [x] add `atlas symbols` CLI command and `list_symbols` MCP tool for paginated repo symbol inventory with kind/language/subpath/repo_id filters, shared kind-alias normalization in atlas-core, `/symbols` shell command, totals, and `next_offset` paging
 - [x] add generated `MCP_TOOLS.md` from tool registry and test/docs check that catches drift from hand-maintained tool tables
 - [ ] add build/query/MCP metrics counters and histograms for build duration, parsed file count, parser cache reuse ratio, query latency by mode, and MCP tool call counts
 - [x] add informational `cargo-llvm-cov` coverage task and a new github workflow job that reports coverage without gating merge

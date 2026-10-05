@@ -458,6 +458,65 @@ fn diagnostics_report_corruption_without_mutating_db() {
 }
 
 #[test]
+fn update_explicit_deleted_file_is_clean_deletion() {
+    let repo = setup_repo(&[
+        ("src/lib.rs", "mod gone;\n\npub fn live() -> u32 { 1 }\n"),
+        ("src/gone.rs", "pub fn gone() -> u32 { 2 }\n"),
+    ]);
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    fs::remove_file(repo.path().join("src/gone.rs")).expect("remove deleted file");
+
+    // Explicit paths may reference files deleted before the update ran: they
+    // must classify as deletions, not parse errors or warnings.
+    let output = run_atlas_capture(repo.path(), &["--json", "update", "--files", "src/gone.rs"]);
+    assert!(output.status.success(), "update should succeed");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("skipping"),
+        "deleted files must not emit scan warnings, stderr: {stderr}"
+    );
+    let update = read_json_data_output("update", output);
+    assert_eq!(update["deleted"], json!(1));
+    assert_eq!(update["parse_errors"], json!(0));
+    assert_eq!(update["warnings"], json!([]));
+
+    let symbols = read_json_data_output(
+        "symbols",
+        run_atlas(
+            repo.path(),
+            &["--json", "symbols", "--subpath", "src/gone.rs"],
+        ),
+    );
+    assert_eq!(symbols["total"], json!(0));
+}
+
+#[test]
+fn update_after_worktree_file_delete_stays_warning_free() {
+    let repo = setup_repo(&[
+        ("src/lib.rs", "mod gone;\n\npub fn live() -> u32 { 1 }\n"),
+        ("src/gone.rs", "pub fn gone() -> u32 { 2 }\n"),
+    ]);
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    fs::remove_file(repo.path().join("src/gone.rs")).expect("remove deleted file");
+
+    let output = run_atlas_capture(repo.path(), &["--json", "update"]);
+    assert!(output.status.success(), "update should succeed");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("skipping"),
+        "worktree deletion must not emit scan warnings, stderr: {stderr}"
+    );
+    let update = read_json_data_output("update", output);
+    assert_eq!(update["deleted"], json!(1));
+    assert_eq!(update["parse_errors"], json!(0));
+    assert_eq!(update["warnings"], json!([]));
+}
+
+#[test]
 fn update_reports_actionable_failure_when_rebuild_after_quarantine_fails() {
     let repo = setup_fixture_repo();
 

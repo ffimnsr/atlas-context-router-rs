@@ -573,7 +573,7 @@ mod tests {
             )
             .expect("seed graph");
         store
-            .upsert_chunk(qn, 0, "lexical anchor")
+            .upsert_chunk("repo_test", qn, 0, "lexical anchor")
             .expect("insert chunk");
         let chunks = store
             .chunks_missing_embeddings(1)

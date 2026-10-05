@@ -296,24 +296,7 @@ pub(super) fn graph_issue_code(error: &str) -> &'static str {
 }
 
 pub(super) fn resolve_kind_alias(input: &str) -> String {
-    match input.to_ascii_lowercase().as_str() {
-        "fn" | "func" | "function" => "function",
-        "method" | "meth" => "method",
-        "class" => "class",
-        "struct" | "record" => "struct",
-        "interface" | "iface" => "interface",
-        "trait" => "trait",
-        "enum" => "enum",
-        "module" | "mod" => "module",
-        "variable" | "var" | "field" => "variable",
-        "constant" | "const" => "constant",
-        "test" => "test",
-        "import" | "use" => "import",
-        "package" | "pkg" => "package",
-        "file" => "file",
-        other => other,
-    }
-    .to_owned()
+    atlas_core::kinds::normalize_kind_alias(input)
 }
 
 pub(super) fn tool_result_value<T: Serialize>(
@@ -705,7 +688,7 @@ fn canonicalize_change_source_files(
         .iter()
         .map(|path| {
             let repo_root_path = camino::Utf8Path::new(repo_root);
-            atlas_repo::normalize_repo_file_path(repo_root_path, path)
+            atlas_repo::normalize_repo_change_path(repo_root_path, path)
                 .map(|resolved| resolved.canonical)
                 .with_context(|| format!("invalid explicit file path '{path}'"))
                 .map_err(|error| {

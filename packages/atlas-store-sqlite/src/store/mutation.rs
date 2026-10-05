@@ -141,6 +141,21 @@ fn do_replace_file_graph(
     )
     .map_err(db_err)?;
 
+    // Drop retrieval chunks for symbols this replacement removes. Chunks are
+    // repo-scoped, so only this repo's rows are touched; retained qnames are
+    // refreshed by `replace_chunks_for_parsed_files` afterwards.
+    for old_node in &old_nodes {
+        if retained_qnames.contains(old_node.qualified_name.as_str()) {
+            continue;
+        }
+        conn.execute(
+            "DELETE FROM retrieval_chunks
+             WHERE source_repo_id = ?1 AND node_qn = ?2",
+            params![source_repo_id, old_node.qualified_name],
+        )
+        .map_err(db_err)?;
+    }
+
     // Step 5: upsert the file row.
     conn.execute(
         "INSERT OR REPLACE INTO files
@@ -440,83 +455,114 @@ impl Store {
 
         self.conn.execute_batch("BEGIN IMMEDIATE").map_err(db_err)?;
 
-        // FTS-unindex first.
-        let old_nodes = {
-            let mut stmt = self
-                .conn
-                .prepare(
-                    "SELECT id, kind, name, qualified_name, file_path, line_start, line_end,
-                            language, parent_name, params, return_type, modifiers,
-                            is_test, file_hash, extra_json
-                     FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2",
-                )
-                .map_err(db_err)?;
-            let rows: Vec<Node> = stmt
-                .query_map(params![source_repo_id, path.as_str()], row_to_node)
-                .map_err(db_err)?
-                .filter_map(|r| r.ok())
-                .collect();
-            rows
-        };
+        let result: Result<()> = (|| {
+            // FTS-unindex first.
+            let old_nodes = {
+                let mut stmt = self
+                    .conn
+                    .prepare(
+                        "SELECT id, kind, name, qualified_name, file_path, line_start, line_end,
+                                language, parent_name, params, return_type, modifiers,
+                                is_test, file_hash, extra_json
+                         FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2",
+                    )
+                    .map_err(db_err)?;
+                let rows: Vec<Node> = stmt
+                    .query_map(params![source_repo_id, path.as_str()], row_to_node)
+                    .map_err(db_err)?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                rows
+            };
 
-        for n in &old_nodes {
+            for n in &old_nodes {
+                self.conn
+                    .execute(
+                        "INSERT INTO nodes_fts(nodes_fts, rowid,
+                                 qualified_name, name, kind, file_path, language,
+                                 params, return_type, modifiers)
+                         VALUES('delete', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                        params![
+                            n.id.0,
+                            n.qualified_name,
+                            n.name,
+                            n.kind.as_str(),
+                            n.file_path,
+                            n.language,
+                            n.params,
+                            n.return_type,
+                            n.modifiers,
+                        ],
+                    )
+                    .map_err(db_err)?;
+            }
+
             self.conn
                 .execute(
-                    "INSERT INTO nodes_fts(nodes_fts, rowid,
-                             qualified_name, name, kind, file_path, language,
-                             params, return_type, modifiers)
-                     VALUES('delete', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                    params![
-                        n.id.0,
-                        n.qualified_name,
-                        n.name,
-                        n.kind.as_str(),
-                        n.file_path,
-                        n.language,
-                        n.params,
-                        n.return_type,
-                        n.modifiers,
-                    ],
+                    "DELETE FROM edges WHERE source_repo_id = ?1 AND file_path = ?2",
+                    params![source_repo_id, path.as_str()],
                 )
                 .map_err(db_err)?;
+            // Also remove dangling cross-file edges whose source or target
+            // qualified name belongs to a node in the deleted file.  These edges
+            // originate from other files and would otherwise linger as stale
+            // references after the target nodes are gone.
+            self.conn
+                .execute(
+                    "DELETE FROM edges
+                     WHERE source_repo_id = ?1
+                       AND (source_qualified IN (SELECT qualified_name FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2)
+                         OR target_qualified IN (SELECT qualified_name FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2))",
+                    params![source_repo_id, path.as_str()],
+                )
+                .map_err(db_err)?;
+            // Retrieval chunks are repo-scoped, so drop this repo's chunks
+            // before the node rows disappear or stale chunks outlive the file.
+            self.delete_chunks_for_file(source_repo_id, path.as_str())?;
+            self.conn
+                .execute(
+                    "DELETE FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2",
+                    params![source_repo_id, path.as_str()],
+                )
+                .map_err(db_err)?;
+            self.conn
+                .execute(
+                    "DELETE FROM files WHERE source_repo_id = ?1 AND path = ?2",
+                    params![source_repo_id, path.as_str()],
+                )
+                .map_err(db_err)?;
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT").map_err(db_err)?;
+                info!(path = path.as_str(), "deleted file graph");
+                Ok(())
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
         }
+    }
 
-        self.conn
-            .execute(
-                "DELETE FROM edges WHERE source_repo_id = ?1 AND file_path = ?2",
+    /// True when `path` has any graph footprint (file or node row) for
+    /// `source_repo_id`. Used by incremental updates so a repeated explicit
+    /// deletion of the same path reports a no-op instead of re-counting it.
+    pub fn file_graph_exists_for_repo(&self, source_repo_id: &str, path: &str) -> Result<bool> {
+        let path = canonicalize_repo_path(path)?;
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let exists: bool = self
+            .conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM files WHERE source_repo_id = ?1 AND path = ?2)
+                     OR EXISTS(SELECT 1 FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2)",
                 params![source_repo_id, path.as_str()],
+                |row| row.get(0),
             )
             .map_err(db_err)?;
-        // Also remove dangling cross-file edges whose source or target
-        // qualified name belongs to a node in the deleted file.  These edges
-        // originate from other files and would otherwise linger as stale
-        // references after the target nodes are gone.
-        self.conn
-            .execute(
-                "DELETE FROM edges
-                 WHERE source_repo_id = ?1
-                   AND (source_qualified IN (SELECT qualified_name FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2)
-                     OR target_qualified IN (SELECT qualified_name FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2))",
-                params![source_repo_id, path.as_str()],
-            )
-            .map_err(db_err)?;
-        self.conn
-            .execute(
-                "DELETE FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2",
-                params![source_repo_id, path.as_str()],
-            )
-            .map_err(db_err)?;
-        self.conn
-            .execute(
-                "DELETE FROM files WHERE source_repo_id = ?1 AND path = ?2",
-                params![source_repo_id, path.as_str()],
-            )
-            .map_err(db_err)?;
-
-        self.conn.execute_batch("COMMIT").map_err(db_err)?;
-
-        info!(path = path.as_str(), "deleted file graph");
-        Ok(())
+        Ok(exists)
     }
 
     /// Returns the stored content hash for `path`, or `None` if the file has

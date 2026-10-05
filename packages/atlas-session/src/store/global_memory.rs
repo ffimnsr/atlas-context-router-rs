@@ -46,6 +46,31 @@ fn make_id(parts: &[&str]) -> String {
 
 // ── Write operations ──────────────────────────────────────────────────────────
 
+/// Shared increment-or-insert for per-repo access counters.
+///
+/// `table` / `value_column` are internal constants, never user input.
+fn upsert_access(
+    conn: &Connection,
+    repo_root: &str,
+    value: &str,
+    now: &str,
+    table: &str,
+    value_column: &str,
+) -> Result<()> {
+    let id = make_id(&[repo_root, value]);
+    let sql = format!(
+        "INSERT INTO {table}
+             (id, repo_root, {value_column}, access_count, last_accessed, first_accessed)
+         VALUES (?1, ?2, ?3, 1, ?4, ?4)
+         ON CONFLICT(id) DO UPDATE SET
+             access_count  = access_count + 1,
+             last_accessed = excluded.last_accessed"
+    );
+    conn.execute(&sql, params![id, repo_root, value, now])
+        .map_err(|e| AtlasError::Db(e.to_string()))?;
+    Ok(())
+}
+
 /// Increment-or-insert a symbol access for `(repo_root, symbol_qn)`.
 pub(super) fn upsert_symbol_access(
     conn: &Connection,
@@ -53,18 +78,14 @@ pub(super) fn upsert_symbol_access(
     symbol_qn: &str,
     now: &str,
 ) -> Result<()> {
-    let id = make_id(&[repo_root, symbol_qn]);
-    conn.execute(
-        "INSERT INTO global_symbol_access
-             (id, repo_root, symbol_qn, access_count, last_accessed, first_accessed)
-         VALUES (?1, ?2, ?3, 1, ?4, ?4)
-         ON CONFLICT(id) DO UPDATE SET
-             access_count  = access_count + 1,
-             last_accessed = excluded.last_accessed",
-        params![id, repo_root, symbol_qn, now],
+    upsert_access(
+        conn,
+        repo_root,
+        symbol_qn,
+        now,
+        "global_symbol_access",
+        "symbol_qn",
     )
-    .map_err(|e| AtlasError::Db(e.to_string()))?;
-    Ok(())
 }
 
 /// Increment-or-insert a file access for `(repo_root, file_path)`.
@@ -74,18 +95,14 @@ pub(super) fn upsert_file_access(
     file_path: &str,
     now: &str,
 ) -> Result<()> {
-    let id = make_id(&[repo_root, file_path]);
-    conn.execute(
-        "INSERT INTO global_file_access
-             (id, repo_root, file_path, access_count, last_accessed, first_accessed)
-         VALUES (?1, ?2, ?3, 1, ?4, ?4)
-         ON CONFLICT(id) DO UPDATE SET
-             access_count  = access_count + 1,
-             last_accessed = excluded.last_accessed",
-        params![id, repo_root, file_path, now],
+    upsert_access(
+        conn,
+        repo_root,
+        file_path,
+        now,
+        "global_file_access",
+        "file_path",
     )
-    .map_err(|e| AtlasError::Db(e.to_string()))?;
-    Ok(())
 }
 
 /// Increment-or-insert a workflow pattern for `(repo_root, pattern)`.
@@ -115,20 +132,25 @@ pub(super) fn upsert_workflow_pattern(
 
 // ── Read operations ───────────────────────────────────────────────────────────
 
-/// Return the `limit` most-accessed symbols for `repo_root`.
-pub(super) fn get_frequent_symbols(
+/// Shared most-accessed lookup for per-repo access tables.
+///
+/// `table` / `value_column` are internal constants, never user input.
+fn frequent_access(
     conn: &Connection,
     repo_root: &str,
     limit: u32,
+    table: &str,
+    value_column: &str,
 ) -> Result<Vec<GlobalAccessEntry>> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, repo_root, symbol_qn, access_count, last_accessed, first_accessed
-             FROM   global_symbol_access
+    let sql = format!(
+        "SELECT id, repo_root, {value_column}, access_count, last_accessed, first_accessed
+             FROM   {table}
              WHERE  repo_root = ?1
              ORDER  BY access_count DESC, last_accessed DESC
-             LIMIT  ?2",
-        )
+             LIMIT  ?2"
+    );
+    let mut stmt = conn
+        .prepare(&sql)
         .map_err(|e| AtlasError::Db(e.to_string()))?;
 
     let rows = stmt
@@ -148,37 +170,22 @@ pub(super) fn get_frequent_symbols(
         .map_err(|e| AtlasError::Db(e.to_string()))
 }
 
+/// Return the `limit` most-accessed symbols for `repo_root`.
+pub(super) fn get_frequent_symbols(
+    conn: &Connection,
+    repo_root: &str,
+    limit: u32,
+) -> Result<Vec<GlobalAccessEntry>> {
+    frequent_access(conn, repo_root, limit, "global_symbol_access", "symbol_qn")
+}
+
 /// Return the `limit` most-accessed files for `repo_root`.
 pub(super) fn get_frequent_files(
     conn: &Connection,
     repo_root: &str,
     limit: u32,
 ) -> Result<Vec<GlobalAccessEntry>> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, repo_root, file_path, access_count, last_accessed, first_accessed
-             FROM   global_file_access
-             WHERE  repo_root = ?1
-             ORDER  BY access_count DESC, last_accessed DESC
-             LIMIT  ?2",
-        )
-        .map_err(|e| AtlasError::Db(e.to_string()))?;
-
-    let rows = stmt
-        .query_map(params![repo_root, limit], |row| {
-            Ok(GlobalAccessEntry {
-                id: row.get(0)?,
-                repo_root: row.get(1)?,
-                value: row.get(2)?,
-                access_count: row.get::<_, i64>(3)? as u64,
-                last_accessed: row.get(4)?,
-                first_accessed: row.get(5)?,
-            })
-        })
-        .map_err(|e| AtlasError::Db(e.to_string()))?;
-
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| AtlasError::Db(e.to_string()))
+    frequent_access(conn, repo_root, limit, "global_file_access", "file_path")
 }
 
 /// Return the `limit` most-frequent workflow patterns for `repo_root`.
