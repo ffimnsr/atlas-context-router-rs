@@ -8,26 +8,20 @@ use clap::Parser;
 fn parse_install_defaults() {
     let cli = parse(&["atlas", "install"]);
     if let Command::Install {
-        platform,
-        scope,
         dry_run,
         validate_only,
         force,
         instructions_only,
-        no_platform_config,
         no_hooks,
         no_instructions,
         instructions_mode,
         mode,
     } = cli.command
     {
-        assert_eq!(platform, "all");
-        assert_eq!(scope, "repo");
         assert!(!dry_run);
         assert!(!validate_only);
         assert!(!force);
         assert!(!instructions_only);
-        assert!(!no_platform_config);
         assert!(!no_hooks);
         assert!(!no_instructions);
         assert_eq!(instructions_mode, InstructionsMode::Refresh);
@@ -37,28 +31,10 @@ fn parse_install_defaults() {
     }
 }
 #[test]
-fn parse_install_platform_claude() {
-    let cli = parse(&["atlas", "install", "--platform", "claude"]);
-    if let Command::Install { platform, .. } = cli.command {
-        assert_eq!(platform, "claude");
-    } else {
-        panic!("expected Install command");
-    }
-}
-#[test]
 fn parse_install_dry_run() {
     let cli = parse(&["atlas", "install", "--dry-run"]);
     if let Command::Install { dry_run, .. } = cli.command {
         assert!(dry_run);
-    } else {
-        panic!("expected Install command");
-    }
-}
-#[test]
-fn parse_install_scope_user() {
-    let cli = parse(&["atlas", "install", "--scope", "user"]);
-    if let Command::Install { scope, .. } = cli.command {
-        assert_eq!(scope, "user");
     } else {
         panic!("expected Install command");
     }
@@ -109,16 +85,16 @@ fn parse_install_instructions_only() {
     }
 }
 #[test]
-fn parse_install_no_platform_config() {
-    let cli = parse(&["atlas", "install", "--no-platform-config"]);
-    if let Command::Install {
-        no_platform_config, ..
-    } = cli.command
-    {
-        assert!(no_platform_config);
-    } else {
-        panic!("expected Install command");
-    }
+fn parse_install_rejects_removed_platform_flag() {
+    assert!(Cli::try_parse_from(["atlas", "install", "--platform", "claude"]).is_err());
+}
+#[test]
+fn parse_install_rejects_removed_scope_flag() {
+    assert!(Cli::try_parse_from(["atlas", "install", "--scope", "user"]).is_err());
+}
+#[test]
+fn parse_install_rejects_removed_no_platform_config_flag() {
+    assert!(Cli::try_parse_from(["atlas", "install", "--no-platform-config"]).is_err());
 }
 #[test]
 fn parse_install_mode_all_is_default() {
@@ -130,13 +106,8 @@ fn parse_install_mode_all_is_default() {
     }
 }
 #[test]
-fn parse_install_mode_mcp() {
-    let cli = parse(&["atlas", "install", "--mode", "mcp"]);
-    if let Command::Install { mode, .. } = cli.command {
-        assert_eq!(mode, InstallMode::Mcp);
-    } else {
-        panic!("expected Install command");
-    }
+fn parse_install_rejects_removed_mcp_mode() {
+    assert!(Cli::try_parse_from(["atlas", "install", "--mode", "mcp"]).is_err());
 }
 #[test]
 fn parse_install_mode_hook() {

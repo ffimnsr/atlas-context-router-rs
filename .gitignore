@@ -1,7 +1,5 @@
 # Ignore environment variable files
 .env
-.codex
-.codex/
 
 # Ignore all markdown files except README.md and ISSUES.md
 *.md
@@ -44,7 +42,6 @@ coverage/
 
 # Atlas specific ignores
 .atlas/
-/.github/hooks/atlas-copilot.json
 
 
 .patches

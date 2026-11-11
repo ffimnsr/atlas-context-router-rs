@@ -1402,27 +1402,19 @@ Why:
 
 Why:
 - static markdown should bootstrap runtime policy, not duplicate mutable operational rules
-- install flow already owns AGENTS/CLAUDE injected guidance and should remain source for static bootstrap text
+- install flow already owns AGENTS.md injected guidance and should remain source for static bootstrap text
 
-#### Patch A4 — Platform hook preload integration
+#### Patch A4 — Generic hook runner preload integration
 
-- [ ] extend `packages/atlas-cli/src/install/platform_hooks.rs` generated Copilot hook config to preload policy on:
-  - [ ] `SessionStart`
-  - [ ] `UserPromptSubmit`
-- [ ] extend generated Claude hook config to preload policy on:
-  - [ ] `SessionStart`
-  - [ ] `UserPromptSubmit`
-  - [ ] `InstructionsLoaded`
-- [ ] extend generated Codex hook config to preload policy on:
-  - [ ] `SessionStart`
-  - [ ] `UserPromptSubmit`
-- [ ] extend shared `.atlas/hooks/atlas-hook` runner so preload path calls shared Rust policy service instead of duplicating JSON assembly in shell
+- [ ] extend the generic `.atlas/hooks/atlas-hook` runner so preload path calls shared Rust policy service instead of duplicating JSON assembly in shell
+- [ ] preload runtime policy on session-start and prompt-submit at the runner/CLI boundary
+- [ ] keep preload host-agnostic; Atlas does not generate per-tool hook config files
 - [ ] cache last successful compact policy payload under `.atlas/hooks/lib/` with version/hash metadata
 - [ ] define bounded cache TTL or invalidation rule so long sessions can refresh policy safely
-- [ ] add tests for generated hook configs and runner output after install
+- [ ] add tests for runner preload output after install
 
 Why:
-- existing install-generated hook path already exists and should carry runtime policy preload
+- existing generic hook runner already exists and should carry runtime policy preload
 - session-start and prompt-submit are strongest points for loading fresh policy before work begins
 
 #### Patch A5 — Hard enforcement at hook boundary
@@ -1490,7 +1482,7 @@ Why:
 
 - [ ] `agent_instructions` exists as MCP tool with stable compact output
 - [ ] installed AGENTS/bootstrap text tells agents to call `agent_instructions` first and defines fallback clearly
-- [ ] install-generated Copilot/Claude/Codex hooks preload runtime policy on session/prompt start
+- [ ] the generic `.atlas/hooks/atlas-hook` runner preloads runtime policy on session/prompt start
 - [ ] protected Atlas tools are blocked when required policy preload has not happened
 - [ ] fallback mode is explicit, deterministic, and covered by tests
 - [ ] prompts, installed instructions, README, and wiki workflow docs agree on runtime-policy-first behavior

@@ -1,17 +1,18 @@
 //! Interactive TUI wizard for `atlas init`.
 //!
 //! Runs only when stdin is an interactive terminal and `--json` is not set.
-//! Guides the user through platform configuration, git hooks, and shell
-//! completions, then prints a concise "done" summary.
+//! Guides the user through generic, tool-agnostic Atlas setup: the managed
+//! `AGENTS.md` instruction block, the generic agent hook runner, and git hooks.
+//! Per-tool MCP and hook configuration is intentionally not written.
 
 use std::io::{IsTerminal, Write};
 use std::path::Path;
 
 use anyhow::Result;
 use console::{Style, Term, style};
-use dialoguer::{Confirm, MultiSelect, theme::ColorfulTheme};
+use dialoguer::{Confirm, theme::ColorfulTheme};
 
-use crate::install::InstallSummary;
+use crate::install::{InstallOptions, InstallSummary, install_hook_runner};
 
 /// Returns `true` when the wizard should run.
 pub fn should_run(json: bool) -> bool {
@@ -31,35 +32,23 @@ pub fn run(repo_root: &Path) -> Result<()> {
 
     print_banner(&term)?;
 
-    // ── Step 1: Platform ─────────────────────────────────────────────────────
-    section(&term, "1", "LLM Agent Setup")?;
+    // ── Step 1: Agent integration ────────────────────────────────────────────
+    section(&term, "1", "Agent Integration")?;
     writeln!(
         term.clone(),
-        "  Select the AI coding tool(s) to configure:\n"
+        "  Atlas writes a managed block to the generic AGENTS.md file.\n"
     )?;
 
-    const PLATFORM_NAMES: [&str; 3] = ["GitHub Copilot  (VS Code)", "Claude Code", "OpenAI Codex"];
-    const PLATFORM_KEYS: [&str; 3] = ["copilot", "claude", "codex"];
-
-    let platform_selections = MultiSelect::with_theme(&theme)
-        .items(PLATFORM_NAMES)
-        .defaults(&[false, false, true])
+    let install_agent_hooks = Confirm::with_theme(&theme)
+        .with_prompt("Install the generic Atlas agent hook runner?")
+        .default(true)
         .interact()?;
 
-    // ── Step 2: LLM hooks ─────────────────────────────────────────────────────
+    // ── Step 2: Git hooks ────────────────────────────────────────────────────
     writeln!(term.clone())?;
-    section(&term, "2", "LLM Hooks")?;
+    section(&term, "2", "Git Hooks")?;
 
-    let install_llm_hooks = Confirm::with_theme(&theme)
-        .with_prompt("Install LLM hooks for selected coding tools?")
-        .default(false)
-        .interact()?;
-
-    // ── Step 3: Git hooks ─────────────────────────────────────────────────────
-    writeln!(term.clone())?;
-    section(&term, "3", "Git Hooks")?;
-
-    let install_hooks = Confirm::with_theme(&theme)
+    let install_git_hooks = Confirm::with_theme(&theme)
         .with_prompt("Install git hooks for automatic graph updates?")
         .default(false)
         .interact()?;
@@ -79,49 +68,25 @@ pub fn run(repo_root: &Path) -> Result<()> {
     )?;
     writeln!(term.clone())?;
 
-    // Platforms
-    for &idx in &platform_selections {
-        let key = PLATFORM_KEYS[idx];
-        let display = PLATFORM_NAMES[idx];
-        match install_platform_setup(repo_root, key, install_llm_hooks) {
-            Ok(summary) => {
-                for name in &summary.configured {
-                    print_tick(&term, name)?;
-                }
-                for name in &summary.already_configured {
-                    print_skip(&term, &format!("{name} already configured"))?;
-                }
-                for f in &summary.instruction_files {
-                    print_tick(&term, &format!("Instructions → {f}"))?;
-                }
-                for f in &summary.platform_hook_files {
-                    print_tick(&term, &format!("Agent hooks → {f}"))?;
-                }
-                if summary.configured.is_empty()
-                    && summary.already_configured.is_empty()
-                    && summary.instruction_files.is_empty()
-                    && summary.platform_hook_files.is_empty()
-                {
-                    print_tick(&term, display)?;
-                }
+    match apply_generic_setup(repo_root, install_agent_hooks, install_git_hooks) {
+        Ok(summary) => {
+            for f in &summary.instruction_files {
+                print_tick(&term, &format!("Instructions → {f}"))?;
             }
-            Err(e) => print_cross(&term, &format!("{display}: {e}"))?,
+            for f in &summary.hook_runner_files {
+                print_tick(&term, &format!("Hook runner  → {f}"))?;
+            }
+            for p in &summary.hook_paths {
+                print_tick(&term, &format!("Git hook  → {}", p.display()))?;
+            }
+            if summary.instruction_files.is_empty()
+                && summary.hook_runner_files.is_empty()
+                && summary.hook_paths.is_empty()
+            {
+                print_skip(&term, "Atlas integration already up to date")?;
+            }
         }
-    }
-
-    // Git hooks
-    if install_hooks {
-        match crate::install::install_git_hooks(repo_root, false, false) {
-            Ok(paths) if !paths.is_empty() => {
-                for p in &paths {
-                    print_tick(&term, &format!("Git hook  → {}", p.display()))?;
-                }
-            }
-            Ok(_) => {
-                print_skip(&term, "Git hooks: no .git directory found")?;
-            }
-            Err(e) => print_cross(&term, &format!("Git hooks: {e}"))?,
-        }
+        Err(e) => print_cross(&term, &format!("Setup failed: {e}"))?,
     }
 
     // ── Done ──────────────────────────────────────────────────────────────────
@@ -151,8 +116,35 @@ pub fn run(repo_root: &Path) -> Result<()> {
         style("atlas serve").cyan().bold()
     )?;
     writeln!(term.clone())?;
+    writeln!(term.clone(), "  {}", crate::install::GENERIC_MCP_SETUP)?;
+    writeln!(term.clone())?;
 
     Ok(())
+}
+
+/// Apply the tool-agnostic surfaces selected in the wizard.
+fn apply_generic_setup(
+    repo_root: &Path,
+    with_agent_hooks: bool,
+    with_git_hooks: bool,
+) -> Result<InstallSummary> {
+    let mut summary = crate::install::run_install(
+        repo_root,
+        InstallOptions {
+            no_hooks: true,
+            ..Default::default()
+        },
+    )?;
+
+    if with_agent_hooks && let Some(path) = install_hook_runner(repo_root, false)? {
+        summary.hook_runner_files.push(path);
+    }
+
+    if with_git_hooks {
+        summary.hook_paths = crate::install::install_git_hooks(repo_root, false, false)?;
+    }
+
+    Ok(summary)
 }
 
 // ---------------------------------------------------------------------------
@@ -240,41 +232,36 @@ fn print_cross(term: &Term, msg: &str) -> Result<()> {
     Ok(())
 }
 
-fn install_platform_setup(
-    repo_root: &Path,
-    platform: &str,
-    install_llm_hooks: bool,
-) -> Result<InstallSummary> {
-    let mut summary = crate::install::run_install(
-        repo_root,
-        platform,
-        "repo",
-        crate::install::InstallOptions {
-            no_hooks: true,
-            ..Default::default()
-        },
-    )?;
-    if install_llm_hooks {
-        summary.platform_hook_files =
-            crate::install::install_platform_agent_hooks(repo_root, platform, false)?;
-    }
-    Ok(summary)
-}
-
 #[cfg(test)]
 mod tests {
     use tempfile::TempDir;
 
-    use super::install_platform_setup;
+    use super::apply_generic_setup;
 
     #[test]
-    fn install_platform_setup_adds_agent_hooks_for_claude() {
+    fn wizard_installs_generic_agents_md_only() {
         let tmp = TempDir::new().unwrap();
 
-        let summary = install_platform_setup(tmp.path(), "claude", true).unwrap();
+        let summary = apply_generic_setup(tmp.path(), false, false).unwrap();
 
-        assert!(tmp.path().join(".mcp.json").exists());
-        assert!(tmp.path().join("CLAUDE.md").exists());
+        assert!(tmp.path().join("AGENTS.md").exists());
+        assert!(summary.instruction_files.contains(&"AGENTS.md".to_owned()));
+        assert!(summary.hook_runner_files.is_empty());
+        assert!(summary.hook_paths.is_empty());
+        for removed in [".mcp.json", ".claude", ".codex", ".vscode", "CLAUDE.md"] {
+            assert!(
+                !tmp.path().join(removed).exists(),
+                "tool-specific path {removed} must not be created"
+            );
+        }
+    }
+
+    #[test]
+    fn wizard_can_install_generic_hook_runner() {
+        let tmp = TempDir::new().unwrap();
+
+        let summary = apply_generic_setup(tmp.path(), true, false).unwrap();
+
         assert!(
             tmp.path()
                 .join(".atlas")
@@ -282,52 +269,12 @@ mod tests {
                 .join("atlas-hook")
                 .exists()
         );
-        assert!(tmp.path().join(".claude").join("settings.json").exists());
         assert!(
             summary
-                .platform_hook_files
+                .hook_runner_files
                 .contains(&".atlas/hooks/atlas-hook".to_owned())
         );
-        assert!(
-            summary
-                .platform_hook_files
-                .contains(&".claude/settings.json".to_owned())
-        );
-    }
-
-    #[test]
-    fn install_platform_setup_keeps_git_hooks_separate() {
-        let tmp = TempDir::new().unwrap();
-
-        let summary = install_platform_setup(tmp.path(), "codex", true).unwrap();
-
-        assert!(summary.hook_paths.is_empty());
-        assert!(
-            !tmp.path()
-                .join(".git")
-                .join("hooks")
-                .join("post-commit")
-                .exists()
-        );
-        assert!(tmp.path().join(".codex").join("hooks.json").exists());
-    }
-
-    #[test]
-    fn install_platform_setup_skips_agent_hooks_when_not_requested() {
-        let tmp = TempDir::new().unwrap();
-
-        let summary = install_platform_setup(tmp.path(), "claude", false).unwrap();
-
-        assert!(tmp.path().join(".mcp.json").exists());
-        assert!(tmp.path().join("CLAUDE.md").exists());
-        assert!(summary.platform_hook_files.is_empty());
-        assert!(
-            !tmp.path()
-                .join(".atlas")
-                .join("hooks")
-                .join("atlas-hook")
-                .exists()
-        );
-        assert!(!tmp.path().join(".claude").join("settings.json").exists());
+        assert!(!tmp.path().join(".claude").exists());
+        assert!(!tmp.path().join(".codex").exists());
     }
 }

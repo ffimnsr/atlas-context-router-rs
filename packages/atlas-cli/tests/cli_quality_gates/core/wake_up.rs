@@ -197,14 +197,14 @@ fn session_start_hook_records_wake_up_metadata() {
         ("src/lib.rs", "pub fn alpha() {}\n"),
     ]);
 
-    run_atlas(repo.path(), &["install", "--platform", "codex"]);
-    run_installed_hook(repo.path(), "codex", "session-start", "{}");
+    run_atlas(repo.path(), &["install"]);
+    run_installed_hook(repo.path(), "generic", "session-start", "{}");
 
     let repo_root = canonical_path(repo.path());
     let session_id = SessionId::derive(
         repo_root.to_str().expect("canonical repo path"),
         "",
-        "codex",
+        "generic",
     );
     let payloads = session_event_payloads(repo.path(), session_id.as_str());
     let session_start = payloads
@@ -219,5 +219,5 @@ fn session_start_hook_records_wake_up_metadata() {
     assert!(wake_up_meta["counts"]["memories"].as_i64().is_some());
 
     // The hook command itself still succeeds (non-blocking best-effort).
-    run_installed_hook(repo.path(), "codex", "session-start", "{}");
+    run_installed_hook(repo.path(), "generic", "session-start", "{}");
 }

@@ -483,16 +483,11 @@ pub enum Command {
         allow_partial: bool,
     },
 
-    /// Install MCP server configuration for AI coding platforms.
+    /// Install generic Atlas integration (git hooks, hook runner, AGENTS.md).
+    ///
+    /// Atlas no longer writes per-tool MCP or hook config files. After install,
+    /// register the `atlas serve` MCP server with your preferred coding tool.
     Install {
-        /// Target platform: copilot, claude, codex, or all (default: all detected).
-        #[arg(long, default_value = "all")]
-        platform: String,
-
-        /// Install platform config and platform hook files into repo or user home.
-        #[arg(long, default_value = "repo", value_parser = ["repo", "user"])]
-        scope: String,
-
         /// Show what would be done without writing any files.
         #[arg(long)]
         dry_run: bool,
@@ -505,19 +500,15 @@ pub enum Command {
         #[arg(long)]
         force: bool,
 
-        /// Update only instruction files; implies --no-platform-config and --no-hooks.
+        /// Update only the managed AGENTS.md instruction block; implies --no-hooks.
         #[arg(long)]
         instructions_only: bool,
 
-        /// Skip writing platform MCP config files.
-        #[arg(long)]
-        no_platform_config: bool,
-
-        /// Skip installing git hooks and platform agent hook configs.
+        /// Skip installing git hooks and the agent hook runner.
         #[arg(long)]
         no_hooks: bool,
 
-        /// Skip injecting platform-specific graph instructions.
+        /// Skip injecting the managed AGENTS.md instruction block.
         #[arg(long)]
         no_instructions: bool,
 
@@ -525,7 +516,7 @@ pub enum Command {
         #[arg(long, default_value = "refresh", value_enum)]
         instructions_mode: InstructionsMode,
 
-        /// Install mode: mcp (MCP config), hook (git + agent hooks), cli (instruction fallback text), or all (default).
+        /// Install mode: hook (git + agent hooks), cli (AGENTS.md instructions), or all (default).
         #[arg(long, default_value = "all", value_enum)]
         mode: InstallMode,
     },

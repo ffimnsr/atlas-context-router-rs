@@ -213,113 +213,106 @@ GitHub triage defaults also live in `.github/`:
 
 ## LLM Agent Setup
 
-Atlas can install MCP configuration for popular AI coding tools and add repo hooks so agents start with graph-aware context.
+Atlas installs only tool-agnostic integration and leaves MCP registration to your editor. `atlas install` writes:
 
-`atlas serve` remains a stdio MCP entrypoint for editors and agents. Repo-scoped installs now pin only `--repo`, while user/global installs stay portable with `type = "stdio"`, `command = "atlas"`, `args = ["serve"]`. Atlas supports MCP `2026-07-28` and `2025-11-25`: use `server/discover` for negotiation, then send per-request `params._meta` with protocol version and client capabilities. When no repo is pinned, Atlas resolves repo context from explicit `arguments.repo_root` or launch `cwd`; it no longer depends on deprecated MCP Roots or protocol-level HTTP sessions.
+- a managed `AGENTS.md` instruction block
+- git hooks for `pre-commit`, `post-commit`, `post-checkout`, `post-merge`, and `post-rewrite`
+- the generic `.atlas/hooks/atlas-hook` runner
 
-If a global editor configuration does not launch Atlas from the active workspace, pin a fixed repository with `--repo "$HOME/Projects/repo"`. Atlas expands leading `~`, `$HOME`, and `${HOME}` itself, so JSON argument arrays do not depend on editor or shell expansion. Relative `--repo` paths resolve from Atlas' startup working directory.
+Atlas does not write `.mcp.json`, `.vscode/mcp.json`, `.codex/config.toml`, `.claude/settings.json`, `CLAUDE.md`, or any other per-tool file.
 
-If an editor MCP client is incompatible with broker/daemon indirection, use `atlas serve --direct-stdio` to run MCP directly in launched process with no relay layer.
-
-### GitHub Copilot
-
-```bash
-atlas install --platform copilot
-atlas build
-```
-
-Writes MCP config under `.vscode/mcp.json`.
-
-### Claude Code
-
-```bash
-atlas install --platform claude
-atlas build
-```
-
-Writes MCP config under `.mcp.json`.
-
-### Codex
-
-```bash
-atlas install --platform codex
-atlas build
-```
-
-Writes Codex MCP entry into `.codex/config.toml`.
-
-### Auto-detect installed tools
+### Install generic integration
 
 ```bash
 atlas install
+atlas build
 ```
 
-### Preview without writing files
+Preview without writing files:
 
 ```bash
 atlas install --dry-run
 ```
 
-### Replace full instruction file
+Install only the managed `AGENTS.md` block:
 
 ```bash
-atlas install --platform codex --instructions-mode replace-file
+atlas install --instructions-only
 ```
 
-Default mode is `refresh`: Atlas replaces only its managed instruction block when markers already exist, or appends that block when `AGENTS.md` / `CLAUDE.md` already contains user-managed text. Use `--instructions-mode replace-file` to overwrite the full instruction file with Atlas-managed content.
+Default instruction mode is `refresh`: Atlas replaces only its managed block when markers exist, or appends the block when `AGENTS.md` already contains user-managed text. Use `--instructions-mode replace-file` to overwrite the whole file with Atlas-managed content.
 
-### Update instructions only
+### Register the MCP server with your coding tool
 
-```bash
-atlas install --platform codex --instructions-only
+Atlas runs as a stdio MCP server. Add this command to whatever MCP-capable coding tool you use:
+
+```text
+command: atlas
+args:    ["serve"]                                  # global
+args:    ["--repo", "/abs/path/to/repo", "serve"]   # pin one repository
 ```
 
-`--instructions-only` is alias for `--no-platform-config --no-hooks`. It updates only `AGENTS.md` / `CLAUDE.md`.
+Most MCP clients accept a JSON entry shaped like:
+
+```json
+{
+  "mcpServers": {
+    "atlas": { "type": "stdio", "command": "atlas", "args": ["serve"] }
+  }
+}
+```
+
+The config file location and top-level key vary by client; consult that tool's MCP documentation. Atlas does not generate those files.
+
+`atlas serve` remains a stdio MCP entrypoint for editors and agents. Repo-scoped configurations pin `--repo`, while portable configurations use `type = "stdio"`, `command = "atlas"`, `args = ["serve"]`. Atlas supports MCP `2026-07-28` and `2025-11-25`: use `server/discover` for negotiation, then send per-request `params._meta` with protocol version and client capabilities. When no repo is pinned, Atlas resolves repo context from explicit `arguments.repo_root` or launch `cwd`; it no longer depends on deprecated MCP Roots or protocol-level HTTP sessions.
+
+If a global editor configuration does not launch Atlas from the active workspace, pin a fixed repository with `--repo "$HOME/Projects/repo"`. Atlas expands leading `~`, `$HOME`, and `${HOME}` itself, so JSON argument arrays do not depend on editor or shell expansion. Relative `--repo` paths resolve from Atlas' startup working directory.
+
+If an editor MCP client is incompatible with broker/daemon indirection, use `atlas serve --direct-stdio` to run MCP directly in launched process with no relay layer.
 
 ### Install modes
 
-`--mode` selects which surfaces `atlas install` sets up for the target platform. It composes with the explicit `--no-*` flags (which add further skips):
+`--mode` selects which generic surfaces `atlas install` sets up:
 
 | Mode | Installs | Skips |
 | ---- | -------- | ----- |
-| `mcp` | platform MCP config only | hooks + instruction fallback files |
-| `hook` | git hooks + platform agent hooks | MCP config + instruction fallback files |
-| `cli` | instruction fallback text (`AGENTS.md` / `CLAUDE.md`) | MCP config + hooks |
-| `all` (default) | all three surfaces | — |
+| `hook` | git hooks + generic agent hook runner | `AGENTS.md` instructions |
+| `cli` | managed `AGENTS.md` instructions | git hooks + agent hook runner |
+| `all` (default) | both surfaces | — |
 
 Examples:
 
 ```bash
-atlas install --platform claude --mode mcp    # MCP config only
-atlas install --platform codex --mode cli     # instruction fallback only
-atlas install --mode hook                     # hooks only, auto-detected platform
+atlas install --mode hook    # hooks only
+atlas install --mode cli     # instructions only
 ```
 
-`atlas install --dry-run` prints every file it would write or refresh, including which instruction fallback files would be created, appended, or refreshed, without touching anything.
+`atlas install --dry-run` prints every file it would create or refresh without touching anything.
 
-### Native hooks vs MCP fallback
+### Hooks vs MCP fallback
 
 | surface | works_with | automatic | token_cost | best_for |
 | ------- | ---------- | --------- | ---------- | -------- |
-| native `atlas hook` (installed via `atlas install`) | Claude Code, Codex, GitHub Copilot | yes — zero agent effort | low (one background call per event) | hosts with LLM hook support; hands-off continuity |
-| MCP fallback (`wake_up` + `record_session_event` + instruction block) | any MCP-capable host: Zed, Cursor, Cline, VS Code Copilot Chat, JetBrains AI, others | no — agent follows the installed instruction block | low–medium (one tool call per trigger) | hookless hosts; universal compatibility |
-| instruction block alone (`AGENTS.md` / `CLAUDE.md`) | any host that reads repository instructions | no | none | hosts without MCP or hooks |
+| generic `atlas hook` runner (`.atlas/hooks/atlas-hook`) | any host that can run a command hook | yes when the host is wired to the runner | low (one background call per event) | hosts with command-hook support; hands-off continuity |
+| MCP fallback (`wake_up` + `record_session_event` + instruction block) | any MCP-capable host | no — agent follows the installed instruction block | low–medium (one tool call per trigger) | hookless hosts; universal compatibility |
+| instruction block (`AGENTS.md`) | any host that reads repository instructions | no | none | hosts without MCP or hooks |
 | CLI (`atlas hook`, `atlas session resume`, `atlas session compact`) | shell scripts and manual workflows | no | none | debugging, CI, and scripted flows |
 
 Both capture paths record the same events into the same `session.db` / `context.db` storage through one shared event service, so event semantics, redaction, lifecycle actions, graph refresh, and review refresh never drift. See [Session Memory Fallback for Hookless Hosts](wiki/session-memory-fallback.md) for the hookless protocol.
 
 `atlas install` will:
 
-- write MCP server config for GitHub Copilot, Claude Code, or Codex
-- install git hooks for `pre-commit`, `post-checkout`, `post-merge`, and `post-rewrite`
-- inject graph-first instructions into platform-relevant agent files (`AGENTS.md` for Copilot/Codex, `CLAUDE.md` for Claude)
+- install git hooks for `pre-commit`, `post-commit`, `post-checkout`, `post-merge`, and `post-rewrite`
+- install the generic `.atlas/hooks/atlas-hook` runner
+- inject graph-first instructions into the managed `AGENTS.md` block
+- print generic MCP registration guidance; it never writes per-tool config
 
 Hook behavior:
 
 - `pre-commit` prints full change summary
 - `post-checkout`, `post-merge`, and `post-rewrite` use brief output
 
-After install, restart your editor or coding tool, then run:
+After install, run:
 
 ```bash
 atlas build
@@ -403,7 +396,7 @@ atlas review-context --base origin/main
 ### Install editor and hook integration
 
 ```bash
-atlas install --platform copilot
+atlas install
 atlas build
 ```
 
@@ -645,16 +638,15 @@ Most user-facing commands support machine-readable output:
 ```bash
 atlas --json status
 atlas --json detect-changes --base origin/main
-atlas --json install --platform claude
+atlas --json install
 ```
 
 ## Files Atlas Writes
 
 - `.atlas/config.toml`
 - `.atlas/worldtree.db`
-- `.mcp.json` for Claude Code installs
-- `.vscode/mcp.json` for GitHub Copilot installs
-- `.codex/config.toml` entry for Codex installs
+- `AGENTS.md` for the managed Atlas instruction block
+- `.atlas/hooks/atlas-hook` for the generic hook runner
 - `.git/hooks/*` for installed git hooks
 
 ## Insights

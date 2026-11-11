@@ -4,8 +4,6 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 
-use super::scope::should_auto_detect;
-
 pub(super) const INSTRUCTIONS_MARKER: &str = "<!-- atlas MCP tools -->";
 pub(super) const INSTRUCTIONS_END_MARKER: &str = "<!-- /atlas MCP tools -->";
 
@@ -25,6 +23,34 @@ impl InstructionsMode {
     }
 }
 
+/// The only instruction file Atlas manages. It is read by many AI coding tools
+/// through the cross-tool `AGENTS.md` convention, so no per-tool files are
+/// written.
+pub const AGENTS_FILE: &str = "AGENTS.md";
+
+/// Canonical, tool-agnostic instructions for registering the Atlas MCP server.
+///
+/// `atlas install` prints this guidance and embeds it verbatim in `AGENTS.md`;
+/// a test asserts the managed instruction block keeps the two in sync.
+pub const GENERIC_MCP_SETUP: &str = r#"### Add Atlas as an MCP server
+
+Atlas is a stdio MCP server. Register it with whatever MCP-capable coding tool
+you use — Atlas does not write per-tool configuration files.
+
+  command: atlas
+  args:    ["serve"]   # add ["--repo", "<absolute-repo-path>", "serve"] to pin a repository
+
+Most MCP clients accept a JSON entry shaped like:
+
+  {
+    "mcpServers": {
+      "atlas": { "type": "stdio", "command": "atlas", "args": ["serve"] }
+    }
+  }
+
+Place that entry in your tool's MCP configuration and restart the tool. Consult
+the tool's documentation for the exact config file location and key name."#;
+
 pub(super) const INSTRUCTIONS_SECTION: &str = r#"<!-- atlas MCP tools -->
 ## MCP Tools: atlas
 
@@ -35,6 +61,25 @@ Why: Atlas is cheaper, faster, and returns structure file search cannot: symbols
 Priority rule: if instructions conflict, prefer Atlas for discovery and relationship lookup. Exceptions: read/edit exact files already identified, run validation commands (`cargo test --quiet`, clippy, format), or inspect non-code assets after Atlas points to them.
 
 Use default JSON output. Trust `structuredContent` as source of truth when present.
+
+### Add Atlas as an MCP server
+
+Atlas is a stdio MCP server. Register it with whatever MCP-capable coding tool
+you use — Atlas does not write per-tool configuration files.
+
+  command: atlas
+  args:    ["serve"]   # add ["--repo", "<absolute-repo-path>", "serve"] to pin a repository
+
+Most MCP clients accept a JSON entry shaped like:
+
+  {
+    "mcpServers": {
+      "atlas": { "type": "stdio", "command": "atlas", "args": ["serve"] }
+    }
+  }
+
+Place that entry in your tool's MCP configuration and restart the tool. Consult
+the tool's documentation for the exact config file location and key name.
 
 ### Atlas-first requirements
 
@@ -117,7 +162,7 @@ Runtime docs are canonical for current arguments and output contracts. Do not tr
 
 ### Session memory fallback for hosts without hooks
 
-Native Atlas hooks capture session events automatically on Claude Code, Codex, and Copilot. When this client does not support Atlas hooks (or hook availability is unknown), use Atlas MCP tools as the fallback lifecycle protocol. Never write any Atlas database directly; only call Atlas MCP tools or CLI commands.
+When your coding tool is wired to the generic `.atlas/hooks/atlas-hook` runner, Atlas captures session events automatically. When this client does not support Atlas hooks (or hook availability is unknown), use Atlas MCP tools as the fallback lifecycle protocol. Never write any Atlas database directly; only call Atlas MCP tools or CLI commands.
 
 #### Recall before work
 
@@ -142,30 +187,6 @@ Call `record_session_event` when any of these happens:
 Do NOT store: trivial logs, raw secrets or credentials, duplicate facts, raw unbounded transcripts, or facts already present in repository instruction files. Prefer compact summaries and `source_id` references.
 <!-- /atlas MCP tools -->
 "#;
-
-pub(super) fn instruction_targets(platform: &str, repo_root: &Path) -> Vec<&'static str> {
-    let mut targets = Vec::new();
-
-    let wants_agents = match platform {
-        "copilot" | "codex" => true,
-        "all" => should_auto_detect("copilot", repo_root) || should_auto_detect("codex", repo_root),
-        _ => false,
-    };
-    let wants_claude = match platform {
-        "claude" => true,
-        "all" => should_auto_detect("claude", repo_root),
-        _ => false,
-    };
-
-    if wants_agents {
-        targets.push("AGENTS.md");
-    }
-    if wants_claude {
-        targets.push("CLAUDE.md");
-    }
-
-    targets
-}
 
 pub fn inject_instructions(
     repo_root: &Path,

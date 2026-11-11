@@ -10,16 +10,22 @@ fn installed_hook_runner_executes_lifecycle_restore_and_handoff_end_to_end() {
         ("src/lib.rs", "pub fn alpha() {}\n"),
     ]);
 
-    run_atlas(repo.path(), &["install", "--platform", "codex"]);
-    assert!(repo.path().join(".atlas").join("hooks").join("lib").is_dir());
+    run_atlas(repo.path(), &["install"]);
+    assert!(
+        repo.path()
+            .join(".atlas")
+            .join("hooks")
+            .join("lib")
+            .is_dir()
+    );
 
     let repo_root = canonical_path(repo.path());
     let repo_root_str = repo_root.to_string_lossy().into_owned();
-    let session_id = SessionId::derive(&repo_root_str, "", "codex");
+    let session_id = SessionId::derive(&repo_root_str, "", "generic");
 
     let mut session_store = SessionStore::open_in_repo(repo.path()).expect("open session store");
     session_store
-        .upsert_session_meta(session_id.clone(), &repo_root_str, "codex", None)
+        .upsert_session_meta(session_id.clone(), &repo_root_str, "generic", None)
         .expect("upsert session meta");
     session_store
         .append_event(
@@ -35,16 +41,19 @@ fn installed_hook_runner_executes_lifecycle_restore_and_handoff_end_to_end() {
         .build_resume(&session_id)
         .expect("build resume snapshot");
 
-    run_installed_hook(repo.path(), "codex", "session-start", "{}");
+    run_installed_hook(repo.path(), "generic", "session-start", "{}");
 
     let session_store = SessionStore::open_in_repo(repo.path()).expect("reopen session store");
     let snapshot = session_store
         .get_resume_snapshot(&session_id)
         .expect("load resume snapshot")
         .expect("resume snapshot row");
-    assert!(snapshot.consumed, "installed runner should consume pending snapshot");
+    assert!(
+        snapshot.consumed,
+        "installed runner should consume pending snapshot"
+    );
 
-    run_installed_hook(repo.path(), "codex", "stop", "{}");
+    run_installed_hook(repo.path(), "generic", "stop", "{}");
 
     let context_db = repo.path().join(".atlas").join("context.db");
     let conn = Connection::open(&context_db).expect("open context db");
@@ -73,13 +82,17 @@ fn installed_hook_runner_refreshes_graph_after_file_edit_end_to_end() {
 
     run_atlas(repo.path(), &["init"]);
     run_atlas(repo.path(), &["build"]);
-    run_atlas(repo.path(), &["install", "--platform", "codex"]);
+    run_atlas(repo.path(), &["install"]);
 
-    write_repo_file(repo.path(), "src/lib.rs", "pub fn alpha() {}\npub fn beta() {}\n");
+    write_repo_file(
+        repo.path(),
+        "src/lib.rs",
+        "pub fn alpha() {}\npub fn beta() {}\n",
+    );
 
     run_installed_hook(
         repo.path(),
-        "codex",
+        "generic",
         "post-tool-use",
         r#"{"tool_name":"Write","changed_files":["src/lib.rs"]}"#,
     );
@@ -107,17 +120,30 @@ fn installed_hook_runner_clears_stale_status_after_file_edit_end_to_end() {
 
     run_atlas(repo.path(), &["init"]);
     run_atlas(repo.path(), &["build"]);
-    run_atlas(repo.path(), &["install", "--platform", "codex"]);
+    run_atlas(repo.path(), &["install"]);
 
-    write_repo_file(repo.path(), "src/lib.rs", "pub fn alpha() {}\npub fn beta() {}\n");
+    write_repo_file(
+        repo.path(),
+        "src/lib.rs",
+        "pub fn alpha() {}\npub fn beta() {}\n",
+    );
 
-    let stale_before = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
-    assert_eq!(stale_before["error_code"], json!("stale_index"), "status={stale_before:?}");
-    assert_eq!(stale_before["stale_index"], json!(true), "status={stale_before:?}");
+    let stale_before =
+        read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
+    assert_eq!(
+        stale_before["error_code"],
+        json!("stale_index"),
+        "status={stale_before:?}"
+    );
+    assert_eq!(
+        stale_before["stale_index"],
+        json!(true),
+        "status={stale_before:?}"
+    );
 
     run_installed_hook(
         repo.path(),
-        "codex",
+        "generic",
         "post-tool-use",
         r#"{"tool_name":"Write","changed_files":["src/lib.rs"]}"#,
     );
@@ -132,8 +158,21 @@ fn installed_hook_runner_clears_stale_status_after_file_edit_end_to_end() {
         "installed runner should refresh graph after file edit"
     );
 
-    let stale_after = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
-    assert_ne!(stale_after["error_code"], json!("stale_index"), "status={stale_after:?}");
-    assert_eq!(stale_after["stale_index"], json!(false), "status={stale_after:?}");
-    assert_eq!(stale_after["pending_graph_change_count"], json!(0), "status={stale_after:?}");
+    let stale_after =
+        read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
+    assert_ne!(
+        stale_after["error_code"],
+        json!("stale_index"),
+        "status={stale_after:?}"
+    );
+    assert_eq!(
+        stale_after["stale_index"],
+        json!(false),
+        "status={stale_after:?}"
+    );
+    assert_eq!(
+        stale_after["pending_graph_change_count"],
+        json!(0),
+        "status={stale_after:?}"
+    );
 }

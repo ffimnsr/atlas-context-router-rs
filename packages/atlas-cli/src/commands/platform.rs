@@ -477,59 +477,41 @@ struct DaemonHandshakeResponse {
     error: Option<String>,
 }
 
-/// Map an install mode to the surfaces it skips: `(platform config, hooks,
-/// instructions)`. `all` skips nothing; the mode composes with explicit
-/// `--no-*` flags in the caller.
-fn resolve_mode_skips(mode: InstallMode) -> (bool, bool, bool) {
+/// Map an install mode to the surfaces it skips: `(hooks, instructions)`.
+/// `all` skips nothing; the mode composes with explicit `--no-*` flags in the
+/// caller.
+fn resolve_mode_skips(mode: InstallMode) -> (bool, bool) {
     (
-        matches!(mode, InstallMode::Hook | InstallMode::Cli),
-        matches!(mode, InstallMode::Mcp | InstallMode::Cli),
-        matches!(mode, InstallMode::Mcp | InstallMode::Hook),
+        matches!(mode, InstallMode::Cli),
+        matches!(mode, InstallMode::Hook),
     )
-}
-
-fn should_warn_no_platforms_detected(
-    platform: &str,
-    no_platform_config: bool,
-    configured_count: usize,
-) -> bool {
-    platform == "all" && !no_platform_config && configured_count == 0
 }
 
 pub fn run_install(cli: &Cli) -> Result<()> {
     let (
-        platform,
-        scope,
         dry_run,
         validate_only,
         force,
         instructions_only,
-        no_platform_config,
         no_hooks,
         no_instructions,
         instructions_mode,
         mode,
     ) = match &cli.command {
         Command::Install {
-            platform,
-            scope,
             dry_run,
             validate_only,
             force,
             instructions_only,
-            no_platform_config,
             no_hooks,
             no_instructions,
             instructions_mode,
             mode,
         } => (
-            platform.clone(),
-            scope.clone(),
             *dry_run,
             *validate_only,
             *force,
             *instructions_only,
-            *no_platform_config,
             *no_hooks,
             *no_instructions,
             *instructions_mode,
@@ -548,23 +530,19 @@ pub fn run_install(cli: &Cli) -> Result<()> {
     }
 
     // Install modes map to the same surfaces as the explicit --no-* flags:
-    // mcp = platform MCP config, hook = git + agent hooks, cli = instruction
-    // fallback text, all = every surface.
-    let (mode_skips_platform_config, mode_skips_hooks, mode_skips_instructions) =
-        resolve_mode_skips(mode);
-    let no_platform_config = no_platform_config || instructions_only || mode_skips_platform_config;
+    // hook = git hooks + agent hook runner, cli = AGENTS.md instructions,
+    // all = both. MCP configuration is never written; users register the
+    // generic stdio server with their own coding tool.
+    let (mode_skips_hooks, mode_skips_instructions) = resolve_mode_skips(mode);
     let no_hooks = no_hooks || instructions_only || mode_skips_hooks;
     let no_instructions = no_instructions || mode_skips_instructions;
 
     let summary = crate::install::run_install(
         repo_root,
-        &platform,
-        &scope,
         crate::install::InstallOptions {
             dry_run,
             validate_only,
             force,
-            no_platform_config,
             no_hooks,
             no_instructions,
             instructions_mode,
@@ -575,38 +553,30 @@ pub fn run_install(cli: &Cli) -> Result<()> {
         print_json(
             "install",
             serde_json::json!({
-                "scope": summary.scope,
                 "dry_run": dry_run,
                 "validate_only": summary.validate_only,
                 "instructions_only": instructions_only,
-                "no_platform_config": no_platform_config,
                 "no_hooks": no_hooks,
+                "no_instructions": no_instructions,
                 "mode": mode.as_str(),
                 "instructions_mode": instructions_mode.as_str(),
-                "configured": summary.configured,
-                "already_configured": summary.already_configured,
                 "hook_paths": summary.hook_paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+                "hook_runner_files": summary.hook_runner_files,
                 "instruction_files": summary.instruction_files,
-                "platform_hook_files": summary.platform_hook_files,
                 "validation_checks": summary.validation_checks,
+                "mcp_setup": crate::install::GENERIC_MCP_SETUP,
             }),
         )?;
     } else {
-        for name in &summary.configured {
-            println!("  Configured : {name}");
-        }
-        for name in &summary.already_configured {
-            println!("  Skipped    : {name} (already configured)");
-        }
         for hook in &summary.hook_paths {
             println!("  Git hook   : {}", hook.display());
         }
-        for f in &summary.platform_hook_files {
-            println!("  Hook config: {f}");
+        for f in &summary.hook_runner_files {
+            println!("  Hook runner: {f}");
         }
         for f in &summary.instruction_files {
             if dry_run {
-                println!("  Instructions (dry-run): {f} (would update fallback file)");
+                println!("  Instructions (dry-run): {f} (would update AGENTS.md)");
             } else {
                 println!("  Instructions updated  : {f}");
             }
@@ -616,11 +586,10 @@ pub fn run_install(cli: &Cli) -> Result<()> {
             println!("  Validate   : {status} {}", check.detail);
         }
 
-        let total = summary.configured.len() + summary.already_configured.len();
-        if should_warn_no_platforms_detected(&platform, no_platform_config, total) {
-            println!("No platforms detected. Use --platform to target one explicitly.");
-        } else if !dry_run && !validate_only {
-            println!("\nDone. Restart your AI coding tool to pick up the new config.");
+        if !validate_only {
+            println!();
+            println!("{}", crate::install::GENERIC_MCP_SETUP);
+            println!();
             println!("Run `atlas build` to build the knowledge graph.");
         }
     }
@@ -690,20 +659,9 @@ mod tests {
     #[test]
     fn install_mode_maps_to_surfaces() {
         use super::resolve_mode_skips;
-        assert_eq!(resolve_mode_skips(InstallMode::All), (false, false, false));
-        assert_eq!(resolve_mode_skips(InstallMode::Mcp), (false, true, true));
-        assert_eq!(resolve_mode_skips(InstallMode::Hook), (true, false, true));
-        assert_eq!(resolve_mode_skips(InstallMode::Cli), (true, true, false));
-    }
-
-    #[test]
-    fn no_platform_warning_only_applies_to_auto_detected_platform_config() {
-        use super::should_warn_no_platforms_detected;
-
-        assert!(should_warn_no_platforms_detected("all", false, 0));
-        assert!(!should_warn_no_platforms_detected("codex", false, 0));
-        assert!(!should_warn_no_platforms_detected("all", true, 0));
-        assert!(!should_warn_no_platforms_detected("all", false, 1));
+        assert_eq!(resolve_mode_skips(InstallMode::All), (false, false));
+        assert_eq!(resolve_mode_skips(InstallMode::Hook), (false, true));
+        assert_eq!(resolve_mode_skips(InstallMode::Cli), (true, false));
     }
 
     #[test]
