@@ -134,6 +134,28 @@ pub(super) fn tool_list_symbols(
     let requested_kind = str_arg(args, "kind")?.map(resolve_kind_alias);
     let language = str_arg(args, "language")?.map(str::to_owned);
     let repo_id = str_arg(args, "repo_id")?.map(str::to_owned);
+    let normalize_scope = |raw: String| {
+        atlas_repo::normalize_repo_file_path(camino::Utf8Path::new(repo_root), &raw)
+            .map(|resolved| resolved.canonical)
+            .unwrap_or(raw)
+    };
+    let exact_dir = str_arg(args, "exact_dir")?
+        .map(str::to_owned)
+        .map(&normalize_scope)
+        .filter(|scope| !scope.trim().is_empty());
+    let exclude_subpaths: Vec<String> = args
+        .and_then(|value| value.get("exclude_subpaths"))
+        .and_then(|value| value.as_array())
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str())
+                .map(str::to_owned)
+                .map(&normalize_scope)
+                .filter(|scope| !scope.trim().is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
     let requested_limit = u64_arg(args, "limit").unwrap_or(DEFAULT_LIST_LIMIT as u64) as usize;
     let limit = requested_limit.clamp(1, MAX_LIST_LIMIT);
     let offset = u64_arg(args, "offset").unwrap_or(0) as usize;
@@ -144,6 +166,8 @@ pub(super) fn tool_list_symbols(
         language: language.as_deref(),
         subpath: subpath.as_deref(),
         repo_id: repo_id.as_deref(),
+        exact_dir: exact_dir.as_deref(),
+        exclude_subpaths: &exclude_subpaths,
     };
     let page = store
         .list_nodes(&filter, limit, offset)

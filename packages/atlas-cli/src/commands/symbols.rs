@@ -15,29 +15,43 @@ pub fn run_symbols(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
     let db_path = db_path(cli, &repo);
 
-    let (kind, language, subpath, repo_id, limit, offset, allow_stale, allow_partial) =
-        match &cli.command {
-            Command::Symbols {
-                kind,
-                language,
-                subpath,
-                repo_id,
-                limit,
-                offset,
-                allow_stale,
-                allow_partial,
-            } => (
-                kind.clone(),
-                language.clone(),
-                subpath.clone(),
-                repo_id.clone(),
-                *limit,
-                *offset,
-                *allow_stale,
-                *allow_partial,
-            ),
-            _ => unreachable!(),
-        };
+    let (
+        kind,
+        language,
+        subpath,
+        exact_dir,
+        exclude_subpaths,
+        repo_id,
+        limit,
+        offset,
+        allow_stale,
+        allow_partial,
+    ) = match &cli.command {
+        Command::Symbols {
+            kind,
+            language,
+            subpath,
+            exact_dir,
+            exclude_subpaths,
+            repo_id,
+            limit,
+            offset,
+            allow_stale,
+            allow_partial,
+        } => (
+            kind.clone(),
+            language.clone(),
+            subpath.clone(),
+            exact_dir.clone(),
+            exclude_subpaths.clone(),
+            repo_id.clone(),
+            *limit,
+            *offset,
+            *allow_stale,
+            *allow_partial,
+        ),
+        _ => unreachable!(),
+    };
 
     let store = match Store::open(&db_path) {
         Ok(s) => s,
@@ -69,24 +83,35 @@ pub fn run_symbols(cli: &Cli) -> Result<()> {
     // Best-effort subpath normalization: root-prefixed and absolute-under-root
     // forms collapse to canonical repo-relative prefixes; unmatched inputs stay
     // as typed so the prefix filter can still match literally.
+    let normalize = |raw: String| {
+        find_repo_root(Utf8Path::new(&repo))
+            .ok()
+            .and_then(|root| {
+                normalize_repo_file_path(root.as_path(), &raw)
+                    .ok()
+                    .map(|resolved| resolved.canonical)
+            })
+            .unwrap_or(raw)
+    };
     let subpath = subpath
-        .map(|raw| {
-            find_repo_root(Utf8Path::new(&repo))
-                .ok()
-                .and_then(|root| {
-                    normalize_repo_file_path(root.as_path(), &raw)
-                        .ok()
-                        .map(|resolved| resolved.canonical)
-                })
-                .unwrap_or(raw)
-        })
+        .map(&normalize)
         .filter(|prefix| !prefix.trim().is_empty());
+    let exact_dir = exact_dir
+        .map(&normalize)
+        .filter(|scope| !scope.trim().is_empty());
+    let exclude_subpaths: Vec<String> = exclude_subpaths
+        .into_iter()
+        .map(normalize)
+        .filter(|scope| !scope.trim().is_empty())
+        .collect();
 
     let filter = NodeListFilter {
         kind: kind.as_deref(),
         language: language.as_deref(),
         subpath: subpath.as_deref(),
         repo_id: repo_id.as_deref(),
+        exact_dir: exact_dir.as_deref(),
+        exclude_subpaths: &exclude_subpaths,
     };
     let page = store
         .list_nodes(&filter, limit, offset)
@@ -100,6 +125,8 @@ pub fn run_symbols(cli: &Cli) -> Result<()> {
                     "kind": kind,
                     "language": language,
                     "subpath": subpath,
+                    "exact_dir": exact_dir,
+                    "exclude_subpaths": exclude_subpaths,
                     "repo_id": repo_id,
                 },
                 "symbols": page

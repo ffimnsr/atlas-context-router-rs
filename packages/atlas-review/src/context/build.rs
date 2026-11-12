@@ -182,6 +182,7 @@ pub(super) fn build_review_context(
         saved_context_sources: vec![],
         content_assets: vec![],
         overviews: vec![],
+        sufficiency: None,
         budget: impact.budget.clone(),
     };
 

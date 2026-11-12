@@ -4,6 +4,7 @@ use serde_json::json;
 use crate::budget::BudgetReport;
 
 use super::graph::{Edge, Node};
+use super::sufficiency::EvidenceSufficiencyReport;
 
 /// What kind of context retrieval is being requested.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,6 +187,10 @@ pub enum SelectionReason {
     TestAdjacent,
     /// Reached via impact traversal.
     ImpactNeighbor,
+    /// Surfaced through an overview record at a specific disclosure level (VR1).
+    OverviewLevel,
+    /// Activated through a query-conditioned experience edge (VR4).
+    ExperienceShortcut,
 }
 
 impl SelectionReason {
@@ -199,6 +204,8 @@ impl SelectionReason {
             Self::ContainmentSibling => "containment_sibling",
             Self::TestAdjacent => "test_adjacent",
             Self::ImpactNeighbor => "impact_neighbor",
+            Self::OverviewLevel => "overview_level",
+            Self::ExperienceShortcut => "experience_shortcut",
         }
     }
 }
@@ -301,6 +308,18 @@ pub struct ContextRankingEvidence {
     /// Additive boost for saved-context sources from the active session.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub same_session_boost: Option<f32>,
+    /// Provenance for a node selected through an experience edge (VR4).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub experience_shortcut: Option<ExperienceShortcutEvidence>,
+}
+
+/// Provenance attached to an experience-edge shortcut.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExperienceShortcutEvidence {
+    pub edge_id: String,
+    pub confidence: f64,
+    pub trace_summary: String,
+    pub commit_sha: String,
 }
 
 pub type ContextScoreEvidence = ContextRankingEvidence;
@@ -322,7 +341,9 @@ impl ContextRankingEvidence {
             SelectionReason::Importer
             | SelectionReason::Importee
             | SelectionReason::ContainmentSibling
-            | SelectionReason::ImpactNeighbor => {}
+            | SelectionReason::ImpactNeighbor
+            | SelectionReason::OverviewLevel
+            | SelectionReason::ExperienceShortcut => {}
         }
         evidence
     }
@@ -784,6 +805,9 @@ pub struct ContextResult {
     /// through `source_id`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub overviews: Vec<ContextOverview>,
+    /// Deterministic evidence-sufficiency report and escalation trace (VR3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sufficiency: Option<EvidenceSufficiencyReport>,
     #[serde(flatten)]
     pub budget: BudgetReport,
 }
@@ -811,6 +835,12 @@ pub struct ContextOverview {
     pub qualified_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stale_reason: Option<String>,
+    /// Disclosure level this entry was rendered at (VR1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<String>,
+    /// Canonical `atlas://` URI for this overview subject (VR1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
 }
 
 #[cfg(test)]

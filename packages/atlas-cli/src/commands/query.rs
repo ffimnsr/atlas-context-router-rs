@@ -152,6 +152,8 @@ pub fn run_query(cli: &Cli) -> Result<()> {
         language,
         include_files,
         subpath,
+        exact_dir,
+        exclude_subpaths,
         limit,
         expand,
         expand_hops,
@@ -170,6 +172,8 @@ pub fn run_query(cli: &Cli) -> Result<()> {
             language,
             include_files,
             subpath,
+            exact_dir,
+            exclude_subpaths,
             limit,
             expand,
             expand_hops,
@@ -187,6 +191,8 @@ pub fn run_query(cli: &Cli) -> Result<()> {
             language.clone(),
             *include_files,
             subpath.clone(),
+            exact_dir.clone(),
+            exclude_subpaths.clone(),
             *limit,
             *expand,
             *expand_hops,
@@ -243,6 +249,29 @@ pub fn run_query(cli: &Cli) -> Result<()> {
             })
             .unwrap_or(raw)
     });
+    let exact_dir = exact_dir.map(|raw| {
+        find_repo_root(Utf8Path::new(&repo))
+            .ok()
+            .and_then(|root| {
+                atlas_repo::normalize_repo_file_path(root.as_path(), &raw)
+                    .ok()
+                    .map(|resolved| resolved.canonical)
+            })
+            .unwrap_or(raw)
+    });
+    let exclude_subpaths: Vec<String> = exclude_subpaths
+        .into_iter()
+        .map(|raw| {
+            find_repo_root(Utf8Path::new(&repo))
+                .ok()
+                .and_then(|root| {
+                    atlas_repo::normalize_repo_file_path(root.as_path(), &raw)
+                        .ok()
+                        .map(|resolved| resolved.canonical)
+                })
+                .unwrap_or(raw)
+        })
+        .collect();
     let effective_limit = budgets.resolve_limit(
         policy.query_candidates_and_seeds.candidates,
         "query_candidates_and_seeds.max_candidates",
@@ -255,6 +284,8 @@ pub fn run_query(cli: &Cli) -> Result<()> {
         language,
         include_files,
         subpath,
+        exact_dir,
+        exclude_subpaths,
         limit: effective_limit,
         graph_expand: expand,
         graph_max_hops: expand_hops,
@@ -293,6 +324,8 @@ pub fn run_query(cli: &Cli) -> Result<()> {
                     "language": query.language,
                     "include_files": query.include_files,
                     "subpath": query.subpath,
+                    "exact_dir": query.exact_dir,
+                    "exclude_subpaths": query.exclude_subpaths,
                     "limit": query.limit,
                     "graph_expand": query.graph_expand,
                     "graph_max_hops": query.graph_max_hops,

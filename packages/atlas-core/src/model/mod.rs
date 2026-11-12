@@ -6,14 +6,16 @@ mod insights;
 mod reasoning;
 mod refactor;
 mod search;
+mod sufficiency;
 
 pub use self::context::{
     AmbiguityMeta, ContentAsset, ContentAssetReason, ContextIntent, ContextOverview,
     ContextRankingEvidence, ContextRequest, ContextResult, ContextScoreEvidence, ContextSourceMix,
-    ContextTarget, MixedResultKind, NoiseReductionSummary, PayloadTruncationMeta,
-    SavedContextSource, SeedBudgetMeta, SelectedEdge, SelectedFile, SelectedNode, SelectionReason,
-    TokenAccountingMeta, TraversalBudgetMeta, TruncationMeta, WorkflowCallChain, WorkflowComponent,
-    WorkflowFocusNode, WorkflowSummary, context_ranking_evidence_legend,
+    ContextTarget, ExperienceShortcutEvidence, MixedResultKind, NoiseReductionSummary,
+    PayloadTruncationMeta, SavedContextSource, SeedBudgetMeta, SelectedEdge, SelectedFile,
+    SelectedNode, SelectionReason, TokenAccountingMeta, TraversalBudgetMeta, TruncationMeta,
+    WorkflowCallChain, WorkflowComponent, WorkflowFocusNode, WorkflowSummary,
+    context_ranking_evidence_legend,
 };
 pub use self::graph::{
     ChangeType, ChangedFile, Edge, FileRecord, GraphStats, Node, NodeId, PackageOwner,
@@ -48,6 +50,7 @@ pub use self::search::{
     HybridRrfEvidence, RankingEvidence, RetrievalMode, ScoreEvidence, ScoredNode,
     SearchMatchedField, SearchQuery, ranking_evidence_legend,
 };
+pub use self::sufficiency::{EvidenceGap, EvidenceSufficiencyReport};
 
 #[cfg(test)]
 mod tests;

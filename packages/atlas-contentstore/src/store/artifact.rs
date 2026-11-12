@@ -279,10 +279,15 @@ impl ContentStore {
                 .repo_id
                 .clone()
                 .or_else(|| (repo_ids.len() == 1).then(|| repo_ids[0].clone()));
+            let (relative_path, parent_dir) =
+                match super::util::relative_scope(&meta.identity_kind, &meta.identity_value) {
+                    Some((relative, parent)) => (Some(relative), Some(parent)),
+                    None => (None, None),
+                };
             tx.execute(
                 "INSERT OR REPLACE INTO sources (
-                     id, session_id, agent_id, source_type, label, repo_root, repo_roots_json, repo_id, repo_ids_json, identity_kind, identity_value, created_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                     id, session_id, agent_id, source_type, label, repo_root, repo_roots_json, repo_id, repo_ids_json, identity_kind, identity_value, relative_path, parent_dir, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     meta.id,
                     meta.session_id,
@@ -295,6 +300,8 @@ impl ContentStore {
                     repo_ids_json,
                     meta.identity_kind,
                     meta.identity_value,
+                    relative_path,
+                    parent_dir,
                     now,
                 ],
             )

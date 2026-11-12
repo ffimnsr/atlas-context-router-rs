@@ -472,6 +472,7 @@ fn collect_critical_memories(
             source_type: None,
             repo_root: None,
             repo_roots: vec![repo_root.to_owned()],
+            ..SearchFilters::default()
         };
         if let Ok(ids) = cs.recent_source_ids_by_prefix("", &filters, max_items) {
             for id in ids {

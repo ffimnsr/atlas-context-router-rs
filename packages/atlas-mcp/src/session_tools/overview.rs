@@ -8,7 +8,8 @@ use atlas_adapters::{RedactionRules, derive_content_db_path, load_redaction_rule
 use atlas_contentstore::ContentStore;
 use atlas_session::{
     OverviewAnalysisInput, OverviewExportRequest, OverviewExportScope, OverviewFreshness,
-    OverviewSearchFilter, OverviewSourceKind, OverviewSubjectKind, SessionStore,
+    OverviewLevel, OverviewSearchFilter, OverviewSourceKind, OverviewSubjectKind, SessionStore,
+    render_level,
 };
 use serde_json::Value;
 
@@ -31,6 +32,12 @@ fn bool_arg(args: Option<&Value>, key: &str) -> bool {
 
 fn u64_arg(args: Option<&Value>, key: &str) -> Option<u64> {
     args.and_then(|a| a.get(key)).and_then(|v| v.as_u64())
+}
+
+fn level_arg(args: Option<&Value>) -> Result<Option<OverviewLevel>> {
+    Ok(string_arg(args, "level")
+        .map(str::parse::<OverviewLevel>)
+        .transpose()?)
 }
 
 fn open_session(db_path: &str) -> Result<SessionStore> {
@@ -191,18 +198,38 @@ pub fn tool_overview_search(
     };
     let session = open_session(db_path)?;
     let hits = session.search_overview_records(repo_root, query, &filter)?;
+    let level = level_arg(args)?;
+    let hits_payload = match level {
+        Some(level) => serde_json::json!(
+            hits.iter()
+                .map(|hit| serde_json::json!({
+                    "score": hit.score,
+                    "ranking": hit.ranking,
+                    "record": hit.record,
+                    "view": render_level(&hit.record, level),
+                }))
+                .collect::<Vec<_>>()
+        ),
+        None => serde_json::to_value(&hits)?,
+    };
     build_tool_result_value(
-        &serde_json::json!({
-            "tool": "overview_search",
-            "repo_root": repo_root,
-            "query": query,
-            "hits": hits,
-            "summary": {
-                "hit_count": hits.len(),
-                "limit": filter.limit.unwrap_or(20),
-            },
-            "warnings": [],
-        }),
+        &{
+            let mut payload = serde_json::json!({
+                "tool": "overview_search",
+                "repo_root": repo_root,
+                "query": query,
+                "hits": hits_payload,
+                "summary": {
+                    "hit_count": hits.len(),
+                    "limit": filter.limit.unwrap_or(20),
+                },
+                "warnings": [],
+            });
+            if let Some(level) = level {
+                payload["level"] = serde_json::json!(level.as_str());
+            }
+            payload
+        },
         output_format,
     )
 }
@@ -218,20 +245,28 @@ pub fn tool_overview_show(
         .ok_or_else(|| anyhow::anyhow!("missing required argument: subject"))?;
     let session = open_session(db_path)?;
     let record = session.resolve_overview_subject(repo_root, subject)?;
+    let level = level_arg(args)?;
     build_tool_result_value(
-        &serde_json::json!({
-            "tool": "overview_show",
-            "repo_root": repo_root,
-            "record": record,
-            "summary": {
-                "overview_id": record.id,
-                "subject_id": record.subject_id,
-                "subject_kind": record.subject_kind.as_str(),
-                "freshness": record.freshness.as_str(),
-                "confidence": record.confidence,
-            },
-            "warnings": [],
-        }),
+        &{
+            let mut payload = serde_json::json!({
+                "tool": "overview_show",
+                "repo_root": repo_root,
+                "record": record,
+                "summary": {
+                    "overview_id": record.id,
+                    "subject_id": record.subject_id,
+                    "subject_kind": record.subject_kind.as_str(),
+                    "freshness": record.freshness.as_str(),
+                    "confidence": record.confidence,
+                },
+                "warnings": [],
+            });
+            if let Some(level) = level {
+                payload["level"] = serde_json::json!(level.as_str());
+                payload["view"] = serde_json::to_value(render_level(&record, level))?;
+            }
+            payload
+        },
         output_format,
     )
 }

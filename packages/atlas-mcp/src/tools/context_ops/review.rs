@@ -24,10 +24,23 @@ pub(crate) fn tool_get_review_context(
     let store = open_store(db_path)?;
     let policy = load_budget_policy(repo_root)?;
     let token_counter = load_token_counter(repo_root)?;
+    let config =
+        atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root)).unwrap_or_default();
     let engine = ContextEngine::new(&store)
         .with_budget_policy(policy)
         .with_token_counter(token_counter.counter)
-        .with_token_fallback(token_counter.fallback_used, token_counter.fallback_reason);
+        .with_token_fallback(token_counter.fallback_used, token_counter.fallback_reason)
+        .with_escalation(
+            config.context.escalation.enabled,
+            config.context.escalation.max_rounds,
+        );
+    let experience_session =
+        atlas_session::SessionStore::open(&atlas_adapters::derive_session_db_path(db_path)).ok();
+    let engine = if let Some(session) = experience_session.as_ref() {
+        engine.with_experience_store(repo_root, session, config.context.experience.max_edges)
+    } else {
+        engine
+    };
     let request = ContextRequest {
         intent: ContextIntent::Review,
         target: ContextTarget::ChangedFiles {

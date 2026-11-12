@@ -83,6 +83,7 @@ pub(crate) fn overview_search_output_schema() -> Value {
         json!({
             "repo_root": { "type": "string" },
             "query": { "type": "string" },
+            "level": { "type": "string" },
             "hits": { "type": "array", "items": { "type": "object" } },
             "summary": summary_schema(
                 &["hit_count", "limit"],
@@ -102,6 +103,8 @@ pub(crate) fn overview_show_output_schema() -> Value {
     normalized_tool_output_schema(
         json!({
             "repo_root": { "type": "string" },
+            "level": { "type": "string" },
+            "view": { "type": "object" },
             "record": { "type": "object" },
             "summary": summary_schema(
                 &[

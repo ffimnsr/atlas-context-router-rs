@@ -2,12 +2,88 @@ use atlas_core::{
     AtlasError, Node, ParsedFile, RankingEvidence, Result, RetrievalMode, ScoredNode,
     SearchMatchedField,
 };
+use atlas_repo::CanonicalRepoPath;
 use rusqlite::params;
 
 use super::{
     Store,
     helpers::{repeat_placeholders, row_to_node},
 };
+
+/// Directory/repo scope applied to vector search before cosine scoring.
+///
+/// This is the TrieHI DSQ stage-1 contract: scope is resolved into SQL
+/// predicates so out-of-scope chunks are never ranked.
+#[derive(Debug, Clone, Default)]
+pub struct VectorScope {
+    /// Recursive canonical path prefix.
+    pub subpath_prefix: Option<String>,
+    /// Non-recursive exact parent directory.
+    pub exact_dir: Option<String>,
+    /// Canonical prefixes excluded from the candidate set.
+    pub exclude_prefixes: Vec<String>,
+    /// Indexed repo ids to restrict to. Empty means every repo.
+    pub repo_ids: Vec<String>,
+    /// Node kinds to restrict to.
+    pub kinds: Vec<String>,
+    /// Languages to restrict to.
+    pub languages: Vec<String>,
+}
+
+impl VectorScope {
+    /// Canonicalize and validate every path scope.
+    ///
+    /// Fails closed when a path scope is present without an explicit repo
+    /// scope, because a path-only scope cannot be attributed safely across
+    /// multiple indexed repos.
+    fn validated(&self) -> Result<Self> {
+        let canonicalize = |value: &str| {
+            CanonicalRepoPath::from_repo_relative(value.trim())
+                .map(|path| path.as_str().to_owned())
+                .map_err(|error| {
+                    AtlasError::Other(format!("invalid directory scope '{value}': {error}"))
+                })
+        };
+        let scope = Self {
+            subpath_prefix: self
+                .subpath_prefix
+                .as_deref()
+                .map(canonicalize)
+                .transpose()?,
+            exact_dir: self.exact_dir.as_deref().map(canonicalize).transpose()?,
+            exclude_prefixes: self
+                .exclude_prefixes
+                .iter()
+                .map(|value| canonicalize(value))
+                .collect::<Result<Vec<_>>>()?,
+            repo_ids: self.repo_ids.clone(),
+            kinds: self.kinds.clone(),
+            languages: self.languages.clone(),
+        };
+        let has_path_scope = scope.subpath_prefix.is_some()
+            || scope.exact_dir.is_some()
+            || !scope.exclude_prefixes.is_empty();
+        if has_path_scope && scope.repo_ids.is_empty() {
+            return Err(AtlasError::Other(
+                "directory scope requires an explicit repo scope; refusing to scan every repo"
+                    .to_owned(),
+            ));
+        }
+        Ok(scope)
+    }
+}
+
+/// Strict lexicographic upper bound equivalent to `path.starts_with(prefix)`.
+fn scope_upper_bound(prefix: &str) -> String {
+    let mut chars: Vec<char> = prefix.chars().collect();
+    while let Some(last) = chars.pop() {
+        if let Some(next) = char::from_u32(last as u32 + 1) {
+            chars.push(next);
+            break;
+        }
+    }
+    chars.into_iter().collect()
+}
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     if a.len() != b.len() || a.is_empty() {
@@ -184,26 +260,98 @@ impl Store {
 
     /// Return the top-`limit` nodes ranked by cosine similarity to `query_embedding`.
     ///
-    /// Fetches all chunks that have an embedding, scores them in-process, and
-    /// returns the matching nodes. Chunks whose symbol no longer exists in the
-    /// `nodes` table are silently skipped.
+    /// Scope, repo, kind, and language filters are applied in SQL before any
+    /// cosine scoring, so out-of-scope chunks are never ranked. Returns
+    /// `(results, scope_candidates)` so callers can report candidate counts.
     pub fn nodes_by_vector_similarity(
         &self,
         query_embedding: &[f32],
+        scope: &VectorScope,
         limit: usize,
     ) -> Result<Vec<ScoredNode>> {
+        Ok(self
+            .nodes_by_vector_similarity_with_stats(query_embedding, scope, limit)?
+            .0)
+    }
+
+    /// Same as [`Store::nodes_by_vector_similarity`] but also reports the
+    /// number of in-scope candidates evaluated.
+    pub fn nodes_by_vector_similarity_with_stats(
+        &self,
+        query_embedding: &[f32],
+        scope: &VectorScope,
+        limit: usize,
+    ) -> Result<(Vec<ScoredNode>, usize)> {
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let scope = scope.validated()?;
 
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT node_qn, embedding FROM retrieval_chunks
-                 WHERE embedding IS NOT NULL",
-            )
-            .map_err(db_err)?;
+        let mut clauses: Vec<String> = vec!["rc.embedding IS NOT NULL".to_owned()];
+        let mut bind: Vec<String> = Vec::new();
 
+        if let Some(prefix) = scope.subpath_prefix.as_deref() {
+            bind.push(prefix.to_owned());
+            let low = bind.len();
+            bind.push(scope_upper_bound(prefix));
+            let high = bind.len();
+            clauses.push(format!("n.file_path >= ?{low} AND n.file_path < ?{high}"));
+        }
+        if let Some(dir) = scope.exact_dir.as_deref() {
+            bind.push(dir.to_owned());
+            let index = bind.len();
+            clauses.push(format!(
+                "(substr(n.file_path, 1, length(?{index}) + 1) = ?{index} || '/' AND instr(substr(n.file_path, length(?{index}) + 2), '/') = 0)"
+            ));
+        }
+        for prefix in &scope.exclude_prefixes {
+            bind.push(prefix.clone());
+            let low = bind.len();
+            bind.push(scope_upper_bound(prefix));
+            let high = bind.len();
+            clauses.push(format!(
+                "NOT (n.file_path >= ?{low} AND n.file_path < ?{high})"
+            ));
+        }
+        if !scope.repo_ids.is_empty() {
+            let mut placeholders = Vec::new();
+            for repo_id in &scope.repo_ids {
+                bind.push(repo_id.clone());
+                placeholders.push(format!("?{}", bind.len()));
+            }
+            clauses.push(format!(
+                "rc.source_repo_id IN ({})",
+                placeholders.join(", ")
+            ));
+        }
+        if !scope.kinds.is_empty() {
+            let mut placeholders = Vec::new();
+            for kind in &scope.kinds {
+                bind.push(kind.clone());
+                placeholders.push(format!("?{}", bind.len()));
+            }
+            clauses.push(format!("n.kind IN ({})", placeholders.join(", ")));
+        }
+        if !scope.languages.is_empty() {
+            let mut placeholders = Vec::new();
+            for language in &scope.languages {
+                bind.push(language.clone());
+                placeholders.push(format!("?{}", bind.len()));
+            }
+            clauses.push(format!("n.language IN ({})", placeholders.join(", ")));
+        }
+
+        let sql = format!(
+            "SELECT n.qualified_name, rc.embedding
+             FROM retrieval_chunks rc
+             JOIN nodes n
+               ON n.qualified_name = rc.node_qn
+              AND n.source_repo_id = rc.source_repo_id
+             WHERE {}",
+            clauses.join(" AND ")
+        );
+
+        let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
         let mut candidates: Vec<(String, f64)> = stmt
-            .query_map([], |row| {
+            .query_map(rusqlite::params_from_iter(bind.iter()), |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
             })
             .map_err(db_err)?
@@ -219,12 +367,13 @@ impl Store {
                 (qn, sim)
             })
             .collect();
+        let scope_candidates = candidates.len();
 
         candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         candidates.truncate(limit);
 
         if candidates.is_empty() {
-            return Ok(vec![]);
+            return Ok((vec![], scope_candidates));
         }
 
         let qns: Vec<&str> = candidates.iter().map(|(q, _)| q.as_str()).collect();
@@ -255,7 +404,7 @@ impl Store {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        Ok(results)
+        Ok((results, scope_candidates))
     }
 
     /// Fetch nodes by their `qualified_name` values.

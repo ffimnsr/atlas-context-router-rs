@@ -223,6 +223,7 @@ pub(super) fn build_symbol_context(
         saved_context_sources: vec![],
         content_assets: vec![],
         overviews: vec![],
+        sufficiency: None,
         budget: BudgetReport::not_applicable(),
     };
 
@@ -256,6 +257,7 @@ pub(super) fn build_ambiguous_result(
         saved_context_sources: vec![],
         content_assets: vec![],
         overviews: vec![],
+        sufficiency: None,
         budget: BudgetReport::not_applicable(),
     }
 }
@@ -286,6 +288,7 @@ pub(super) fn build_not_found_result(
         saved_context_sources: vec![],
         content_assets: vec![],
         overviews: vec![],
+        sufficiency: None,
         budget: BudgetReport::not_applicable(),
     }
 }

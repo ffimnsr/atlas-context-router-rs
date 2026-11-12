@@ -116,6 +116,27 @@ pub(super) fn overviews_for_context(
             break;
         }
         emitted_bytes += added;
+        let repo_id = atlas_repo::stable_repo_id(camino::Utf8Path::new(repo_root));
+        let uri = hit
+            .record
+            .qualified_name
+            .as_deref()
+            .map(|qname| {
+                format!(
+                    "atlas://repo/{}/symbol/{}",
+                    encode_uri_segment(&repo_id),
+                    encode_uri_segment(qname)
+                )
+            })
+            .or_else(|| {
+                hit.record.canonical_file_path.as_deref().map(|path| {
+                    format!(
+                        "atlas://repo/{}/file/{}",
+                        encode_uri_segment(&repo_id),
+                        encode_uri_segment(path)
+                    )
+                })
+            });
         overviews.push(ContextOverview {
             overview_id: hit.record.id,
             subject_id: hit.record.subject_id,
@@ -130,7 +151,23 @@ pub(super) fn overviews_for_context(
             canonical_file_path: hit.record.canonical_file_path,
             qualified_name: hit.record.qualified_name,
             stale_reason: hit.stale_reason,
+            level: Some("l1".to_owned()),
+            uri,
         });
     }
     Ok(overviews)
+}
+
+/// Percent-encode one URI path segment (RFC 3986 unreserved plus `:`).
+fn encode_uri_segment(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b':' => {
+                out.push(byte as char);
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
 }

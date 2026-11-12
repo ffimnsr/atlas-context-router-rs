@@ -120,6 +120,7 @@ pub(super) fn retrieve_content_assets(
         session_id: None,
         agent_id: None,
         source_type: None,
+        ..SearchFilters::default()
     };
 
     let chunks = match content_store.search_with_fallback(&query, &filters) {

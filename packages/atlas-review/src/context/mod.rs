@@ -18,21 +18,23 @@ pub(super) use atlas_core::{
     BudgetManager, BudgetPolicy, BudgetReport, Result,
     model::{
         AmbiguityMeta, ContextRankingEvidence, ContextRequest, ContextResult, ContextTarget,
-        NoiseReductionSummary, SavedContextSource, SeedBudgetMeta, SelectedEdge, SelectedFile,
-        SelectedNode, SelectionReason, TruncationMeta, WorkflowCallChain, WorkflowComponent,
-        WorkflowFocusNode, WorkflowSummary,
+        EvidenceGap, EvidenceSufficiencyReport, NoiseReductionSummary, SavedContextSource,
+        SeedBudgetMeta, SelectedEdge, SelectedFile, SelectedNode, SelectionReason, TruncationMeta,
+        WorkflowCallChain, WorkflowComponent, WorkflowFocusNode, WorkflowSummary,
     },
 };
 pub(super) use atlas_store_sqlite::Store;
 
 mod build;
 mod content;
+mod experience;
 mod overview;
 mod payload;
 mod rank;
 mod resolve;
 mod saved;
 mod spans;
+mod sufficiency;
 mod symbol;
 #[cfg(test)]
 mod tests;
@@ -42,11 +44,15 @@ pub use self::build::build_context;
 pub use self::resolve::{ResolvedTarget, normalize_qn_kind_tokens, resolve_target};
 
 use self::content::retrieve_content_assets;
+use self::experience::apply_experience_shortcuts;
 use self::overview::overviews_for_context;
 use self::payload::apply_payload_budgets;
 use self::rank::{rank_context, trim_context};
 use self::saved::retrieve_saved_context;
 use self::spans::apply_code_spans;
+use self::sufficiency::{
+    budget_exhausted, escalation_reason, evaluate as evaluate_sufficiency, merge_round_two,
+};
 use self::symbol::{
     build_ambiguous_result, build_not_found_result, build_symbol_context, collect_files,
     update_file_node_counts,
@@ -81,12 +87,22 @@ pub struct ContextEngine<'a> {
     overview_store: Option<&'a atlas_session::SessionStore>,
     /// Repo root used to scope overview lookups.
     overview_repo_root: Option<String>,
+    /// Optional continuity store for VR4 experience edges.
+    experience_store: Option<&'a atlas_session::SessionStore>,
+    /// Repo root used to scope experience lookups.
+    experience_repo_root: Option<String>,
+    /// Maximum activated experience shortcuts per build.
+    experience_max_edges: usize,
     budget_policy: BudgetPolicy,
     /// Token accounting for serialized payload budgets; defaults to the
     /// byte heuristic (4 bytes per token) for behavior compatibility.
     token_counter: atlas_token_count::TokenCounter,
     /// Load-time fallback metadata for `token_counter`.
     token_fallback: self::payload::TokenFallbackInfo,
+    /// Deterministic Round-2 evidence-gap escalation enabled (VR3).
+    escalation_enabled: bool,
+    /// Maximum escalation rounds (hard cap 3).
+    escalation_max_rounds: u32,
 }
 
 impl<'a> ContextEngine<'a> {
@@ -97,10 +113,15 @@ impl<'a> ContextEngine<'a> {
             content_store: None,
             overview_store: None,
             overview_repo_root: None,
+            experience_store: None,
+            experience_repo_root: None,
+            experience_max_edges: atlas_session::DEFAULT_EXPERIENCE_MAX_EDGES,
             budget_policy: BudgetPolicy::default(),
             token_counter: atlas_token_count::TokenCounter::heuristic(4)
                 .expect("bytes_per_token=4 is a valid heuristic"),
             token_fallback: self::payload::TokenFallbackInfo::default(),
+            escalation_enabled: true,
+            escalation_max_rounds: 1,
         }
     }
 
@@ -133,6 +154,20 @@ impl<'a> ContextEngine<'a> {
         self
     }
 
+    /// Attach the continuity store so fresh experience edges can seed Round 1
+    /// context with [`SelectionReason::ExperienceShortcut`] targets (VR4).
+    pub fn with_experience_store(
+        mut self,
+        repo_root: impl Into<String>,
+        store: &'a atlas_session::SessionStore,
+        max_edges: usize,
+    ) -> Self {
+        self.experience_store = Some(store);
+        self.experience_repo_root = Some(repo_root.into());
+        self.experience_max_edges = max_edges;
+        self
+    }
+
     pub fn with_budget_policy(mut self, policy: BudgetPolicy) -> Self {
         self.budget_policy = policy;
         self
@@ -150,6 +185,14 @@ impl<'a> ContextEngine<'a> {
     /// the configured tokenizer failed to load and the heuristic was used.
     pub fn with_token_fallback(mut self, used: bool, reason: Option<String>) -> Self {
         self.token_fallback = self::payload::TokenFallbackInfo { used, reason };
+        self
+    }
+
+    /// Configure bounded evidence-gap escalation (VR3). `max_rounds` is
+    /// clamped to the hard cap of 3.
+    pub fn with_escalation(mut self, enabled: bool, max_rounds: u32) -> Self {
+        self.escalation_enabled = enabled;
+        self.escalation_max_rounds = max_rounds.clamp(1, 3);
         self
     }
 
@@ -207,6 +250,18 @@ impl<'a> ContextEngine<'a> {
         );
 
         let mut result = build_context(self.store, &effective_request, &self.budget_policy)?;
+        if let (Some(session), Some(repo_root)) =
+            (self.experience_store, self.experience_repo_root.as_deref())
+        {
+            apply_experience_shortcuts(
+                self.store,
+                session,
+                repo_root,
+                &effective_request,
+                self.experience_max_edges,
+                &mut result,
+            )?;
+        }
         budgets.record_report(result.budget.clone());
         if effective_request.include_saved_context
             && let Some(cs) = self.content_store
@@ -252,6 +307,48 @@ impl<'a> ContextEngine<'a> {
             result.overviews =
                 overviews_for_context(session, repo_root, &effective_request, &result)?;
         }
+        // VR3: deterministic evidence-gap escalation. Round 2 fetches only the
+        // evidence kinds behind unsatisfied required constraints.
+        let mut report = evaluate_sufficiency(&effective_request, &result);
+        if self.escalation_enabled && report.is_unsatisfied() {
+            report.escalation_reason = escalation_reason(&report.evidence_gaps);
+            for round in 0..self.escalation_max_rounds {
+                if budget_exhausted(&self.token_counter, &result, effective_request.token_budget) {
+                    report.skipped_reason = Some("budget_exhausted".to_owned());
+                    break;
+                }
+                let mut escalated = effective_request.clone();
+                escalated.include_tests |=
+                    report.evidence_gaps.contains(&EvidenceGap::TestsMissing);
+                escalated.include_callers |= report
+                    .evidence_gaps
+                    .contains(&EvidenceGap::CallersTruncated);
+                escalated.include_callees |= report
+                    .evidence_gaps
+                    .contains(&EvidenceGap::CalleesTruncated);
+                escalated.depth = Some(effective_request.depth.unwrap_or(1).saturating_add(1));
+                escalated.max_nodes = Some(
+                    effective_request
+                        .max_nodes
+                        .unwrap_or(DEFAULT_MAX_NODES)
+                        .saturating_mul(2),
+                );
+                let extra = build_context(self.store, &escalated, &self.budget_policy)?;
+                if extra.nodes.is_empty() && extra.edges.is_empty() {
+                    break;
+                }
+                merge_round_two(&mut result, extra);
+                let rounds_used = round + 1;
+                report = evaluate_sufficiency(&effective_request, &result);
+                report.rounds_used = rounds_used;
+                report.escalation_reason = escalation_reason(&report.evidence_gaps)
+                    .or_else(|| Some("requested evidence satisfied after round 2".to_owned()));
+                if !report.is_unsatisfied() {
+                    break;
+                }
+            }
+        }
+        result.sufficiency = Some(report);
         apply_payload_budgets(
             &mut result,
             &self.budget_policy,

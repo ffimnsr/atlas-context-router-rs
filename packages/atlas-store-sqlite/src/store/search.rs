@@ -2,11 +2,50 @@ use atlas_core::{
     AtlasError, BudgetManager, BudgetPolicy, ImpactResult, Node, RankingEvidence, Result,
     RetrievalMode, ScoredNode, SearchQuery,
 };
+use atlas_repo::CanonicalRepoPath;
 
 use super::{
     Store,
     helpers::{fts5_escape, repeat_placeholders, row_to_edge, row_to_node},
 };
+
+/// Escape a SQLite `LIKE` prefix and append `%`.
+fn like_prefix(prefix: &str) -> String {
+    let escaped = prefix
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    format!("{escaped}%")
+}
+
+/// Push non-recursive directory scope and exclusion predicates (DSQ stage 1).
+fn push_dsq_filters(
+    filters: &mut Vec<String>,
+    params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    query: &SearchQuery,
+) -> Result<()> {
+    if let Some(dir) = query.exact_dir.as_deref() {
+        let canonical = CanonicalRepoPath::from_repo_relative(dir.trim()).map_err(|error| {
+            AtlasError::Other(format!("invalid exact directory scope '{dir}': {error}"))
+        })?;
+        let dir = canonical.as_str().to_owned();
+        filters.push(
+            "(substr(n.file_path, 1, length(?) + 1) = ? || '/' AND instr(substr(n.file_path, length(?) + 2), '/') = 0)"
+                .to_string(),
+        );
+        params.push(Box::new(dir.clone()));
+        params.push(Box::new(dir.clone()));
+        params.push(Box::new(dir));
+    }
+    for prefix in &query.exclude_subpaths {
+        let canonical = CanonicalRepoPath::from_repo_relative(prefix.trim()).map_err(|error| {
+            AtlasError::Other(format!("invalid excluded subpath '{prefix}': {error}"))
+        })?;
+        filters.push("NOT (n.file_path LIKE ? ESCAPE '\\')".to_string());
+        params.push(Box::new(like_prefix(canonical.as_str())));
+    }
+    Ok(())
+}
 
 // Search and traversal queries live here. Retrieval chunk persistence and
 // vector similarity live in retrieval.rs.
@@ -75,6 +114,7 @@ impl Store {
                 filters.push("n.file_path LIKE ? ESCAPE '\\'".to_string());
                 params.push(Box::new(like_pat.clone()));
             }
+            push_dsq_filters(&mut filters, &mut params, query)?;
 
             // Regex is always Some in this branch; pass pattern as SQL params so the
             // static atlas_regexp(pat, val) UDF can use its thread-local cache.
@@ -155,6 +195,7 @@ impl Store {
                 filters.push("n.file_path LIKE ? ESCAPE '\\'".to_string());
                 params.push(Box::new(like_pat.clone()));
             }
+            push_dsq_filters(&mut filters, &mut params, query)?;
 
             if has_regex {
                 let pat = query.regex_pattern.as_deref().unwrap_or("").to_owned();

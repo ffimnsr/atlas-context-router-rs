@@ -404,3 +404,89 @@ fn overview_schema_issues_detects_noncanonical_paths() {
         "{issues:?}"
     );
 }
+
+#[test]
+fn overview_levels_project_progressively_and_keep_freshness() {
+    let (dir, mut store) = open_store();
+    let repo = repo_root(&dir);
+    let record = store
+        .insert_overview_record(&new_record(
+            function_subject(&repo, "src/lib.rs::fn::parse", "src/lib.rs"),
+            "summary text",
+        ))
+        .unwrap();
+
+    let l0 = render_level(&record, OverviewLevel::L0);
+    let l1 = render_level(&record, OverviewLevel::L1);
+    let l2 = render_level(&record, OverviewLevel::L2);
+
+    assert_eq!(l0.level.as_str(), "l0");
+    assert_eq!(l0.freshness, OverviewFreshness::Fresh);
+    assert!(l0.description_preview.is_none());
+    assert!(l0.source_id.is_none());
+    assert!(l0.title.contains("Parsing"));
+
+    assert!(l1.description_preview.is_some());
+    assert!(l1.responsibilities.is_some());
+    assert!(l1.source_id.is_none());
+
+    assert_eq!(l2.source_id, record.source_id);
+    assert_eq!(l2.canonical_file_path.as_deref(), Some("src/lib.rs"));
+    assert_eq!(l2.line_start, Some(10));
+    assert!(
+        l2.read_hint
+            .as_deref()
+            .unwrap_or_default()
+            .contains("read_file_excerpt")
+    );
+
+    assert!(l0.rendered_chars() <= l1.rendered_chars());
+    assert!(l1.rendered_chars() <= l2.rendered_chars());
+}
+
+#[test]
+fn overview_levels_keep_stale_and_orphaned_explicit() {
+    let (dir, mut store) = open_store();
+    let repo = repo_root(&dir);
+    for (freshness, expected) in [
+        (OverviewFreshness::Stale, "stale"),
+        (OverviewFreshness::Orphaned, "orphaned"),
+    ] {
+        let mut record = new_record(
+            function_subject(&repo, &format!("src/lib.rs::fn::{expected}"), "src/lib.rs"),
+            "summary",
+        );
+        record.freshness = Some(freshness);
+        let stored = store.insert_overview_record(&record).unwrap();
+        let view = render_level(&stored, OverviewLevel::L0);
+        assert_eq!(view.freshness.as_str(), expected);
+    }
+}
+
+#[test]
+fn overview_levels_truncate_to_documented_budget() {
+    let (dir, mut store) = open_store();
+    let repo = repo_root(&dir);
+    let long_line = "x".repeat(400);
+    let mut record = new_record(file_subject(&repo, "src/long.rs"), &"y".repeat(2_000));
+    record.description_preview = long_line.clone();
+    record.responsibilities = vec![long_line.clone(); 60];
+    record.gotchas = vec![long_line; 60];
+    let stored = store.insert_overview_record(&record).unwrap();
+
+    let l0 = render_level(&stored, OverviewLevel::L0);
+    assert!(l0.rendered_chars() <= OVERVIEW_L0_MAX_CHARS);
+    assert!(l0.truncated);
+
+    let l1 = render_level(&stored, OverviewLevel::L1);
+    assert!(l1.rendered_chars() <= OVERVIEW_L1_MAX_CHARS);
+    assert!(l1.truncated);
+}
+
+#[test]
+fn overview_level_parses_exact_values_only() {
+    for value in ["l0", "l1", "l2"] {
+        assert_eq!(value.parse::<OverviewLevel>().unwrap().as_str(), value);
+    }
+    assert!("l3".parse::<OverviewLevel>().is_err());
+}

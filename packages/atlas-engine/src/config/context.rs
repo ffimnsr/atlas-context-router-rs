@@ -140,6 +140,54 @@ pub struct ContextConfig {
     pub max_saved_context_bytes: usize,
     /// Tokenizer accounting for context payload budgets.
     pub tokenizer: ContextTokenizerConfig,
+    /// Bounded evidence-gap escalation (VR3).
+    #[serde(default)]
+    pub escalation: ContextEscalationConfig,
+    /// Experience-edge activation policy (VR4).
+    #[serde(default)]
+    pub experience: ContextExperienceConfig,
+}
+
+/// `[context.experience]` query-conditioned experience edge activation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ContextExperienceConfig {
+    /// Maximum activated shortcuts per context build.
+    pub max_edges: usize,
+}
+
+impl Default for ContextExperienceConfig {
+    fn default() -> Self {
+        Self { max_edges: 3 }
+    }
+}
+
+/// `[context.escalation]` bounded Round-2 evidence-gap escalation policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ContextEscalationConfig {
+    /// Master switch for deterministic Round-2 escalation.
+    pub enabled: bool,
+    /// Maximum escalation rounds (default 1, hard cap 3).
+    pub max_rounds: u32,
+}
+
+impl Default for ContextEscalationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_rounds: 1,
+        }
+    }
+}
+
+impl ContextEscalationConfig {
+    pub fn validate(&self) -> Result<()> {
+        if self.max_rounds == 0 || self.max_rounds > 3 {
+            anyhow::bail!("invalid config: context.escalation.max_rounds must be between 1 and 3");
+        }
+        Ok(())
+    }
 }
 
 impl Default for ContextConfig {
@@ -179,6 +227,8 @@ impl Default for ContextConfig {
                 .saved_context_bytes
                 .default_limit,
             tokenizer: ContextTokenizerConfig::default(),
+            escalation: ContextEscalationConfig::default(),
+            experience: ContextExperienceConfig::default(),
         }
     }
 }

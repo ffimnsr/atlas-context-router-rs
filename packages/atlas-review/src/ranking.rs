@@ -57,6 +57,8 @@ impl ContextRankingPrimitives {
             SelectionReason::TestAdjacent => self.test_adjacent_priority,
             SelectionReason::ContainmentSibling => self.containment_sibling_priority,
             SelectionReason::ImpactNeighbor => self.impact_neighbor_priority,
+            SelectionReason::OverviewLevel => 35,
+            SelectionReason::ExperienceShortcut => 70,
         }
     }
 

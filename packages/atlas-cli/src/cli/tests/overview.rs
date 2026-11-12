@@ -49,7 +49,7 @@ fn parse_overview_ingest_stdin_and_show() {
     assert!(matches!(
         cli.command,
         Command::Overview {
-            subcommand: OverviewCommand::Show { ref subject }
+            subcommand: OverviewCommand::Show { ref subject, .. }
         } if subject == "src/lib.rs"
     ));
 }

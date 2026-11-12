@@ -960,3 +960,133 @@ fn fts_search_respects_is_test_filter() {
     assert!(!results.is_empty());
     assert!(results.iter().all(|r| r.node.is_test));
 }
+
+fn seed_dsq_nodes(store: &mut Store) {
+    for (qname, path) in [
+        ("src/auth/a.rs::fn::process_a", "src/auth/a.rs"),
+        ("src/auth/sub/b.rs::fn::process_b", "src/auth/sub/b.rs"),
+        ("src/util/c.rs::fn::process_c", "src/util/c.rs"),
+    ] {
+        let node = make_node(
+            NodeKind::Function,
+            qname.rsplit("::").next().unwrap_or(qname),
+            qname,
+            path,
+            "rust",
+        );
+        store
+            .replace_file_graph_for_repo("repo_test", path, "h", Some("rust"), None, &[node], &[])
+            .unwrap();
+    }
+}
+
+fn search_paths(store: &Store, query: SearchQuery) -> Vec<String> {
+    let mut paths: Vec<String> = store
+        .search(&query)
+        .unwrap()
+        .into_iter()
+        .map(|node| node.node.file_path)
+        .collect();
+    paths.sort();
+    paths
+}
+
+#[test]
+fn fts_search_applies_exact_dir_scope() {
+    let mut store = open_in_memory();
+    seed_dsq_nodes(&mut store);
+    let paths = search_paths(
+        &store,
+        SearchQuery {
+            text: "process".to_string(),
+            exact_dir: Some("src/auth".to_string()),
+            limit: 10,
+            ..Default::default()
+        },
+    );
+    assert_eq!(paths, vec!["src/auth/a.rs"]);
+}
+
+#[test]
+fn fts_search_applies_exclude_subpaths() {
+    let mut store = open_in_memory();
+    seed_dsq_nodes(&mut store);
+    let paths = search_paths(
+        &store,
+        SearchQuery {
+            text: "process".to_string(),
+            subpath: Some("src".to_string()),
+            exclude_subpaths: vec!["src/auth/sub".to_string()],
+            limit: 10,
+            ..Default::default()
+        },
+    );
+    assert_eq!(paths, vec!["src/auth/a.rs", "src/util/c.rs"]);
+}
+
+#[test]
+fn fts_search_rejects_noncanonical_exact_dir() {
+    let store = open_in_memory();
+    let error = store
+        .search(&SearchQuery {
+            text: "process".to_string(),
+            exact_dir: Some("../etc".to_string()),
+            ..Default::default()
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("invalid exact directory scope"));
+}
+
+#[test]
+fn vector_search_applies_scope_before_scoring() {
+    let mut store = open_in_memory();
+    seed_dsq_nodes(&mut store);
+    for qname in [
+        "src/auth/a.rs::fn::process_a",
+        "src/auth/sub/b.rs::fn::process_b",
+        "src/util/c.rs::fn::process_c",
+    ] {
+        store
+            .upsert_chunk("repo_test", qname, 0, "process text")
+            .unwrap();
+        let id: i64 = store
+            .conn
+            .query_row(
+                "SELECT id FROM retrieval_chunks WHERE node_qn = ?1",
+                [qname],
+                |row| row.get(0),
+            )
+            .unwrap();
+        store.set_chunk_embedding(id, &[1.0, 0.0]).unwrap();
+    }
+
+    let (results, candidates) = store
+        .nodes_by_vector_similarity_with_stats(
+            &[1.0, 0.0],
+            &VectorScope {
+                subpath_prefix: Some("src/auth".to_string()),
+                repo_ids: vec!["repo_test".to_string()],
+                ..Default::default()
+            },
+            10,
+        )
+        .unwrap();
+    assert_eq!(candidates, 2);
+    assert!(
+        results
+            .iter()
+            .all(|node| node.node.file_path.starts_with("src/auth"))
+    );
+
+    let error = store
+        .nodes_by_vector_similarity(
+            &[1.0, 0.0],
+            &VectorScope {
+                subpath_prefix: Some("src/auth".to_string()),
+                ..Default::default()
+            },
+            10,
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("explicit repo scope"));
+}

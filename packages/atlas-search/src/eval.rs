@@ -67,6 +67,8 @@ impl RetrievalMode {
             include_files: false,
             file_path: None,
             subpath: None,
+            exact_dir: None,
+            exclude_subpaths: Vec::new(),
             is_test: None,
             limit,
             graph_expand: matches!(self, Self::GraphOnly | Self::HybridGraphExpand),

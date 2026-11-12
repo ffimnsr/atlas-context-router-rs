@@ -1352,10 +1352,20 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
         } else {
             None
         };
+        let escalation = {
+            let config =
+                atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root.as_str()))
+                    .unwrap_or_default();
+            (
+                config.context.escalation.enabled,
+                config.context.escalation.max_rounds,
+            )
+        };
         let mut engine = ContextEngine::new(&store)
             .with_budget_policy(load_budget_policy(repo_root.as_str())?)
             .with_token_counter(token_counter.counter)
-            .with_token_fallback(token_counter.fallback_used, token_counter.fallback_reason);
+            .with_token_fallback(token_counter.fallback_used, token_counter.fallback_reason)
+            .with_escalation(escalation.0, escalation.1);
         if let Some(session) = overview_session.as_ref() {
             engine = engine.with_overview_store(repo_root.as_str(), session);
         }

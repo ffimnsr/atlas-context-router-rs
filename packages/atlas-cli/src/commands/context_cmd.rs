@@ -578,12 +578,27 @@ pub fn run_context(cli: &Cli) -> Result<()> {
         } else {
             None
         };
+        let escalation = {
+            let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))
+                .unwrap_or_default();
+            (
+                config.context.escalation.enabled,
+                config.context.escalation.max_rounds,
+                config.context.experience.max_edges,
+            )
+        };
         let mut engine = ContextEngine::new(&store)
             .with_budget_policy(load_budget_policy(&repo)?)
             .with_token_counter(token_counter.counter)
-            .with_token_fallback(token_counter.fallback_used, token_counter.fallback_reason);
+            .with_token_fallback(token_counter.fallback_used, token_counter.fallback_reason)
+            .with_escalation(escalation.0, escalation.1);
         if let Some(session) = overview_session.as_ref() {
             engine = engine.with_overview_store(&repo, session);
+        }
+        let experience_session =
+            atlas_session::SessionStore::open(&atlas_engine::paths::session_db_path(&db_path)).ok();
+        if let Some(session) = experience_session.as_ref() {
+            engine = engine.with_experience_store(&repo, session, escalation.2);
         }
         let result = engine.build(&request).context("context engine failed")?;
         let linked_decisions = search_linked_decisions(&repo, &request);

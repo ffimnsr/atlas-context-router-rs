@@ -232,6 +232,10 @@ When `consolidation_plan()` merges a group of $N$ memories (`members[0..N]`), it
 
 ### 5.1 Unifying VikingRAG L0/L1/L2 with `ICM-G` (`overview_records`) (`VR1`)
 
+**Status:** implemented. `overview/levels.rs` renders `l0`/`l1`/`l2` views over
+`overview_records`, `resources/uris.rs` owns the `atlas://` namespace, and
+`atlas uri read|list|grep|search` mirrors the MCP resource handlers.
+
 `PLAN-RAG.md` originally proposed creating a new L0/L1/L2 context hierarchy from scratch. However, **`ICM-G` (`Code Overview Memory`, migration `012_overview_memory.sql` and `packages/atlas-session/src/store/overview/`) is already partially implemented in the codebase** and models the exact same multi-granular hierarchy!
 
 We should unify VikingRAG's 3-level representation directly with `OverviewRecord` and `atlas://` URIs:
@@ -260,6 +264,10 @@ atlas://
 ```
 
 ### 5.2 Scoped Access Primitives (`Search`, `List`, `Grep`, `Read`)
+
+**Status:** implemented for the `atlas://` surfaces. `Read`/`List`/`Grep`/
+`Search` are exposed through MCP resources and `atlas uri`; `?level` controls
+progressive disclosure.
 
 VikingRAG proves that agents consume 50%–88% fewer tokens when they navigate hierarchies via four scoped primitives instead of receiving dumped directory trees:
 

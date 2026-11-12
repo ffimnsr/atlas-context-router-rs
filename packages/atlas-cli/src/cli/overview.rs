@@ -58,6 +58,10 @@ pub enum OverviewCommand {
     Show {
         /// Subject id, qualified name, canonical file path, package, or module.
         subject: String,
+
+        /// Optional progressive disclosure level: l0, l1, or l2.
+        #[arg(long)]
+        level: Option<String>,
     },
 
     /// Search overview records with FTS and explicit ranking.
@@ -92,6 +96,10 @@ pub enum OverviewCommand {
         /// Maximum results (default: 20).
         #[arg(long)]
         limit: Option<usize>,
+
+        /// Optional progressive disclosure level: l0, l1, or l2.
+        #[arg(long)]
+        level: Option<String>,
     },
 
     /// List active overview records.

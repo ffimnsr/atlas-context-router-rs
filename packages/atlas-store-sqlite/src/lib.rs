@@ -12,4 +12,5 @@ pub use store::{
     GraphStoreRecoveryError, HistoricalEdge, HistoricalNode, HistoryStatusSummary,
     MAX_NODE_LIST_LIMIT, NodeListFilter, NodeListPage, Store, StoredCommit, StoredEdgeHistory,
     StoredNodeHistory, StoredSnapshot, StoredSnapshotFile, StoredSnapshotMembershipBlob,
+    VectorScope,
 };

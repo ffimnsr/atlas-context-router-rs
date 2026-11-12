@@ -306,6 +306,27 @@ pub(super) fn tool_query_graph(
             .map(|resolved| resolved.canonical)
             .unwrap_or(raw)
     });
+    let exact_dir = str_arg(args, "exact_dir")?.map(str::to_owned).map(|raw| {
+        atlas_repo::normalize_repo_file_path(camino::Utf8Path::new(repo_root), &raw)
+            .map(|resolved| resolved.canonical)
+            .unwrap_or(raw)
+    });
+    let exclude_subpaths: Vec<String> = args
+        .and_then(|value| value.get("exclude_subpaths"))
+        .and_then(|value| value.as_array())
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str())
+                .map(str::to_owned)
+                .map(|raw| {
+                    atlas_repo::normalize_repo_file_path(camino::Utf8Path::new(repo_root), &raw)
+                        .map(|resolved| resolved.canonical)
+                        .unwrap_or(raw)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let fuzzy = bool_arg(args, "fuzzy").unwrap_or(false);
     let hybrid = bool_arg(args, "hybrid").unwrap_or(false);
     let include_files = bool_arg(args, "include_files").unwrap_or(false);
@@ -343,6 +364,8 @@ pub(super) fn tool_query_graph(
         include_files,
         limit,
         subpath,
+        exact_dir,
+        exclude_subpaths,
         graph_expand: expand,
         graph_max_hops: expand_hops,
         regex_pattern: regex,

@@ -253,6 +253,11 @@ pub struct SearchQuery {
     pub file_path: Option<String>,
     /// Filter results whose `file_path` starts with this subpath prefix.
     pub subpath: Option<String>,
+    /// Non-recursive directory scope: match only files whose parent directory
+    /// is exactly this canonical repo-relative path.
+    pub exact_dir: Option<String>,
+    /// Canonical subpath prefixes excluded from results.
+    pub exclude_subpaths: Vec<String>,
     pub is_test: Option<bool>,
     pub limit: usize,
     /// Expand FTS seed results through graph edges.
@@ -309,6 +314,8 @@ impl Default for SearchQuery {
             include_files: false,
             file_path: None,
             subpath: None,
+            exact_dir: None,
+            exclude_subpaths: vec![],
             is_test: None,
             limit: 20,
             graph_expand: false,

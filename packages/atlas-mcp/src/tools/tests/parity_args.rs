@@ -111,6 +111,10 @@ pub(super) fn parity_args(tool_name: &str, source_id: &str, repo_root: &str) -> 
             "concept": "parity-concept",
             "output_format": "json"
         }),
+        "experience_inspect" => json!({
+            "uri": "atlas://repo/parity/file/src%2Flib.rs",
+            "output_format": "json"
+        }),
         "overview_export" => json!({
             "scope": "files",
             "limit": 1,

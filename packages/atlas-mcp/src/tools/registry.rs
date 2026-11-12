@@ -284,6 +284,34 @@ fn tool_output_schema_for(name: &str) -> Option<Value> {
         "memoir_add_concept" => Some(memoir_add_concept_output_schema()),
         "memoir_link" => Some(memoir_link_output_schema()),
         "memoir_inspect" => Some(memoir_inspect_output_schema()),
+        "experience_inspect" => Some(crate::descriptors::normalized_tool_output_schema(
+            serde_json::json!({
+                "repo_root": { "type": "string" },
+                "uri": { "type": "string" },
+                "direction": { "type": "string" },
+                "edges": { "type": "array", "items": { "type": "object" } },
+                "summary": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "edge_count": { "type": "integer" },
+                        "limit": { "type": "integer" }
+                    },
+                    "required": ["edge_count", "limit"]
+                },
+                "warnings": { "type": "array", "items": { "type": "string" } }
+            }),
+            &[
+                "tool",
+                "repo_root",
+                "uri",
+                "direction",
+                "edges",
+                "summary",
+                "warnings",
+            ],
+            None,
+        )),
         "overview_export" => Some(overview_export_output_schema()),
         "overview_ingest" => Some(overview_ingest_output_schema()),
         "overview_search" => Some(overview_search_output_schema()),

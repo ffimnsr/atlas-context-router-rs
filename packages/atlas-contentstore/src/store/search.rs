@@ -3,8 +3,47 @@ use tracing::debug;
 
 use atlas_core::{AtlasError, Result};
 
-use super::util::{fts5_escape, proximity_rerank, rrf_merge};
+use super::util::{canonical_scope, fts5_escape, proximity_rerank, rrf_merge, scope_upper_bound};
 use super::{ChunkResult, ContentStore, SearchFilters};
+
+/// Push DSQ scope predicates before FTS/BM25 scoring.
+///
+/// Recursive scope uses the canonical `(repo_root, relative_path)` range
+/// bounds; non-recursive scope matches `parent_dir`; exclusions subtract the
+/// same range from the candidate set.
+fn push_scope_filters(
+    where_parts: &mut Vec<String>,
+    extra_params: &mut Vec<String>,
+    filters: &SearchFilters,
+) -> Result<()> {
+    if let Some(prefix) = filters.subpath_prefix.as_deref() {
+        let prefix = canonical_scope(prefix)?;
+        let upper = scope_upper_bound(&prefix);
+        extra_params.push(prefix);
+        let low = extra_params.len() + 1;
+        where_parts.push(format!("s.relative_path >= ?{low}"));
+        extra_params.push(upper);
+        let high = extra_params.len() + 1;
+        where_parts.push(format!("s.relative_path < ?{high}"));
+    }
+    if let Some(dir) = filters.exact_dir.as_deref() {
+        let dir = canonical_scope(dir)?;
+        extra_params.push(dir);
+        where_parts.push(format!("s.parent_dir = ?{}", extra_params.len() + 1));
+    }
+    for prefix in &filters.exclude_prefixes {
+        let prefix = canonical_scope(prefix)?;
+        let upper = scope_upper_bound(&prefix);
+        extra_params.push(prefix);
+        let low = extra_params.len() + 1;
+        extra_params.push(upper);
+        let high = extra_params.len() + 1;
+        where_parts.push(format!(
+            "(s.relative_path IS NULL OR NOT (s.relative_path >= ?{low} AND s.relative_path < ?{high}))"
+        ));
+    }
+    Ok(())
+}
 
 impl ContentStore {
     /// Keyword search over indexed chunks using FTS5 with BM25 title weighting.
@@ -41,6 +80,10 @@ impl ContentStore {
             }
             where_parts.push(format!("({})", predicates.join(" OR ")));
         }
+        push_scope_filters(&mut where_parts, &mut extra_params, filters)?;
+        let limit = filters.effective_limit();
+        extra_params.push(limit.to_string());
+        let limit_index = extra_params.len() + 1;
 
         let sql = format!(
             "SELECT c.source_id, c.chunk_id, c.chunk_index, c.title, c.content, c.content_type
@@ -49,7 +92,7 @@ impl ContentStore {
              JOIN sources s ON c.source_id = s.id
              WHERE {}
              ORDER BY bm25(chunks_fts, 10.0, 1.0)
-             LIMIT 50",
+             LIMIT ?{limit_index}",
             where_parts.join(" AND ")
         );
 
@@ -119,6 +162,10 @@ impl ContentStore {
             }
             where_parts.push(format!("({})", predicates.join(" OR ")));
         }
+        push_scope_filters(&mut where_parts, &mut extra_params, filters)?;
+        let limit = filters.effective_limit();
+        extra_params.push(limit.to_string());
+        let limit_index = extra_params.len() + 1;
 
         let sql = format!(
             "SELECT c.source_id, c.chunk_id, c.chunk_index, c.title, c.content, c.content_type
@@ -127,7 +174,7 @@ impl ContentStore {
              JOIN sources s ON c.source_id = s.id
              WHERE {}
              ORDER BY bm25(chunks_trigram, 10.0, 1.0)
-             LIMIT 50",
+             LIMIT ?{limit_index}",
             where_parts.join(" AND ")
         );
 

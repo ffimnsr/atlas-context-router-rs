@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use atlas_session::{
-    OverviewFreshness, OverviewListFilter, OverviewSearchFilter, OverviewSourceKind,
-    OverviewStaleFilter, OverviewSubjectKind,
+    OverviewFreshness, OverviewLevel, OverviewListFilter, OverviewSearchFilter, OverviewSourceKind,
+    OverviewStaleFilter, OverviewSubjectKind, render_level,
 };
 
 use crate::cli::{Cli, Command, OverviewCommand};
@@ -11,12 +11,17 @@ use super::{open_graph_store, open_session_store, print_json};
 pub(super) fn run_read(cli: &Cli, repo: &str, db_path: &str) -> Result<()> {
     match &cli.command {
         Command::Overview {
-            subcommand: OverviewCommand::Show { subject },
+            subcommand: OverviewCommand::Show { subject, level },
         } => {
             let session = open_session_store(db_path)?;
             let record = session.resolve_overview_subject(repo, subject)?;
             if cli.json {
-                print_json("overview.show", serde_json::to_value(&record)?)?;
+                let mut value = serde_json::to_value(&record)?;
+                if let Some(level) = level {
+                    let level: OverviewLevel = level.parse()?;
+                    value["view"] = serde_json::to_value(render_level(&record, level))?;
+                }
+                print_json("overview.show", value)?;
             } else {
                 print_record(&record);
             }
@@ -32,6 +37,7 @@ pub(super) fn run_read(cli: &Cli, repo: &str, db_path: &str) -> Result<()> {
                     file,
                     source_kind,
                     limit,
+                    level,
                 },
         } => {
             let session = open_session_store(db_path)?;
@@ -46,7 +52,22 @@ pub(super) fn run_read(cli: &Cli, repo: &str, db_path: &str) -> Result<()> {
             };
             let hits = session.search_overview_records(repo, query, &filter)?;
             if cli.json {
-                print_json("overview.search", serde_json::to_value(&hits)?)?;
+                let level = level
+                    .as_deref()
+                    .map(str::parse::<OverviewLevel>)
+                    .transpose()?;
+                let payload = match level {
+                    Some(level) => serde_json::json!({
+                        "hits": hits.iter().map(|hit| serde_json::json!({
+                            "score": hit.score,
+                            "ranking": hit.ranking,
+                            "record": hit.record,
+                            "view": render_level(&hit.record, level),
+                        })).collect::<Vec<_>>(),
+                    }),
+                    None => serde_json::to_value(&hits)?,
+                };
+                print_json("overview.search", payload)?;
             } else {
                 println!("Overview search: {} hit(s)", hits.len());
                 for hit in &hits {

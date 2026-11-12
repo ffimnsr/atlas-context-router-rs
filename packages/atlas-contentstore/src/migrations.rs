@@ -48,9 +48,14 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "009_saved_context_repo_ids",
         up_sql: include_str!("migrations/009_saved_context_repo_ids.sql"),
     },
+    Migration {
+        version: 10,
+        name: "010_directory_hierarchy",
+        up_sql: include_str!("migrations/010_directory_hierarchy.sql"),
+    },
 ];
 
-pub const LATEST_VERSION: i32 = 9;
+pub const LATEST_VERSION: i32 = 10;
 
 pub const MIGRATION_SET: MigrationSet = MigrationSet {
     db_kind: "context",

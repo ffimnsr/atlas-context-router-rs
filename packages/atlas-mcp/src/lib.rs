@@ -50,6 +50,7 @@
 //! | `memory_store`            | ICM-A/VM2: store a memory or apply an EUA patch          |
 //! | `memory_ops`              | VM1: typed operator history for one memory row           |
 //! | `memory_recall`           | ICM-A/VM3: two-path recall with score breakdown and hints |
+//! | `experience_inspect`      | VR4: query-conditioned experience edge inspection         |
 //! | `feedback_record`         | ICM-C: record a correction when a prediction was wrong    |
 //! | `memoir_create`           | ICM-F: create a memoir concept graph                     |
 //! | `memoir_add_concept`      | ICM-F: add a concept to an existing memoir graph         |
@@ -122,6 +123,7 @@ pub use session_events::{is_supported_event_name, supported_event_names};
 #[cfg(feature = "http-transport")]
 pub mod transport_http;
 
+pub use resources::{atlas_uri_grep, atlas_uri_list, atlas_uri_read, atlas_uri_search};
 pub use spec::MCP_PROTOCOL_VERSION;
 pub use tools::health::mark_server_started;
 pub use tools::{

@@ -20,6 +20,7 @@ use crate::migrations::{LATEST_VERSION, MIGRATION_SET};
 mod agent_memory;
 mod curation;
 mod decision_memory;
+mod experience_edges;
 mod feedback;
 mod global_memory;
 mod memoir;
@@ -38,6 +39,13 @@ mod util;
 
 use feedback::recent_feedback;
 
+pub use self::experience_edges::{
+    DEFAULT_EXPERIENCE_ACTIVATION_COSINE, DEFAULT_EXPERIENCE_ACTIVATION_JACCARD,
+    DEFAULT_EXPERIENCE_MAX_EDGES, DEFAULT_EXPERIENCE_PRUNE_DAYS, EXPERIENCE_QUERY_TOKEN_CAP,
+    EXPERIENCE_TRACE_SUMMARY_MAX_CHARS, ExperienceDirection, ExperienceEdgeRecord,
+    ExperienceFreshness, NewExperienceEdge, experience_query_tokens,
+};
+
 pub use self::memoir::{
     MEMOIR_RELATION_TYPES, MemoirConcept, MemoirGraph, MemoirInspectQuery, MemoirInspection,
     MemoirInspectionEdge, MemoirRelation, MemoirRelationDirection, NewMemoirConcept,
@@ -45,15 +53,17 @@ pub use self::memoir::{
 };
 pub use self::overview::{
     NewOverviewRecord, OVERVIEW_DESCRIPTION_PREVIEW_MAX_CHARS, OVERVIEW_INLINE_BODY_BUDGET_BYTES,
+    OVERVIEW_L0_MAX_CHARS, OVERVIEW_L1_MAX_CHARS, OVERVIEW_L2_MAX_CHARS,
     OVERVIEW_LIST_ITEM_MAX_CHARS, OVERVIEW_LIST_MAX_ITEMS, OVERVIEW_SCHEMA_VERSION,
     OVERVIEW_SUMMARY_MAX_CHARS, OVERVIEW_TITLE_MAX_CHARS, OverviewAnalysisInput,
     OverviewAnalysisPacket, OverviewBudgetMeta, OverviewCodeExcerpt, OverviewContextHit,
     OverviewContextQuery, OverviewDeleteResult, OverviewExportRequest, OverviewExportScope,
-    OverviewFreshness, OverviewGraphProvenance, OverviewListFilter, OverviewPacketBudget,
-    OverviewPacketEvidence, OverviewPacketFreshness, OverviewRanking, OverviewRecord,
-    OverviewSearchFilter, OverviewSearchHit, OverviewSourceKind, OverviewStaleFilter,
-    OverviewSubject, OverviewSubjectKind, bound_new_overview_record, canonicalize_subject_path,
-    packet_id, subject_id, truncate_chars, validate_confidence,
+    OverviewFreshness, OverviewGraphProvenance, OverviewLevel, OverviewLevelView,
+    OverviewListFilter, OverviewPacketBudget, OverviewPacketEvidence, OverviewPacketFreshness,
+    OverviewRanking, OverviewRecord, OverviewSearchFilter, OverviewSearchHit, OverviewSourceKind,
+    OverviewStaleFilter, OverviewSubject, OverviewSubjectKind, bound_new_overview_record,
+    canonicalize_subject_path, packet_id, render_level, subject_id, truncate_chars,
+    validate_confidence,
 };
 pub use self::types::{
     AgentMemorySummary, AgentPartitionSummary, AgentResponsibilitySummary, CurationResult,
@@ -314,6 +324,63 @@ impl SessionStore {
     /// Fetch one memory row by exact id within a repo.
     pub fn get_memory(&self, repo_root: &str, memory_id: &str) -> Result<Option<MemoryRecord>> {
         get_memory(&self.conn, repo_root, memory_id)
+    }
+
+    /// Record one query-conditioned experience edge (VR4).
+    pub fn record_experience_edge(
+        &mut self,
+        edge: &NewExperienceEdge,
+    ) -> Result<ExperienceEdgeRecord> {
+        let now = util::format_now();
+        experience_edges::upsert_experience_edge(&self.conn, edge, &now)
+    }
+
+    /// Mark edges touched by changed or deleted paths (VR4).
+    pub fn invalidate_experience_paths(
+        &mut self,
+        repo_root: &str,
+        changed: &[(String, Option<String>)],
+    ) -> Result<usize> {
+        experience_edges::invalidate_experience_paths(&self.conn, repo_root, changed)
+    }
+
+    /// Activate only fresh experience edges above the documented thresholds.
+    pub fn activate_experience_edges(
+        &self,
+        repo_root: &str,
+        query_text: &str,
+        intent: &str,
+        limit: usize,
+    ) -> Result<Vec<ExperienceEdgeRecord>> {
+        experience_edges::activate_experience_edges(
+            &self.conn, repo_root, query_text, intent, limit, None,
+        )
+    }
+
+    /// Inspect edges touching one URI.
+    pub fn inspect_experience_edges(
+        &self,
+        repo_root: &str,
+        uri: &str,
+        direction: ExperienceDirection,
+        limit: usize,
+    ) -> Result<Vec<ExperienceEdgeRecord>> {
+        experience_edges::inspect_experience_edges(&self.conn, repo_root, uri, direction, limit)
+    }
+
+    /// Prune stale experience edges; `dry_run` only reports.
+    pub fn prune_experience_edges(
+        &mut self,
+        repo_root: &str,
+        older_than_days: u64,
+        dry_run: bool,
+    ) -> Result<usize> {
+        experience_edges::prune_experience_edges(&self.conn, repo_root, older_than_days, dry_run)
+    }
+
+    /// Schema invariants surfaced by `atlas db check`.
+    pub fn experience_schema_issues(&self) -> Vec<String> {
+        experience_edges::experience_schema_issues(&self.conn)
     }
 
     /// List memories for a repo, filtered and sorted by `updated_at DESC`.

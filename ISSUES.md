@@ -1855,41 +1855,41 @@ Implementation structure:
 
 ##### VR1.1 — Level model
 
-- [ ] add `packages/atlas-session/src/store/overview/levels.rs`
-- [ ] define `OverviewLevel` with exact values `l0`, `l1`, and `l2`, plus serde lowercase and `FromStr`
-- [ ] add `render_level(record: &OverviewRecord, level: OverviewLevel) -> OverviewLevelView`
-- [ ] make L0 return `title` and `summary` only
-- [ ] make L1 return L0 plus `description_preview`, `responsibilities`, `flow`, `inputs`, `outputs`, `invariants`, and `gotchas`
-- [ ] make L2 return L1 plus `source_id`, `canonical_file_path`, `line_start`, `line_end`, and a `read_file_excerpt` hint
-- [ ] include `freshness` in every level view so `stale` and `orphaned` stay explicit
-- [ ] add `OVERVIEW_L0_MAX_CHARS`, `OVERVIEW_L1_MAX_CHARS`, and `OVERVIEW_L2_MAX_CHARS` and truncate with `truncated: true`
-- [ ] add tests per level and per freshness state
+- [x] add `packages/atlas-session/src/store/overview/levels.rs`
+- [x] define `OverviewLevel` with exact values `l0`, `l1`, and `l2`, plus serde lowercase and `FromStr`
+- [x] add `render_level(record: &OverviewRecord, level: OverviewLevel) -> OverviewLevelView`
+- [x] make L0 return `title` and `summary` only
+- [x] make L1 return L0 plus `description_preview`, `responsibilities`, `flow`, `inputs`, `outputs`, `invariants`, and `gotchas`
+- [x] make L2 return L1 plus `source_id`, `canonical_file_path`, `line_start`, `line_end`, and a `read_file_excerpt` hint
+- [x] include `freshness` in every level view so `stale` and `orphaned` stay explicit
+- [x] add `OVERVIEW_L0_MAX_CHARS`, `OVERVIEW_L1_MAX_CHARS`, and `OVERVIEW_L2_MAX_CHARS` and truncate with `truncated: true`
+- [x] add tests per level and per freshness state
 
 ##### VR1.2 — `atlas://` URI namespace and scoped primitives
 
-- [ ] split `packages/atlas-mcp/src/resources.rs` into `packages/atlas-mcp/src/resources/mod.rs`, `packages/atlas-mcp/src/resources/docs.rs`, and `packages/atlas-mcp/src/resources/registry.rs` before adding URI handling, keeping the existing public API and behavior identical
-- [ ] add `packages/atlas-mcp/src/resources/uris.rs`
-- [ ] parse and format `atlas://repo/{repo_id}/tree/{dir}`, `atlas://repo/{repo_id}/file/{path}`, `atlas://repo/{repo_id}/symbol/{qualified_name}`, `atlas://memories/topic/{topic}`, `atlas://memories/id/{memory_id}`, `atlas://memoir/{graph}/{concept}`, and `atlas://artifacts/{source_id}/{chunk_index}`
-- [ ] percent-encode path segments and reject `..`, absolute paths, empty segments, and encoded traversal
-- [ ] canonicalize repo paths through `atlas_repo::CanonicalRepoPath` before lookup
-- [ ] accept `?level=l0|l1|l2` only on `tree`, `file`, and `symbol` URIs and reject it elsewhere
-- [ ] expose every URI form in `resources/templates/list` with the same defaults as the handlers
-- [ ] implement `Read` for every URI with defaults `tree` -> L1, `file` -> L1, `symbol` -> L1, and `artifacts` -> L2
-- [ ] implement `List` as immediate children only for `tree` URIs, returning child directories, files, and L0 abstracts
-- [ ] implement `Grep` by delegating to `search_content` with the URI subtree as `subpath`
-- [ ] implement `Search` by delegating to `query_graph`, `overview_search`, or `memory_recall` with the URI subtree as scope
-- [ ] add tests for format/parse round trip, traversal rejection, level defaults, unknown repo ids, and unknown URIs
+- [x] split `packages/atlas-mcp/src/resources.rs` into `packages/atlas-mcp/src/resources/mod.rs`, `packages/atlas-mcp/src/resources/docs.rs`, and `packages/atlas-mcp/src/resources/registry.rs` before adding URI handling, keeping the existing public API and behavior identical
+- [x] add `packages/atlas-mcp/src/resources/uris.rs`
+- [x] parse and format `atlas://repo/{repo_id}/tree/{dir}`, `atlas://repo/{repo_id}/file/{path}`, `atlas://repo/{repo_id}/symbol/{qualified_name}`, `atlas://memories/topic/{topic}`, `atlas://memories/id/{memory_id}`, `atlas://memoir/{graph}/{concept}`, and `atlas://artifacts/{source_id}/{chunk_index}`
+- [x] percent-encode path segments and reject `..`, absolute paths, empty segments, and encoded traversal
+- [x] canonicalize repo paths through `atlas_repo::CanonicalRepoPath` before lookup
+- [x] accept `?level=l0|l1|l2` only on `tree`, `file`, and `symbol` URIs and reject it elsewhere
+- [x] expose every URI form in `resources/templates/list` with the same defaults as the handlers
+- [x] implement `Read` for every URI with defaults `tree` -> L1, `file` -> L1, `symbol` -> L1, and `artifacts` -> L2
+- [x] implement `List` as immediate children only for `tree` URIs, returning child directories, files, and L0 abstracts
+- [x] implement `Grep` by delegating to `search_content` with the URI subtree as `subpath`
+- [x] implement `Search` by delegating to `query_graph`, `overview_search`, or `memory_recall` with the URI subtree as scope
+- [x] add tests for format/parse round trip, traversal rejection, level defaults, unknown repo ids, and unknown URIs
 
 ##### VR1.3 — CLI and context parity
 
-- [ ] add `atlas uri read <uri>` with `--level` and `--json`
-- [ ] add `atlas uri list <uri>` with `--json`
-- [ ] add `--level` to `atlas overview show` and `atlas overview search`
-- [ ] add the same `level` field to MCP `overview_show` and `overview_search` with identical defaults
-- [ ] add `SelectionReason::OverviewLevel` and attach `uri`, `level`, and `freshness` to overview context entries
+- [x] add `atlas uri read <uri>` with `--level` and `--json`
+- [x] add `atlas uri list <uri>` with `--json`
+- [x] add `--level` to `atlas overview show` and `atlas overview search`
+- [x] add the same `level` field to MCP `overview_show` and `overview_search` with identical defaults
+- [x] add `SelectionReason::OverviewLevel` and attach `uri`, `level`, and `freshness` to overview context entries
 - [ ] update `wiki/overview-memory.md`, `MCP_TOOLS.md`, and `docs/PLAN-RAG.md` §5.1–5.2 for URI forms and level semantics
 - [ ] add CLI/MCP parity tests for URI read and list output shape
-- [ ] add a check that every shipped `atlas://` URI appears in `resources/templates/list`
+- [x] add a check that every shipped `atlas://` URI appears in `resources/templates/list`
 
 ##### VR1 completion criteria
 
@@ -1913,30 +1913,30 @@ Implementation structure:
 
 ##### VR2.1 — Content store directory hierarchy
 
-- [ ] add `packages/atlas-contentstore/src/migrations/010_directory_hierarchy.sql`
-- [ ] add `sources.parent_dir TEXT` and `sources.relative_path TEXT`
-- [ ] backfill `relative_path` from canonical path identity and derive `parent_dir` deterministically
-- [ ] add indexes `(repo_root, parent_dir)` and `(repo_root, relative_path)`
-- [ ] register the migration in `packages/atlas-contentstore/src/migrations.rs`
-- [ ] reject rows whose `relative_path` is not canonical
-- [ ] extend `SearchFilters` in `packages/atlas-contentstore/src/store/types.rs` with `subpath_prefix`, `exact_dir`, `exclude_prefixes: Vec<String>`, and `limit: usize`
-- [ ] default `limit` to `50` and cap it at `500`
-- [ ] push recursive scope as `relative_path >= ? AND relative_path < ?` range bounds
-- [ ] push non-recursive scope as `parent_dir = ?`
-- [ ] push each exclusion as `NOT (relative_path >= ? AND relative_path < ?)`
-- [ ] replace both hardcoded `LIMIT 50` clauses in `search.rs` with the bound `limit`
-- [ ] add tests for recursive scope, non-recursive scope, exclusions, combined filters, limit cap, and canonicalization rejection
+- [x] add `packages/atlas-contentstore/src/migrations/010_directory_hierarchy.sql`
+- [x] add `sources.parent_dir TEXT` and `sources.relative_path TEXT`
+- [x] backfill `relative_path` from canonical path identity and derive `parent_dir` deterministically
+- [x] add indexes `(repo_root, parent_dir)` and `(repo_root, relative_path)`
+- [x] register the migration in `packages/atlas-contentstore/src/migrations.rs`
+- [x] reject rows whose `relative_path` is not canonical
+- [x] extend `SearchFilters` in `packages/atlas-contentstore/src/store/types.rs` with `subpath_prefix`, `exact_dir`, `exclude_prefixes: Vec<String>`, and `limit: usize`
+- [x] default `limit` to `50` and cap it at `500`
+- [x] push recursive scope as `relative_path >= ? AND relative_path < ?` range bounds
+- [x] push non-recursive scope as `parent_dir = ?`
+- [x] push each exclusion as `NOT (relative_path >= ? AND relative_path < ?)`
+- [x] replace both hardcoded `LIMIT 50` clauses in `search.rs` with the bound `limit`
+- [x] add tests for recursive scope, non-recursive scope, exclusions, combined filters, limit cap, and canonicalization rejection
 
 ##### VR2.2 — Vector scope pre-filtering
 
-- [ ] add `VectorScope { subpath_prefix, exact_dir, exclude_prefixes, repo_ids, kinds, languages }` in `packages/atlas-store-sqlite/src/store/retrieval.rs`
-- [ ] change `nodes_by_vector_similarity` to accept `&VectorScope` and build the scope predicate in SQL
-- [ ] join `retrieval_chunks` to `nodes` and `files` so scope plus kind and language filters apply before cosine scoring
-- [ ] update every caller in `atlas-search` and `atlas-review` to pass an explicit scope
-- [ ] fail closed when `repo_root` is missing instead of scanning every repo
+- [x] add `VectorScope { subpath_prefix, exact_dir, exclude_prefixes, repo_ids, kinds, languages }` in `packages/atlas-store-sqlite/src/store/retrieval.rs`
+- [x] change `nodes_by_vector_similarity` to accept `&VectorScope` and build the scope predicate in SQL
+- [x] join `retrieval_chunks` to `nodes` and `files` so scope plus kind and language filters apply before cosine scoring
+- [x] update every caller in `atlas-search` and `atlas-review` to pass an explicit scope
+- [x] fail closed when `repo_root` is missing instead of scanning every repo
 - [ ] add `--exact-dir` and repeatable `--exclude-subpath` to `atlas query`, `atlas symbols`, `atlas context`, and `atlas review-context`
 - [ ] add the same fields to MCP `query_graph`, `list_symbols`, `get_context`, `get_review_context`, and `search_content`
-- [ ] thread scope through `packages/atlas-search/src/hybrid.rs` so hybrid retrieval obeys DSQ
+- [x] thread scope through `packages/atlas-search/src/hybrid.rs` so hybrid retrieval obeys DSQ
 - [ ] add parity tests and a benchmark showing candidate-count reduction for a scoped query
 
 ##### VR2.3 — Optional in-memory TrieHI bitmap index
@@ -1974,32 +1974,32 @@ Implementation structure:
 
 ##### VR3.1 — Sufficiency report model
 
-- [ ] add `packages/atlas-review/src/context/sufficiency.rs`
-- [ ] define `EvidenceSufficiencyReport { target_resolved, callers_complete, tests_covered, dispatch_complete, overview_fresh }`
-- [ ] define `EvidenceGap` with exact variants `target_unresolved`, `callers_truncated`, `callees_truncated`, `tests_missing`, `dispatch_unresolved`, and `overview_not_fresh`
-- [ ] define `sufficiency_score` as the weighted fraction of satisfied required constraints
-- [ ] derive required constraints from intent: `Review`, `Remove`, and `Safety` require `target_resolved`, `callers_complete`, and `tests_covered`; `Trace` requires `callees_complete`; `Overview` requires `overview_fresh`
-- [ ] expose `escalation_reason`, `next_tools`, and `sufficiency_score`
-- [ ] add unit tests per intent and per satisfied/unsatisfied combination
+- [x] add `packages/atlas-review/src/context/sufficiency.rs`
+- [x] define `EvidenceSufficiencyReport { target_resolved, callers_complete, tests_covered, dispatch_complete, overview_fresh }`
+- [x] define `EvidenceGap` with exact variants `target_unresolved`, `callers_truncated`, `callees_truncated`, `tests_missing`, `dispatch_unresolved`, and `overview_not_fresh`
+- [x] define `sufficiency_score` as the weighted fraction of satisfied required constraints
+- [x] derive required constraints from intent: `Review`, `Remove`, and `Safety` require `target_resolved`, `callers_complete`, and `tests_covered`; `Trace` requires `callees_complete`; `Overview` requires `overview_fresh`
+- [x] expose `escalation_reason`, `next_tools`, and `sufficiency_score`
+- [x] add unit tests per intent and per satisfied/unsatisfied combination
 
 ##### VR3.2 — Round 1 collection signals
 
-- [ ] record bucket truncation flags when `BUCKET_CALLERS` or `BUCKET_CALLEES` caps are hit in `packages/atlas-review/src/context/mod.rs`
-- [ ] set `target_resolved = false` when resolution returns ambiguity metadata
-- [ ] verify test presence through direct test neighbors or test-file mapping and record `tests_verified_absent` when absence was explicitly checked
-- [ ] detect unresolved `Implements` and `ImplementedBy` edges plus dynamic registration targets
-- [ ] derive `overview_fresh` from matched `OverviewRecord.freshness` and treat `unverified` as not fresh
-- [ ] record every signal in `ContextResult` metadata
+- [x] record bucket truncation flags when `BUCKET_CALLERS` or `BUCKET_CALLEES` caps are hit in `packages/atlas-review/src/context/mod.rs`
+- [x] set `target_resolved = false` when resolution returns ambiguity metadata
+- [x] verify test presence through direct test neighbors or test-file mapping and record `tests_verified_absent` when absence was explicitly checked
+- [x] detect unresolved `Implements` and `ImplementedBy` edges plus dynamic registration targets
+- [x] derive `overview_fresh` from matched `OverviewRecord.freshness` and treat `unverified` as not fresh
+- [x] record every signal in `ContextResult` metadata
 - [ ] add a fixed graph fixture covering each signal
 
 ##### VR3.3 — Bounded Round 2 escalation
 
-- [ ] add config `context.escalation.enabled` (default `true`) and `context.escalation.max_rounds` (default `1`, max `3`)
-- [ ] trigger Round 2 only for unsatisfied required constraints
-- [ ] fetch only the missing evidence kinds (tests, callers, implementation targets, overview refresh hint)
-- [ ] stop when the `TokenCounter` budget is exhausted and record `skipped_reason = "budget_exhausted"`
-- [ ] emit `evidence_gaps`, `sufficiency_score`, `escalation_reason`, `next_tools`, and `rounds_used` in `ContextResult` metadata
-- [ ] surface the same fields in CLI `--json` and MCP context and review tools
+- [x] add config `context.escalation.enabled` (default `true`) and `context.escalation.max_rounds` (default `1`, max `3`)
+- [x] trigger Round 2 only for unsatisfied required constraints
+- [x] fetch only the missing evidence kinds (tests, callers, implementation targets, overview refresh hint)
+- [x] stop when the `TokenCounter` budget is exhausted and record `skipped_reason = "budget_exhausted"`
+- [x] emit `evidence_gaps`, `sufficiency_score`, `escalation_reason`, `next_tools`, and `rounds_used` in `ContextResult` metadata
+- [x] surface the same fields in CLI `--json` and MCP context and review tools
 - [ ] add tests for truncation-triggered escalation, budget-exhausted stop, round cap, and deterministic output
 
 ##### VR3 completion criteria
@@ -2023,38 +2023,38 @@ Implementation structure:
 
 ##### VR4.1 — Migration `014_experience_edges.sql`
 
-- [ ] add `packages/atlas-session/src/migrations/014_experience_edges.sql` (numbering follows `013_memory_ops_and_fts.sql` and supersedes the provisional `013_experience_edges.sql` name in `docs/PLAN-RAG.md` §5.4)
-- [ ] create `experience_edges` with `id`, `repo_root`, `source_uri`, `target_uri`, `query_text`, `query_tokens_json`, `query_embedding`, `trace_summary`, `commit_sha`, `source_file_hash`, `target_file_hash`, `use_count`, `confidence`, `created_at`, and `last_validated_at`
-- [ ] add `freshness TEXT NOT NULL DEFAULT 'fresh'` with `CHECK (freshness IN ('fresh', 'possibly_stale', 'invalid'))`
-- [ ] add `CHECK (confidence >= 0 AND confidence <= 1)` and `CHECK (use_count > 0)`
-- [ ] add `UNIQUE (repo_root, source_uri, target_uri, query_text)`
-- [ ] add indexes `(repo_root, source_uri)` and `(repo_root, target_uri)`
-- [ ] register the migration and bump the session schema version
-- [ ] extend `atlas db check` with orphan-URI, invalid-freshness, and confidence-range checks
-- [ ] add a migration test applying `014` to a `013` database
+- [x] add `packages/atlas-session/src/migrations/014_experience_edges.sql` (numbering follows `013_memory_ops_and_fts.sql` and supersedes the provisional `013_experience_edges.sql` name in `docs/PLAN-RAG.md` §5.4)
+- [x] create `experience_edges` with `id`, `repo_root`, `source_uri`, `target_uri`, `query_text`, `query_tokens_json`, `query_embedding`, `trace_summary`, `commit_sha`, `source_file_hash`, `target_file_hash`, `use_count`, `confidence`, `created_at`, and `last_validated_at`
+- [x] add `freshness TEXT NOT NULL DEFAULT 'fresh'` with `CHECK (freshness IN ('fresh', 'possibly_stale', 'invalid'))`
+- [x] add `CHECK (confidence >= 0 AND confidence <= 1)` and `CHECK (use_count > 0)`
+- [x] add `UNIQUE (repo_root, source_uri, target_uri, query_text)`
+- [x] add indexes `(repo_root, source_uri)` and `(repo_root, target_uri)`
+- [x] register the migration and bump the session schema version
+- [x] extend `atlas db check` with orphan-URI, invalid-freshness, and confidence-range checks
+- [x] add a migration test applying `014` to a `013` database
 
 ##### VR4.2 — Store and online construction
 
-- [ ] add `packages/atlas-session/src/store/experience_edges.rs` and register it in `packages/atlas-session/src/store/mod.rs`
-- [ ] define `NewExperienceEdge` with canonical URI validation and `trace_summary` capped at 512 chars
-- [ ] tokenize `query_text` into normalized lowercase tokens with a 64-token cap
-- [ ] store `query_embedding` only when an embedding provider is configured and reject dimension mismatches
-- [ ] implement redundancy suppression `targets \ existing_edge_targets` for each `(repo_root, source_uri, query_text)` group
-- [ ] upsert on conflict by incrementing `use_count`, refreshing `last_validated_at`, and keeping the higher `confidence`
-- [ ] add `invalidate_by_paths(repo_root, changed_paths)` marking one-endpoint edges `possibly_stale` and deleted-endpoint edges `invalid`
+- [x] add `packages/atlas-session/src/store/experience_edges.rs` and register it in `packages/atlas-session/src/store/mod.rs`
+- [x] define `NewExperienceEdge` with canonical URI validation and `trace_summary` capped at 512 chars
+- [x] tokenize `query_text` into normalized lowercase tokens with a 64-token cap
+- [x] store `query_embedding` only when an embedding provider is configured and reject dimension mismatches
+- [x] implement redundancy suppression `targets \ existing_edge_targets` for each `(repo_root, source_uri, query_text)` group
+- [x] upsert on conflict by incrementing `use_count`, refreshing `last_validated_at`, and keeping the higher `confidence`
+- [x] add `invalidate_by_paths(repo_root, changed_paths)` marking one-endpoint edges `possibly_stale` and deleted-endpoint edges `invalid`
 - [ ] map changed file hashes from `atlas update` into `invalidate_by_paths`
-- [ ] add read-only `atlas experience inspect <uri>` with `--direction`, `--limit`, and `--json`
-- [ ] add `atlas experience prune --older-than <days> --dry-run` and MCP `experience_inspect` with identical output
-- [ ] add tests for redundancy suppression, hash invalidation, deleted targets, upsert counting, and prune dry-run
+- [x] add read-only `atlas experience inspect <uri>` with `--direction`, `--limit`, and `--json`
+- [x] add `atlas experience prune --older-than <days> --dry-run` and MCP `experience_inspect` with identical output
+- [x] add tests for redundancy suppression, hash invalidation, deleted targets, upsert counting, and prune dry-run
 
 ##### VR4.3 — Activation in context assembly
 
-- [ ] add `activate_experience_edges(repo_root, query_text, intent, limit)` returning only `fresh` edges
-- [ ] activate by cosine `>= 0.80` when embeddings exist, otherwise by token Jaccard `>= 0.65` plus intent match
-- [ ] rank activations by `confidence * ln(1 + use_count)` and cap at `context.experience.max_edges` (default `3`)
-- [ ] seed `ContextEngine` Round 1 with activated targets using `SelectionReason::ExperienceShortcut`
-- [ ] attach provenance `edge_id`, `confidence`, `trace_summary`, and `commit_sha` to each shortcut
-- [ ] never emit a shortcut when `freshness != 'fresh'` or when the commit SHA differs and hashes are unverified
+- [x] add `activate_experience_edges(repo_root, query_text, intent, limit)` returning only `fresh` edges
+- [x] activate by cosine `>= 0.80` when embeddings exist, otherwise by token Jaccard `>= 0.65` plus intent match
+- [x] rank activations by `confidence * ln(1 + use_count)` and cap at `context.experience.max_edges` (default `3`)
+- [x] seed `ContextEngine` Round 1 with activated targets using `SelectionReason::ExperienceShortcut`
+- [x] attach provenance `edge_id`, `confidence`, `trace_summary`, and `commit_sha` to each shortcut
+- [x] never emit a shortcut when `freshness != 'fresh'` or when the commit SHA differs and hashes are unverified
 - [ ] add tests proving a stale edge is not surfaced, a fresh edge reduces rounds, and provenance is present
 
 ##### VR4 completion criteria

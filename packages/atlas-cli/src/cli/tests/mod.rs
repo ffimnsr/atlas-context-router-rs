@@ -12,6 +12,7 @@ mod memory;
 mod overview;
 mod query;
 mod update;
+mod uri;
 
 fn parse(args: &[&str]) -> Cli {
     Cli::try_parse_from(args).expect("parse should succeed")

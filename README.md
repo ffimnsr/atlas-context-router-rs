@@ -788,6 +788,7 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `memory_store` | ICM-A/VM2: store a memory record or apply an EUA search/replace patch |
 | `memory_ops` | VM1: show the bounded typed-operator history for one memory row |
 | `memory_recall` | ICM-A/VM3: two-path recall with visibility rules, score breakdown, and retrieval hints |
+| `experience_inspect` | VR4: inspect query-conditioned experience edges for one atlas:// URI |
 | `feedback_record` | ICM-C: record a correction when an analysis prediction was wrong |
 | `memoir_create` | ICM-F: create a memoir concept graph in the separate knowledge layer |
 | `memoir_add_concept` | ICM-F: add a concept to an existing memoir graph |

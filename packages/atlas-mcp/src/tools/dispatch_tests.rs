@@ -334,6 +334,10 @@ fn schema_test_args(name: &str, saved_source_id: &str, repo_root: &str) -> serde
             "concept": "schema-test-concept",
             "output_format": "json"
         }),
+        "experience_inspect" => json!({
+            "uri": "atlas://repo/schema-test/file/src%2Flib.rs",
+            "output_format": "json"
+        }),
         "overview_export" => json!({
             "scope": "files",
             "limit": 1,

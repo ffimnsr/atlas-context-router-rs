@@ -17,6 +17,7 @@
 //! stable.
 
 mod artifact_io;
+mod experience;
 mod feedback;
 mod memoir;
 mod memory;
@@ -53,6 +54,7 @@ use crate::tools::shared::resolve_repo_scope_selection;
 pub use artifact_io::{
     tool_cross_session_search, tool_purge_saved_context, tool_read_saved_context,
 };
+pub use experience::tool_experience_inspect;
 pub use feedback::tool_feedback_record;
 pub use memoir::{
     tool_memoir_add_concept, tool_memoir_create, tool_memoir_inspect, tool_memoir_link,

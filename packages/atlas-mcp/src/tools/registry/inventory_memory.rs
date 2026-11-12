@@ -391,6 +391,20 @@ pub(super) fn tools() -> Vec<Value> {
                 }
         }),
         json!({
+                "name": "experience_inspect",
+                "description": "Inspect query-conditioned experience edges touching one atlas:// URI. Report-only: edges live in session.db and are never code-graph truth (VR4).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "uri":           { "type": "string", "description": "Canonical atlas:// source or target URI." },
+                        "direction":     { "type": "string", "description": "both, outgoing, or incoming (default both)." },
+                        "limit":         { "type": "integer", "description": "Maximum edges (default 20, max 100)." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["uri"]
+                }
+        }),
+        json!({
                 "name": "overview_export",
                 "description": "Export bounded overview analysis packets for external LLM or human analysis. Atlas never calls a model: packets include canonical subject identity, commit SHA, graph freshness, bounded evidence, and budget metadata. Same request fields and defaults as `atlas overview export` (ICM-G).",
                 "inputSchema": {
@@ -439,6 +453,7 @@ pub(super) fn tools() -> Vec<Value> {
                         "file":         { "type": "string", "description": "Restrict to one canonical file path." },
                         "source_kind":  { "type": "string", "description": "external_llm, manual, or imported." },
                         "limit":        { "type": "integer", "description": "Maximum results (default 20)." },
+                        "level":        { "type": "string", "description": "Optional disclosure level: l0, l1, or l2. Adds a rendered view per hit." },
                         "output_format":{ "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": ["query"]
@@ -452,6 +467,7 @@ pub(super) fn tools() -> Vec<Value> {
                     "properties": {
                         "subject":       { "type": "string", "description": "Subject id, qualified name, canonical path, package, or module." },
                         "target":        { "type": "string", "description": "Alias for subject." },
+                        "level":         { "type": "string", "description": "Optional disclosure level: l0, l1, or l2. Adds a rendered view." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     }
                 }

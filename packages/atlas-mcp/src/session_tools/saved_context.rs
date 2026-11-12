@@ -180,6 +180,7 @@ pub fn tool_search_saved_context(
         source_type: source_type_filter,
         repo_root: None,
         repo_roots: repo_scope_roots.clone(),
+        ..SearchFilters::default()
     };
 
     let chunks = cs.search_with_fallback(query, &filters)?;

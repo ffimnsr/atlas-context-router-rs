@@ -668,7 +668,10 @@ fn context_result_round_trip() {
             canonical_file_path: Some("src/lib.rs".to_string()),
             qualified_name: Some("src/lib.rs::fn::compute".to_string()),
             stale_reason: None,
+            level: Some("l1".to_string()),
+            uri: Some("atlas://repo/repo_x/file/src%2Flib.rs".to_string()),
         }],
+        sufficiency: None,
         budget: BudgetReport::within_budget("review_context_extraction.max_nodes", 50, 1),
     };
     let json = serde_json::to_string(&result).unwrap();
@@ -710,6 +713,7 @@ fn context_result_with_ambiguity_round_trip() {
         saved_context_sources: vec![],
         budget: BudgetReport::within_budget("review_context_extraction.max_nodes", 50, 0),
         overviews: vec![],
+        sufficiency: None,
     };
     let json = serde_json::to_string(&result).unwrap();
     let back: ContextResult = serde_json::from_str(&json).unwrap();

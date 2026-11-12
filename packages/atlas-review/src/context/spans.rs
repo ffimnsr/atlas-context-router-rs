@@ -15,6 +15,8 @@ pub(super) fn apply_code_spans(result: &mut ContextResult) {
                 | SelectionReason::Caller
                 | SelectionReason::Callee
                 | SelectionReason::ImpactNeighbor
+                | SelectionReason::OverviewLevel
+                | SelectionReason::ExperienceShortcut
         );
         if include {
             span_map

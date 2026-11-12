@@ -70,6 +70,31 @@ pub struct SearchFilters {
     pub source_type: Option<String>,
     pub repo_root: Option<String>,
     pub repo_roots: Vec<String>,
+    /// Recursive directory scope: every path with this canonical prefix.
+    pub subpath_prefix: Option<String>,
+    /// Non-recursive directory scope: exact `parent_dir` match.
+    pub exact_dir: Option<String>,
+    /// Canonical prefixes excluded from the result set.
+    pub exclude_prefixes: Vec<String>,
+    /// Maximum results. `0` means the default; the value is capped at
+    /// [`DEFAULT_SEARCH_LIMIT_CAP`].
+    pub limit: usize,
+}
+
+/// Default content-search result limit when the caller leaves `limit` at `0`.
+pub const DEFAULT_SEARCH_LIMIT: usize = 50;
+/// Hard cap for content-search results.
+pub const DEFAULT_SEARCH_LIMIT_CAP: usize = 500;
+
+impl SearchFilters {
+    /// Effective result limit after applying the default and hard cap.
+    pub fn effective_limit(&self) -> usize {
+        if self.limit == 0 {
+            DEFAULT_SEARCH_LIMIT
+        } else {
+            self.limit.min(DEFAULT_SEARCH_LIMIT_CAP)
+        }
+    }
 }
 
 /// A single chunk result returned from search.

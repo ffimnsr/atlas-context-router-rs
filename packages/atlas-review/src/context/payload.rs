@@ -597,6 +597,8 @@ fn file_keep_priority(reason: SelectionReason) -> u8 {
         SelectionReason::Caller | SelectionReason::Callee => 3,
         SelectionReason::Importer | SelectionReason::Importee => 2,
         SelectionReason::ContainmentSibling => 1,
+        SelectionReason::OverviewLevel => 4,
+        SelectionReason::ExperienceShortcut => 4,
     }
 }
 

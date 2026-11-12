@@ -1,13 +1,16 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 
+mod experience;
 mod memoir;
 mod overview;
 mod subcommands;
+mod uri;
 
 #[cfg(test)]
 mod tests;
 
+pub use experience::ExperienceCommand;
 pub use memoir::MemoirCommand;
 pub use overview::OverviewCommand;
 pub use subcommands::{
@@ -15,6 +18,7 @@ pub use subcommands::{
     HistoryCommand, InsightsCommand, InstallMode, MemoryCommand, RefactorCommand, RepoCommand,
     SessionCommand,
 };
+pub use uri::UriCommand;
 
 use crate::install::InstructionsMode;
 
@@ -180,6 +184,14 @@ pub enum Command {
         #[arg(long)]
         subpath: Option<String>,
 
+        /// Non-recursive scope: only files directly inside this directory.
+        #[arg(long)]
+        exact_dir: Option<String>,
+
+        /// Exclude a subpath prefix (repeatable).
+        #[arg(long = "exclude-subpath")]
+        exclude_subpaths: Vec<String>,
+
         /// Maximum results to return.
         #[arg(long, default_value_t = 20)]
         limit: usize,
@@ -241,6 +253,14 @@ pub enum Command {
         /// Filter by a file path prefix (subpath within the repo).
         #[arg(long)]
         subpath: Option<String>,
+
+        /// Non-recursive scope: only files directly inside this directory.
+        #[arg(long)]
+        exact_dir: Option<String>,
+
+        /// Exclude a subpath prefix (repeatable).
+        #[arg(long = "exclude-subpath")]
+        exclude_subpaths: Vec<String>,
 
         /// Restrict listing to one registered repo by stable repo id.
         #[arg(long)]
@@ -774,6 +794,18 @@ pub enum Command {
     Overview {
         #[command(subcommand)]
         subcommand: OverviewCommand,
+    },
+
+    /// Read, list, grep, and search the canonical atlas:// URI namespace.
+    Uri {
+        #[command(subcommand)]
+        subcommand: UriCommand,
+    },
+
+    /// Inspect and prune query-conditioned experience edges.
+    Experience {
+        #[command(subcommand)]
+        subcommand: ExperienceCommand,
     },
 
     /// Record corrections on wrong analysis predictions and search past mistakes.

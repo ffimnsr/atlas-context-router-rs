@@ -49,6 +49,7 @@ pub(crate) fn render_shell_symbols_output(
         language: language.as_deref(),
         subpath: subpath.as_deref(),
         repo_id: repo_id.as_deref(),
+        ..Default::default()
     };
     let page = store
         .list_nodes(&filter, limit, offset)

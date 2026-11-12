@@ -31,6 +31,10 @@ pub struct NodeListFilter<'a> {
     pub language: Option<&'a str>,
     pub subpath: Option<&'a str>,
     pub repo_id: Option<&'a str>,
+    /// Non-recursive scope: only symbols whose direct parent directory matches.
+    pub exact_dir: Option<&'a str>,
+    /// Excluded canonical subpath prefixes.
+    pub exclude_subpaths: &'a [String],
 }
 
 /// One deterministic page of nodes plus the total number of matching rows.
@@ -221,11 +225,26 @@ impl Store {
         // raw `fn`/`record` filter cannot silently match nothing.
         let kind = filter.kind.map(normalize_kind_alias);
         let subpath_upper = filter.subpath.and_then(prefix_upper_bound);
+        let exact_dir_value = filter.exact_dir;
+        let exclude_prefixes: Vec<String> = filter
+            .exclude_subpaths
+            .iter()
+            .map(|prefix| {
+                let escaped = prefix
+                    .replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_");
+                format!("{escaped}%")
+            })
+            .collect();
+        let exclude_json = serde_json::to_string(&exclude_prefixes).ok();
         let where_clause = "WHERE (?1 IS NULL OR kind = ?1)
                    AND (?2 IS NULL OR language = ?2)
                    AND (?3 IS NULL OR ((?4 IS NOT NULL AND file_path >= ?3 AND file_path < ?4)
                         OR (?4 IS NULL AND substr(file_path, 1, length(?3)) = ?3)))
-                   AND (?5 IS NULL OR source_repo_id = ?5)";
+                   AND (?5 IS NULL OR source_repo_id = ?5)
+                   AND (?6 IS NULL OR (substr(file_path, 1, length(?6) + 1) = ?6 || '/' AND instr(substr(file_path, length(?6) + 2), '/') = 0))
+                   AND NOT EXISTS (SELECT 1 FROM json_each(COALESCE(?7, '[]')) WHERE file_path LIKE value ESCAPE '\\')";
         let count_sql = format!("SELECT COUNT(*) FROM nodes {where_clause}");
         let total: u64 = self
             .conn
@@ -236,7 +255,9 @@ impl Store {
                     filter.language,
                     filter.subpath,
                     subpath_upper,
-                    filter.repo_id
+                    filter.repo_id,
+                    exact_dir_value,
+                    exclude_json
                 ],
                 |row| row.get(0),
             )
@@ -247,7 +268,7 @@ impl Store {
                     is_test, file_hash, extra_json
              FROM nodes {where_clause}
              ORDER BY file_path, line_start, qualified_name
-             LIMIT ?6 OFFSET ?7"
+             LIMIT ?8 OFFSET ?9"
         );
         let mut stmt = self.conn.prepare(&page_sql).map_err(db_err)?;
         let rows = stmt
@@ -258,6 +279,8 @@ impl Store {
                     filter.subpath,
                     subpath_upper,
                     filter.repo_id,
+                    exact_dir_value,
+                    exclude_json,
                     limit as i64,
                     offset as i64
                 ],

@@ -21,6 +21,7 @@ pub use self::history::{
     StoredNodeHistory, StoredSnapshot, StoredSnapshotFile, StoredSnapshotMembershipBlob,
 };
 pub use self::recovery::{GraphRecoveryMode, GraphStoreRecovery, GraphStoreRecoveryError};
+pub use self::retrieval::VectorScope;
 
 type DanglingEdge = (i64, String, String, String, &'static str);
 

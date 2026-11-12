@@ -42,6 +42,7 @@ impl Config {
         config.parsers.validate()?;
         config.sanitization.validate(atlas_dir)?;
         config.context.tokenizer.validate()?;
+        config.context.escalation.validate()?;
         config.memory.validate()?;
         config.overview.validate()?;
         Ok(config)

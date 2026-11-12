@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use tracing::{debug, info};
 
 use atlas_core::{AtlasError, Clock, SystemClock, format_rfc3339};
+use atlas_repo::CanonicalRepoPath;
 
 use super::ChunkResult;
 
@@ -45,6 +46,50 @@ fn has_misplaced_operator(input: &str) -> bool {
                 || is_operator(tokens[index - 1])
                 || is_operator(tokens[index + 1]))
     })
+}
+
+/// Derive `(relative_path, parent_dir)` for a file-backed source identity.
+///
+/// Only `identity_kind = repo_path` carries a canonical repo-relative path.
+/// Returns `None` for all other identity kinds, so they stay unreachable by
+/// directory scope.
+pub(super) fn relative_scope(
+    identity_kind: &str,
+    identity_value: &str,
+) -> Option<(String, String)> {
+    if identity_kind != "repo_path" {
+        return None;
+    }
+    let canonical = CanonicalRepoPath::from_repo_relative(identity_value).ok()?;
+    let relative = canonical.as_str().to_owned();
+    let parent = relative
+        .rsplit_once('/')
+        .map(|(parent, _)| parent.to_owned())
+        .unwrap_or_default();
+    Some((relative, parent))
+}
+
+/// Canonicalize a DSQ scope path through [`CanonicalRepoPath`].
+pub(super) fn canonical_scope(value: &str) -> Result<String, AtlasError> {
+    CanonicalRepoPath::from_repo_relative(value.trim())
+        .map(|path| path.as_str().to_owned())
+        .map_err(|error| AtlasError::Other(format!("invalid directory scope '{value}': {error}")))
+}
+
+/// Strict lexicographic upper bound for a recursive prefix.
+///
+/// `prefix <= path < upper` is equivalent to `path.starts_with(prefix)` for
+/// canonical repo-relative paths, which lets SQLite use the
+/// `(repo_root, relative_path)` index without a `LIKE` scan.
+pub(super) fn scope_upper_bound(prefix: &str) -> String {
+    let mut chars: Vec<char> = prefix.chars().collect();
+    while let Some(last) = chars.pop() {
+        if let Some(next) = char::from_u32(last as u32 + 1) {
+            chars.push(next);
+            break;
+        }
+    }
+    chars.into_iter().collect()
 }
 
 /// Extract vocabulary terms from text for the vocabulary table.

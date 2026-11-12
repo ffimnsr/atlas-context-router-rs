@@ -68,9 +68,14 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "013_memory_ops_and_fts",
         up_sql: include_str!("migrations/013_memory_ops_and_fts.sql"),
     },
+    Migration {
+        version: 14,
+        name: "014_experience_edges",
+        up_sql: include_str!("migrations/014_experience_edges.sql"),
+    },
 ];
 
-pub const LATEST_VERSION: i32 = 13;
+pub const LATEST_VERSION: i32 = 14;
 
 pub const MIGRATION_SET: MigrationSet = MigrationSet {
     db_kind: "session",

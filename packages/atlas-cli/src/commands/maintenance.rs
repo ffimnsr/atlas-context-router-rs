@@ -1191,12 +1191,15 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
         feedback_schema_issues,
         overview_schema_ok,
         overview_schema_issues,
+        experience_schema_ok,
+        experience_schema_issues,
     ) = if session_db_exists {
         match SessionStore::open(&session_db_path) {
             Ok(session_store) => {
                 let memory_issues = session_store.memory_schema_issues();
                 let feedback_issues = session_store.feedback_schema_issues();
                 let mut overview_issues = session_store.overview_schema_issues();
+                let experience_issues = session_store.experience_schema_issues();
                 let content_db = atlas_engine::paths::content_db_path(&db_path);
                 if Path::new(&content_db).exists()
                     && let Ok(content_store) = ContentStore::open(&content_db)
@@ -1222,6 +1225,8 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
                     feedback_issues,
                     overview_issues.is_empty(),
                     overview_issues,
+                    experience_issues.is_empty(),
+                    experience_issues,
                 )
             }
             Err(e) => (
@@ -1232,10 +1237,22 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
                 vec![format!("cannot open session store: {e}")],
                 false,
                 vec![format!("cannot open session store: {e}")],
+                false,
+                vec![format!("cannot open session store: {e}")],
             ),
         }
     } else {
-        (true, true, Vec::new(), true, Vec::new(), true, Vec::new())
+        (
+            true,
+            true,
+            Vec::new(),
+            true,
+            Vec::new(),
+            true,
+            Vec::new(),
+            true,
+            Vec::new(),
+        )
     };
 
     let ok = issues.is_empty()
@@ -1244,10 +1261,15 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
         && session_db_ok
         && memory_schema_ok
         && feedback_schema_ok
-        && overview_schema_ok;
+        && overview_schema_ok
+        && experience_schema_ok;
     let error_code = if !issues.is_empty() || !orphans.is_empty() || !dangling.is_empty() {
         integrity_issue_code(&issues, !orphans.is_empty() || !dangling.is_empty())
-    } else if !memory_schema_ok || !feedback_schema_ok || !overview_schema_ok {
+    } else if !memory_schema_ok
+        || !feedback_schema_ok
+        || !overview_schema_ok
+        || !experience_schema_ok
+    {
         "schema_mismatch"
     } else {
         "none"
@@ -1291,6 +1313,10 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
                 "overview_schema": {
                     "ok": overview_schema_ok,
                     "issues": overview_schema_issues,
+                },
+                "experience_schema": {
+                    "ok": experience_schema_ok,
+                    "issues": experience_schema_issues,
                 },
             },
         });

@@ -96,11 +96,20 @@ pub(super) fn search_hybrid(
         &changed_set,
     );
 
-    // Vector branch — embed query and fetch top_k_vector candidates.
+    // Vector branch — embed query and fetch top_k_vector candidates scoped by
+    // the same directory/repo/kind filters as the FTS branch.
     let query_vec = embed::embed_text_blocking(embed_cfg, &query.text)
         .map_err(|e| atlas_core::AtlasError::Other(e.to_string()))?;
+    let scope = atlas_store_sqlite::VectorScope {
+        subpath_prefix: query.subpath.clone(),
+        exact_dir: query.exact_dir.clone(),
+        exclude_prefixes: query.exclude_subpaths.clone(),
+        repo_ids: query.repo_ids.clone(),
+        kinds: query.kind.clone().into_iter().collect(),
+        languages: query.language.clone().into_iter().collect(),
+    };
     let vector_results = maybe_exclude_file_nodes(
-        store.nodes_by_vector_similarity(&query_vec, query.top_k_vector)?,
+        store.nodes_by_vector_similarity(&query_vec, &scope, query.top_k_vector)?,
         query.include_files,
         query.top_k_vector,
     );
