@@ -99,17 +99,44 @@ fn get_context_query_returns_packaged_result() {
             .as_array()
             .and_then(|nodes| nodes.first())
             .and_then(|node| node.get("context_ranking_evidence"))
+            .is_none(),
+        "ranking evidence is opt-in"
+    );
+    assert!(
+        resp["structuredContent"]
+            .get("ranking_evidence_legend")
+            .is_none()
+    );
+    assert_eq!(v["target"]["kind"], serde_json::json!("query"));
+    assert_eq!(v["target"]["query"], serde_json::json!("compute"));
+    assert!(resp["_meta"].get("deprecated_input_fields").is_none());
+
+    let args = serde_json::json!({
+        "target": { "kind": "query", "query": "compute" },
+        "include_ranking_evidence": true,
+        "include_telemetry": true,
+        "output_format": "json"
+    });
+    let resp = call("get_context", Some(&args), "/ignored", &db_path).expect("call");
+    let text = unwrap_tool_text(resp.clone());
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+    assert!(
+        v["nodes"]
+            .as_array()
+            .and_then(|nodes| nodes.first())
+            .and_then(|node| node.get("context_ranking_evidence"))
             .is_some(),
-        "packaged context node must include context ranking evidence"
+        "opt-in ranking evidence must be emitted"
     );
     assert!(
         resp["structuredContent"]
             .get("ranking_evidence_legend")
             .is_some()
     );
-    assert_eq!(v["target"]["kind"], serde_json::json!("query"));
-    assert_eq!(v["target"]["query"], serde_json::json!("compute"));
-    assert!(resp["_meta"].get("deprecated_input_fields").is_none());
+    assert!(
+        v.get("telemetry").is_some(),
+        "include_telemetry must emit telemetry"
+    );
 }
 
 #[test]

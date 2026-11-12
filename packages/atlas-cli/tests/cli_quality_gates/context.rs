@@ -80,6 +80,30 @@ fn context_symbol_flow_returns_bounded_json() {
         "truncation metadata must be present"
     );
     assert_eq!(data["request"]["intent"], json!("symbol"));
+    assert!(data.get("context_ranking_evidence_legend").is_none());
+    assert!(data.get("telemetry").is_none());
+    assert!(
+        data["nodes"]
+            .as_array()
+            .and_then(|nodes| nodes.first())
+            .and_then(|node| node.get("context_ranking_evidence"))
+            .is_none(),
+        "ranking evidence is opt-in"
+    );
+
+    let data = read_json_data_output(
+        "context",
+        run_atlas(
+            repo.path(),
+            &[
+                "--json",
+                "context",
+                "greet_twice",
+                "--include-ranking-evidence",
+                "--telemetry",
+            ],
+        ),
+    );
     assert!(data["context_ranking_evidence_legend"].is_object());
     assert!(
         data["nodes"]
@@ -87,8 +111,9 @@ fn context_symbol_flow_returns_bounded_json() {
             .and_then(|nodes| nodes.first())
             .and_then(|node| node.get("context_ranking_evidence"))
             .is_some(),
-        "context JSON must expose context ranking evidence on nodes"
+        "opt-in context JSON must expose ranking evidence on nodes"
     );
+    assert!(data["telemetry"].is_object());
 }
 
 #[test]

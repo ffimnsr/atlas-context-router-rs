@@ -7,9 +7,9 @@
 
 use atlas_core::BudgetReport;
 use atlas_core::model::{
-    ContextOverview, ContextRankingEvidence, ContextResult, ContextSourceMix, Edge, ImpactResult,
-    Node, PayloadTruncationMeta, SavedContextSource, SeedBudgetMeta, SelectedEdge, SelectedNode,
-    TraversalBudgetMeta,
+    ContextOverview, ContextRankingEvidence, ContextResult, ContextSourceMix, ContextTelemetry,
+    Edge, ImpactResult, Node, PayloadTruncationMeta, RepoProvenance, SavedContextSource,
+    SeedBudgetMeta, SelectedEdge, SelectedNode, TraversalBudgetMeta,
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -169,6 +169,12 @@ pub struct PackagedContextResult<'a> {
     pub seed_budgets: &'a [SeedBudgetMeta],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub traversal_budget: Option<&'a TraversalBudgetMeta>,
+    /// Hoisted repo provenance shared by every emitted item (R7.2).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_provenance: Option<&'a RepoProvenance>,
+    /// Context build telemetry (R7.1); present only when requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub telemetry: Option<&'a ContextTelemetry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload_truncation: Option<&'a PayloadTruncationMeta>,
     /// Per-source-kind token usage breakdown (CM13).
@@ -332,6 +338,8 @@ pub fn package_context_result(
         overviews: result.overviews.clone(),
         seed_budgets: &result.seed_budgets,
         traversal_budget: result.traversal_budget.as_ref(),
+        repo_provenance: result.repo_provenance.as_ref(),
+        telemetry: result.telemetry.as_ref(),
         payload_truncation: result.truncation.payload.as_ref(),
         source_mix: result
             .truncation

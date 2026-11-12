@@ -84,6 +84,8 @@ fn empty_result(request: ContextRequest) -> ContextResult {
         content_assets: vec![],
         overviews: vec![],
         sufficiency: None,
+        repo_provenance: None,
+        telemetry: None,
         budget: BudgetReport::not_applicable(),
     }
 }
@@ -295,6 +297,7 @@ fn refactor_request() -> ContextRequest {
         include_tests: false,
         include_imports: false,
         include_neighbors: false,
+        include_ranking_evidence: true,
         ..ContextRequest::default()
     }
 }

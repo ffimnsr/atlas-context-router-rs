@@ -24,6 +24,45 @@
     }
   },
   "$defs": {
+    "repo_provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo_id"],
+      "properties": {
+        "repo_id": { "type": "string" },
+        "repo_fingerprint": { "type": ["string", "null"] },
+        "repo_root": { "type": ["string", "null"] },
+        "remote_url": { "type": ["string", "null"] }
+      }
+    },
+    "context_telemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["intent", "requested_nodes", "emitted_nodes", "requested_edges", "emitted_edges", "requested_files", "emitted_files", "requested_saved_sources", "emitted_saved_sources", "requested_content_assets", "emitted_content_assets", "requested_overviews", "emitted_overviews", "requested_bytes", "emitted_bytes", "requested_tokens", "emitted_tokens", "budget_hit", "duration_ms", "outcome"],
+      "properties": {
+        "intent": { "type": "string" },
+        "requested_nodes": { "type": "integer" },
+        "emitted_nodes": { "type": "integer" },
+        "requested_edges": { "type": "integer" },
+        "emitted_edges": { "type": "integer" },
+        "requested_files": { "type": "integer" },
+        "emitted_files": { "type": "integer" },
+        "requested_saved_sources": { "type": "integer" },
+        "emitted_saved_sources": { "type": "integer" },
+        "requested_content_assets": { "type": "integer" },
+        "emitted_content_assets": { "type": "integer" },
+        "requested_overviews": { "type": "integer" },
+        "emitted_overviews": { "type": "integer" },
+        "requested_bytes": { "type": "integer" },
+        "emitted_bytes": { "type": "integer" },
+        "requested_tokens": { "type": "integer" },
+        "emitted_tokens": { "type": "integer" },
+        "budget_hit": { "type": "boolean" },
+        "budget_name": { "type": ["string", "null"] },
+        "duration_ms": { "type": "integer" },
+        "outcome": { "type": "string", "enum": ["ok", "empty", "ambiguous", "budget_exhausted", "error"] }
+      }
+    },
     "context_result": {
       "type": "object",
       "additionalProperties": true,
@@ -54,6 +93,8 @@
         "ambiguity": { "type": ["object", "null"] },
         "workflow": { "type": ["object", "null"], "additionalProperties": true },
         "saved_context_sources": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "repo_provenance": { "$ref": "#/$defs/repo_provenance" },
+        "telemetry": { "$ref": "#/$defs/context_telemetry" },
         "budget_status": { "type": "string" },
         "budget_hit": { "type": "boolean" },
         "budget_name": { "type": ["string", "null"] },

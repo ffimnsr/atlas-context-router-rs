@@ -411,6 +411,14 @@ pub enum Command {
         #[arg(long)]
         include_stale_overviews: bool,
 
+        /// Include request/emitted telemetry in JSON output.
+        #[arg(long)]
+        telemetry: bool,
+
+        /// Keep per-item context_ranking_evidence in JSON output.
+        #[arg(long = "include-ranking-evidence")]
+        include_ranking_evidence: bool,
+
         /// Non-recursive scope: only files directly inside this directory.
         #[arg(long)]
         exact_dir: Option<String>,
@@ -717,6 +725,14 @@ pub enum Command {
         /// Include stale overview records explicitly (freshness filter).
         #[arg(long)]
         include_stale_overviews: bool,
+
+        /// Include request/emitted telemetry in JSON output.
+        #[arg(long)]
+        telemetry: bool,
+
+        /// Keep per-item context_ranking_evidence in JSON output.
+        #[arg(long = "include-ranking-evidence")]
+        include_ranking_evidence: bool,
 
         /// Maximum overview records to include (default: 10).
         #[arg(long)]

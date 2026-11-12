@@ -1,5 +1,5 @@
 use atlas_core::{
-    Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile,
+    Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile, RepoProvenance,
     model::{ContextIntent, ContextRequest, ContextTarget},
 };
 use atlas_review::ContextEngine;
@@ -36,7 +36,7 @@ fn make_node(
         is_test: kind == NodeKind::Test,
         file_hash: "bench-hash".to_owned(),
         extra_json: serde_json::Value::Null,
-        repo_provenance: None,
+        repo_provenance: Some(RepoProvenance::new("repo_test")),
     }
 }
 
@@ -148,36 +148,7 @@ fn bench_context_retrieval_latency(c: &mut Criterion) {
         let mut store = make_store();
         let seed_qname = seed_context_graph(&mut store, module_count);
         let engine = ContextEngine::new(&store);
-        let request = ContextRequest {
-            intent: ContextIntent::Symbol,
-            target: ContextTarget::QualifiedName { qname: seed_qname },
-            max_nodes: Some(96),
-            max_edges: Some(128),
-            max_files: Some(48),
-            depth: Some(2),
-            include_tests: true,
-            include_imports: false,
-            include_neighbors: true,
-            include_code_spans: true,
-            include_callers: true,
-            include_callees: true,
-            allow_cross_repo_edges: false,
-            include_saved_context: false,
-            session_id: None,
-            agent_id: None,
-            merge_agent_partitions: false,
-            token_budget: None,
-            include_content_assets: false,
-            max_content_assets: None,
-            include_overviews: false,
-            overview_limit: None,
-            overview_freshness: None,
-            overview_subject_kinds: None,
-            overview_max_bytes: None,
-            subpath: None,
-            exact_dir: None,
-            exclude_subpaths: Vec::new(),
-        };
+        let request = benchmark_request(&seed_qname);
 
         group.bench_with_input(
             BenchmarkId::from_parameter(module_count),
@@ -192,5 +163,202 @@ fn bench_context_retrieval_latency(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_context_retrieval_latency);
+fn benchmark_request(seed_qname: &str) -> ContextRequest {
+    ContextRequest {
+        intent: ContextIntent::Symbol,
+        target: ContextTarget::QualifiedName {
+            qname: seed_qname.to_owned(),
+        },
+        max_nodes: Some(96),
+        max_edges: Some(128),
+        max_files: Some(48),
+        depth: Some(2),
+        include_tests: true,
+        include_imports: false,
+        include_neighbors: true,
+        include_code_spans: true,
+        include_callers: true,
+        include_callees: true,
+        include_telemetry: true,
+        ..ContextRequest::default()
+    }
+}
+
+/// Fixed telemetry corpus: symbol, file, review, change-set, oversized context,
+/// and provenance-sensitive requests. Run with:
+/// `cargo bench -p atlas-review --bench context_bench -- --noplot`
+fn telemetry_corpus(store: &Store, seed_qname: &str) -> Vec<serde_json::Value> {
+    let engine = ContextEngine::new(store);
+    let seed_file = seed_qname.split("::").next().unwrap_or("src/lib.rs");
+    let changed_files = vec![seed_file.to_owned()];
+    let requests = vec![
+        ("symbol", benchmark_request(seed_qname)),
+        (
+            "file",
+            ContextRequest {
+                intent: ContextIntent::File,
+                target: ContextTarget::FilePath {
+                    path: seed_file.to_owned(),
+                },
+                include_telemetry: true,
+                include_code_spans: true,
+                ..ContextRequest::default()
+            },
+        ),
+        (
+            "review",
+            ContextRequest {
+                intent: ContextIntent::Review,
+                target: ContextTarget::ChangedFiles {
+                    paths: changed_files.clone(),
+                },
+                include_telemetry: true,
+                include_tests: true,
+                ..ContextRequest::default()
+            },
+        ),
+        (
+            "change_set",
+            ContextRequest {
+                intent: ContextIntent::ImpactAnalysis,
+                target: ContextTarget::ChangedSymbols {
+                    qnames: vec![seed_qname.to_owned()],
+                },
+                include_telemetry: true,
+                ..ContextRequest::default()
+            },
+        ),
+        (
+            "oversized_context",
+            ContextRequest {
+                token_budget: Some(32),
+                max_nodes: Some(512),
+                max_edges: Some(512),
+                include_telemetry: true,
+                ..benchmark_request(seed_qname)
+            },
+        ),
+        (
+            "provenance_sensitive",
+            ContextRequest {
+                intent: ContextIntent::Review,
+                target: ContextTarget::ChangedFiles {
+                    paths: changed_files,
+                },
+                max_nodes: Some(256),
+                include_telemetry: true,
+                include_code_spans: true,
+                ..ContextRequest::default()
+            },
+        ),
+    ];
+
+    requests
+        .into_iter()
+        .map(|(name, request)| {
+            let default_result = engine
+                .build(&request)
+                .expect("build default telemetry case");
+            let mut evidence_request = request.clone();
+            evidence_request.include_ranking_evidence = true;
+            let evidence_result = engine
+                .build(&evidence_request)
+                .expect("build ranking-evidence telemetry case");
+            let default_tokens = default_result
+                .telemetry
+                .as_ref()
+                .map(|telemetry| telemetry.emitted_tokens)
+                .unwrap_or(0);
+            let evidence_tokens = evidence_result
+                .telemetry
+                .as_ref()
+                .map(|telemetry| telemetry.emitted_tokens)
+                .unwrap_or(0);
+            let token_reduction_ratio = if evidence_tokens == 0 {
+                0.0
+            } else {
+                1.0 - (default_tokens as f64 / evidence_tokens as f64)
+            };
+            let required_evidence_retained = default_result.nodes.iter().all(|node| {
+                !node.node.qualified_name.is_empty()
+                    && !node.node.file_path.is_empty()
+                    && node.node.line_start <= node.node.line_end
+                    && !node.selection_reason.as_str().is_empty()
+            }) && default_result
+                .files
+                .iter()
+                .all(|file| !file.path.is_empty() && !file.selection_reason.as_str().is_empty());
+            serde_json::json!({
+                "case": name,
+                "default": default_result.telemetry,
+                "with_ranking_evidence": evidence_result.telemetry,
+                "token_reduction_ratio": token_reduction_ratio,
+                "required_evidence_retained": required_evidence_retained,
+            })
+        })
+        .collect()
+}
+
+fn bench_telemetry_corpus(c: &mut Criterion) {
+    let mut store = make_store();
+    let seed_qname = seed_context_graph(&mut store, 64);
+    let corpus = telemetry_corpus(&store, &seed_qname);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "corpus": corpus,
+        }))
+        .expect("serialize telemetry corpus")
+    );
+
+    let engine = ContextEngine::new(&store);
+    let requests: Vec<ContextRequest> = vec![
+        benchmark_request(&seed_qname),
+        ContextRequest {
+            intent: ContextIntent::File,
+            target: ContextTarget::FilePath {
+                path: seed_qname
+                    .split("::")
+                    .next()
+                    .unwrap_or("src/lib.rs")
+                    .to_owned(),
+            },
+            include_telemetry: true,
+            ..ContextRequest::default()
+        },
+        ContextRequest {
+            intent: ContextIntent::Review,
+            target: ContextTarget::ChangedFiles {
+                paths: vec![
+                    seed_qname
+                        .split("::")
+                        .next()
+                        .unwrap_or("src/lib.rs")
+                        .to_owned(),
+                ],
+            },
+            include_telemetry: true,
+            ..ContextRequest::default()
+        },
+    ];
+    let mut group = c.benchmark_group("review/context_telemetry_corpus");
+    group.bench_function("fixed_corpus", |b| {
+        b.iter(|| {
+            for request in &requests {
+                black_box(
+                    engine
+                        .build(black_box(request))
+                        .expect("build telemetry case"),
+                );
+            }
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_context_retrieval_latency,
+    bench_telemetry_corpus
+);
 criterion_main!(benches);

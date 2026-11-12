@@ -29,6 +29,24 @@ fn get_review_context_includes_provenance() {
     assert!(
         resp["structuredContent"]
             .get("ranking_evidence_legend")
+            .is_none()
+    );
+
+    let args = serde_json::json!({
+        "change_source": { "kind": "files", "files": ["src/service.rs"] },
+        "include_ranking_evidence": true,
+        "output_format": "json"
+    });
+    let resp = call(
+        "get_review_context",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("get_review_context");
+    assert!(
+        resp["structuredContent"]
+            .get("ranking_evidence_legend")
             .is_some()
     );
 }
@@ -36,7 +54,11 @@ fn get_review_context_includes_provenance() {
 #[test]
 fn get_review_context_json_includes_changed_symbol_evidence() {
     let fixture = setup_mcp_fixture();
-    let args = serde_json::json!({ "change_source": { "kind": "files", "files": ["src/service.rs"] }, "output_format": "json" });
+    let args = serde_json::json!({
+        "change_source": { "kind": "files", "files": ["src/service.rs"] },
+        "include_ranking_evidence": true,
+        "output_format": "json"
+    });
     let resp = call(
         "get_review_context",
         Some(&args),

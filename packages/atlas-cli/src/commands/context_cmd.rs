@@ -375,6 +375,8 @@ pub fn run_context(cli: &Cli) -> Result<()> {
             overview_subject_kinds,
             exact_dir,
             exclude_subpaths,
+            telemetry,
+            include_ranking_evidence,
         ) = match &cli.command {
             Command::Context {
                 query,
@@ -400,6 +402,8 @@ pub fn run_context(cli: &Cli) -> Result<()> {
                 overview_subject_kinds,
                 exact_dir,
                 exclude_subpaths,
+                telemetry,
+                include_ranking_evidence,
             } => (
                 query.clone(),
                 file.clone(),
@@ -424,6 +428,8 @@ pub fn run_context(cli: &Cli) -> Result<()> {
                 overview_subject_kinds.clone(),
                 exact_dir.clone(),
                 exclude_subpaths.clone(),
+                *telemetry,
+                *include_ranking_evidence,
             ),
             _ => unreachable!(),
         };
@@ -505,6 +511,8 @@ pub fn run_context(cli: &Cli) -> Result<()> {
         request.agent_id = agent_id.clone();
         request.merge_agent_partitions = merge_agent_partitions;
         request.include_overviews = include_overviews;
+        request.include_telemetry = telemetry;
+        request.include_ranking_evidence = include_ranking_evidence;
         request.overview_limit = overview_limit;
         request.overview_max_bytes = overview_max_bytes;
         if exact_dir.is_some() || !exclude_subpaths.is_empty() {
@@ -624,10 +632,12 @@ pub fn run_context(cli: &Cli) -> Result<()> {
         if cli.json {
             let mut value = serde_json::to_value(&result)?;
             if let Some(object) = value.as_object_mut() {
-                object.insert(
-                    "context_ranking_evidence_legend".to_owned(),
-                    atlas_core::context_ranking_evidence_legend(),
-                );
+                if include_ranking_evidence {
+                    object.insert(
+                        "context_ranking_evidence_legend".to_owned(),
+                        atlas_core::context_ranking_evidence_legend(),
+                    );
+                }
                 object.insert(
                     "agent_scope".to_owned(),
                     serde_json::json!({

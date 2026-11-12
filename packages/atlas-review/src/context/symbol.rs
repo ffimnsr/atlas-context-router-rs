@@ -224,6 +224,8 @@ pub(super) fn build_symbol_context(
         content_assets: vec![],
         overviews: vec![],
         sufficiency: None,
+        repo_provenance: None,
+        telemetry: None,
         budget: BudgetReport::not_applicable(),
     };
 
@@ -258,6 +260,8 @@ pub(super) fn build_ambiguous_result(
         content_assets: vec![],
         overviews: vec![],
         sufficiency: None,
+        repo_provenance: None,
+        telemetry: None,
         budget: BudgetReport::not_applicable(),
     }
 }
@@ -289,6 +293,8 @@ pub(super) fn build_not_found_result(
         content_assets: vec![],
         overviews: vec![],
         sufficiency: None,
+        repo_provenance: None,
+        telemetry: None,
         budget: BudgetReport::not_applicable(),
     }
 }

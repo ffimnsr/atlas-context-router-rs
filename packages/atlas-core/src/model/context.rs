@@ -139,6 +139,17 @@ pub struct ContextRequest {
     /// Canonical subpath prefixes excluded from resolution and selection.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude_subpaths: Vec<String>,
+    // --- R7.1: build telemetry ---
+    /// When `true`, populate [`ContextResult::telemetry`] with requested vs
+    /// emitted item counts, payload sizes, budget outcome, and duration.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub include_telemetry: bool,
+    // --- R7.2: payload metadata slimming ---
+    /// When `true`, keep per-item `context_ranking_evidence` in the result.
+    /// Defaults to `false` so emitted payloads carry only selection reasons and
+    /// relevance scores unless callers opt in to ranking diagnostics.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub include_ranking_evidence: bool,
 }
 
 impl Default for ContextRequest {
@@ -174,6 +185,8 @@ impl Default for ContextRequest {
             subpath: None,
             exact_dir: None,
             exclude_subpaths: Vec::new(),
+            include_telemetry: false,
+            include_ranking_evidence: false,
         }
     }
 }
@@ -786,6 +799,65 @@ pub struct SavedContextSource {
     pub context_ranking_evidence: Option<ContextRankingEvidence>,
 }
 
+/// Requested vs emitted payload accounting for one context build (R7.1).
+///
+/// Populated only when [`ContextRequest::include_telemetry`] is `true`; the
+/// engine always records the same measurements as process metrics so default
+/// output stays byte-identical.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ContextTelemetry {
+    pub intent: ContextIntent,
+    pub requested_nodes: usize,
+    pub emitted_nodes: usize,
+    pub requested_edges: usize,
+    pub emitted_edges: usize,
+    pub requested_files: usize,
+    pub emitted_files: usize,
+    pub requested_saved_sources: usize,
+    pub emitted_saved_sources: usize,
+    pub requested_content_assets: usize,
+    pub emitted_content_assets: usize,
+    pub requested_overviews: usize,
+    pub emitted_overviews: usize,
+    pub requested_bytes: usize,
+    pub emitted_bytes: usize,
+    pub requested_tokens: usize,
+    pub emitted_tokens: usize,
+    pub budget_hit: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_name: Option<String>,
+    pub duration_ms: u64,
+    pub outcome: ContextOutcome,
+}
+
+/// Deterministic outcome classification for one context build (R7.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextOutcome {
+    /// Context was built and emitted at least one selected item.
+    Ok,
+    /// No graph, file, content, saved-context, or overview item was emitted.
+    Empty,
+    /// Target resolution produced ranked ambiguity candidates.
+    Ambiguous,
+    /// Payload or selection budgets dropped emitted items.
+    BudgetExhausted,
+    /// Build failed before a result could be produced.
+    Error,
+}
+
+impl ContextOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Empty => "empty",
+            Self::Ambiguous => "ambiguous",
+            Self::BudgetExhausted => "budget_exhausted",
+            Self::Error => "error",
+        }
+    }
+}
+
 /// Output of the context engine for a single [`ContextRequest`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextResult {
@@ -823,6 +895,13 @@ pub struct ContextResult {
     /// Deterministic evidence-sufficiency report and escalation trace (VR3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sufficiency: Option<EvidenceSufficiencyReport>,
+    /// Repo provenance hoisted out of emitted items when every item shares the
+    /// same provenance (R7.2). When `None`, provenance stays on each item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_provenance: Option<crate::model::RepoProvenance>,
+    /// Requested vs emitted accounting (R7.1). Omitted unless requested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telemetry: Option<ContextTelemetry>,
     #[serde(flatten)]
     pub budget: BudgetReport,
 }

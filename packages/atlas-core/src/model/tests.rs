@@ -272,6 +272,8 @@ fn sample_context_request_symbol() -> ContextRequest {
         subpath: None,
         exact_dir: None,
         exclude_subpaths: Vec::new(),
+        include_telemetry: false,
+        include_ranking_evidence: false,
     }
 }
 
@@ -675,6 +677,8 @@ fn context_result_round_trip() {
             uri: Some("atlas://repo/repo_x/file/src%2Flib.rs".to_string()),
         }],
         sufficiency: None,
+        repo_provenance: None,
+        telemetry: None,
         budget: BudgetReport::within_budget("review_context_extraction.max_nodes", 50, 1),
     };
     let json = serde_json::to_string(&result).unwrap();
@@ -717,6 +721,8 @@ fn context_result_with_ambiguity_round_trip() {
         budget: BudgetReport::within_budget("review_context_extraction.max_nodes", 50, 0),
         overviews: vec![],
         sufficiency: None,
+        repo_provenance: None,
+        telemetry: None,
     };
     let json = serde_json::to_string(&result).unwrap();
     let back: ContextResult = serde_json::from_str(&json).unwrap();

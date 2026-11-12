@@ -46,6 +46,7 @@
   ],
   "active_memoir_concepts": [],
   "changed_files": [],
+  "recent_runtime_failures": [],
   "graph_readiness": {
     "graph_built": false,
     "graph_queryable": false,
@@ -69,6 +70,7 @@
     "feedback_count": 1,
     "concept_count": 0,
     "changed_file_count": 0,
+    "runtime_failure_count": 0,
     "retrieval_hint_count": 0
   },
   "warnings": [

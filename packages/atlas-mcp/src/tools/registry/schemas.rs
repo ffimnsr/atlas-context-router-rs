@@ -481,6 +481,8 @@ pub(crate) struct GetReviewContextArgsSchema {
     token_budget: Option<u64>,
     exact_dir: Option<String>,
     exclude_subpaths: Option<Vec<String>>,
+    include_telemetry: Option<bool>,
+    include_ranking_evidence: Option<bool>,
     output_format: Option<String>,
 }
 
@@ -564,6 +566,8 @@ pub(crate) struct GetContextArgsSchema {
     token_budget: Option<u64>,
     exact_dir: Option<String>,
     exclude_subpaths: Option<Vec<String>>,
+    include_telemetry: Option<bool>,
+    include_ranking_evidence: Option<bool>,
     output_format: Option<String>,
 }
 

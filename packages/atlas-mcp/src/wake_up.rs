@@ -179,6 +179,7 @@ pub fn tool_wake_up(
         "recent_feedback": pack["recent_feedback"],
         "active_memoir_concepts": pack["active_memoir_concepts"],
         "changed_files": pack["changed_files"],
+        "recent_runtime_failures": pack["recent_runtime_failures"],
         "graph_readiness": pack["graph_readiness"],
         "retrieval_hints": pack["retrieval_hints"],
         "generated_at": pack["generated_at"],
@@ -204,6 +205,10 @@ pub fn tool_wake_up(
                 .map(|items| items.len())
                 .unwrap_or(0),
             "changed_file_count": pack["changed_files"]
+                .as_array()
+                .map(|items| items.len())
+                .unwrap_or(0),
+            "runtime_failure_count": pack["recent_runtime_failures"]
                 .as_array()
                 .map(|items| items.len())
                 .unwrap_or(0),

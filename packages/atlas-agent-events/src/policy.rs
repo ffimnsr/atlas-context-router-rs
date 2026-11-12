@@ -10,6 +10,8 @@ pub const MAX_HOOK_PROMPT_HITS: usize = 3;
 pub const MAX_HOOK_REVIEW_REFRESH_FILES: usize = 8;
 pub const MAX_HOOK_REVIEW_REFRESH_DEPTH: u32 = 3;
 pub const MAX_HOOK_REVIEW_REFRESH_NODES: usize = 64;
+pub const MAX_CLASSIFIER_INPUT_BYTES: usize = 16 * 1024;
+pub const MAX_CLASSIFIER_MATCHED_FIELDS: usize = 8;
 pub const FILE_CHANGED_INLINE_CONTENT_KEYS: &[&str] = &[
     "after",
     "before",

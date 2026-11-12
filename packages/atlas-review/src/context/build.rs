@@ -184,6 +184,8 @@ pub(super) fn build_review_context(
         content_assets: vec![],
         overviews: vec![],
         sufficiency: None,
+        repo_provenance: None,
+        telemetry: None,
         budget: impact.budget.clone(),
     };
 

@@ -21,6 +21,7 @@
 //! break path-derived identity. Do not normalize paths inside this service.
 
 pub mod actions;
+pub mod classification;
 pub mod graph_readiness;
 pub mod metadata;
 pub mod payload;
@@ -29,6 +30,10 @@ pub mod service;
 pub mod wake_pack;
 
 pub use actions::execute_hook_actions;
+pub use classification::{
+    RuntimeClassification, RuntimeClassificationKind, RuntimeClassificationSeverity,
+    classify_runtime_payload,
+};
 pub use graph_readiness::{
     FreshnessWarning, compute_freshness_warning, derive_graph_readiness,
     derive_graph_readiness_open_failed, pending_graph_relevant_changes,

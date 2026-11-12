@@ -1147,3 +1147,81 @@ fn post_tool_use_replace_string_in_file_targets_changed_file() {
         "gamma should be indexed after replace_string_in_file refresh"
     );
 }
+
+#[test]
+fn hook_metadata_classifies_runtime_output_and_dedupes_repeated_input() {
+    use crate::metadata::build_hook_event_metadata;
+    use crate::policy::{HookMetadataContext, HookPayloadRouting};
+    use atlas_session::SessionStoreConfig;
+
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path().to_string_lossy().into_owned();
+    let graph_db_path = repo.clone();
+    let session_db = derive_session_db_path(&graph_db_path);
+    if let Some(parent) = Path::new(&session_db).parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    let mut store = SessionStore::open_with_config(
+        &session_db,
+        SessionStoreConfig {
+            dedup_window_secs: 60,
+            ..SessionStoreConfig::default()
+        },
+    )
+    .unwrap();
+    let session_id = SessionId::derive(&repo, "", "hook");
+    store
+        .upsert_session_meta(session_id.clone(), &repo, "hook", None)
+        .unwrap();
+
+    let payload = json!({
+        "command": "cargo test",
+        "status": "failed",
+        "stderr": "test result: FAILED. 1 passed; 2 failed with token secret-123"
+    });
+    let policy = resolve_hook_policy("tool-failure").unwrap();
+    let routed = HookPayloadRouting {
+        event_payload: payload.clone(),
+        source_id: None,
+        storage_kind: None,
+    };
+    let metadata = build_hook_event_metadata(HookMetadataContext {
+        repo: &repo,
+        graph_db_path: &graph_db_path,
+        store: &store,
+        session_id: &session_id,
+        policy,
+        payload: &payload,
+        routed: &routed,
+        pending_resume: false,
+        event_source: "hook",
+        agent_id: None,
+    });
+    let classification = metadata.get("classification").expect("classification");
+    assert_eq!(classification["kind"], "test_failure");
+    assert_eq!(classification["severity"], "error");
+    assert_eq!(classification["rule_id"], "text_test_failure");
+    assert_eq!(classification["matched_fields"], json!(["stderr"]));
+    let encoded = metadata.to_string();
+    assert!(!encoded.contains("secret-123"));
+    assert!(!encoded.contains("FAILED"));
+
+    let make_parts = |metadata: Value| HookEventParts {
+        frontend: "hook",
+        event: "tool-failure",
+        payload: payload.clone(),
+        hook_metadata: metadata,
+        source_id: None,
+        storage_kind: None,
+        pending_resume: false,
+        event_source: "hook",
+        agent_id: None,
+    };
+    let first = build_hook_event(&session_id, make_parts(metadata.clone()));
+    let second = build_hook_event(&session_id, make_parts(metadata));
+    assert!(store.append_event(first).unwrap().is_some());
+    assert!(
+        store.append_event(second).unwrap().is_none(),
+        "identical classified payload must dedupe inside dedup_window_secs"
+    );
+}

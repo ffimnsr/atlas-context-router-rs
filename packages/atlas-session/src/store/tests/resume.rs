@@ -384,3 +384,174 @@ fn cleanup_stale_sessions_keeps_recent_sessions() {
     assert_eq!(removed, 0, "recent session must not be removed");
     assert!(store.get_session_meta(&id).unwrap().is_some());
 }
+
+#[test]
+fn resume_classifies_runtime_failures_and_build_test_summaries() {
+    let (_dir, mut store) = open_store(64, 16_384);
+    let session_id = session_id();
+    seed_session(&mut store, &session_id);
+
+    store
+        .append_event(NewSessionEvent {
+            session_id: session_id.clone(),
+            event_type: SessionEventType::CommandFail,
+            priority: 2,
+            payload: serde_json::json!({
+                "command": "cargo test",
+                "status": "failed",
+                "stderr": "test result: FAILED. 1 passed; 2 failed",
+                "hook_metadata": {
+                    "classification": {
+                        "kind": "test_failure",
+                        "severity": "error",
+                        "rule_id": "text_test_failure",
+                        "matched_fields": ["stderr"]
+                    }
+                }
+            }),
+            created_at: Some("2026-01-01T00:00:02Z".to_owned()),
+        })
+        .unwrap();
+    store
+        .append_event(NewSessionEvent {
+            session_id: session_id.clone(),
+            event_type: SessionEventType::CommandRun,
+            priority: 2,
+            payload: serde_json::json!({
+                "command": "cargo build",
+                "status": "ok",
+                "hook_metadata": {
+                    "classification": {
+                        "kind": "build_success",
+                        "severity": "info",
+                        "rule_id": "status_build_success",
+                        "matched_fields": ["command", "status"]
+                    }
+                }
+            }),
+            created_at: Some("2026-01-01T00:00:01Z".to_owned()),
+        })
+        .unwrap();
+
+    let snapshot = store.build_resume_view(&session_id, None, true).unwrap();
+    let errors = snapshot["unresolved_errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0]["classification"]["kind"], "test_failure");
+    assert_eq!(errors[0]["classification"]["severity"], "error");
+    assert_eq!(errors[0]["classification"]["rule_id"], "text_test_failure");
+
+    let commands = snapshot["recent_commands"].as_array().unwrap();
+    assert!(
+        commands
+            .iter()
+            .any(|entry| entry["classification"]["kind"] == "build_success")
+    );
+
+    let summaries = snapshot["recent_build_test_summaries"].as_array().unwrap();
+    assert_eq!(summaries.len(), 2);
+    assert_eq!(summaries[0]["kind"], "build_success");
+    assert_eq!(summaries[1]["kind"], "test_failure");
+}
+
+#[test]
+fn resume_without_classification_keeps_existing_shape() {
+    let (_dir, mut store) = open_store(64, 8192);
+    let session_id = session_id();
+    seed_session(&mut store, &session_id);
+
+    store
+        .append_event(NewSessionEvent {
+            session_id: session_id.clone(),
+            event_type: SessionEventType::CommandFail,
+            priority: 2,
+            payload: serde_json::json!({"command": "make", "error": "boom"}),
+            created_at: None,
+        })
+        .unwrap();
+
+    let snapshot = store.build_resume_view(&session_id, None, true).unwrap();
+    assert!(
+        snapshot["recent_build_test_summaries"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        snapshot["unresolved_errors"][0]
+            .get("classification")
+            .is_none()
+    );
+    assert!(!snapshot.to_string().contains("\"classification\""));
+    let again = store.build_resume_view(&session_id, None, true).unwrap();
+    assert_eq!(snapshot, again, "unclassified snapshots stay deterministic");
+}
+
+#[test]
+fn resume_sorts_and_dedupes_classified_failures() {
+    let (_dir, mut store) = open_store(64, 16_384);
+    let session_id = session_id();
+    seed_session(&mut store, &session_id);
+
+    for (at, error) in [
+        ("2026-01-01T00:00:03Z", "error[E0308]: mismatched types"),
+        ("2026-01-01T00:00:01Z", "error[E0001]: first failure"),
+        ("2026-01-01T00:00:01Z", "error[E0002]: second failure"),
+    ] {
+        store
+            .append_event(NewSessionEvent {
+                session_id: session_id.clone(),
+                event_type: SessionEventType::CommandFail,
+                priority: 2,
+                payload: serde_json::json!({
+                    "command": "cargo check",
+                    "error": error,
+                    "hook_metadata": {
+                        "classification": {
+                            "kind": "compiler_error",
+                            "severity": "error",
+                            "rule_id": "text_compiler_error",
+                            "matched_fields": ["error"]
+                        }
+                    }
+                }),
+                created_at: Some(at.to_owned()),
+            })
+            .unwrap();
+    }
+    store
+        .append_event(NewSessionEvent {
+            session_id: session_id.clone(),
+            event_type: SessionEventType::CommandFail,
+            priority: 2,
+            payload: serde_json::json!({
+                "command": "cargo check",
+                "error": "same failure at a different time",
+                "hook_metadata": {
+                    "classification": {
+                        "kind": "compiler_error",
+                        "severity": "error",
+                        "rule_id": "text_compiler_error",
+                        "matched_fields": ["error"]
+                    }
+                }
+            }),
+            created_at: Some("2026-01-01T00:00:02Z".to_owned()),
+        })
+        .unwrap();
+
+    let snapshot = store.build_resume_view(&session_id, None, true).unwrap();
+    let errors = snapshot["unresolved_errors"].as_array().unwrap();
+    let ats: Vec<&str> = errors
+        .iter()
+        .filter_map(|entry| entry["at"].as_str())
+        .collect();
+    assert_eq!(
+        ats,
+        vec![
+            "2026-01-01T00:00:01Z",
+            "2026-01-01T00:00:01Z",
+            "2026-01-01T00:00:02Z",
+            "2026-01-01T00:00:03Z"
+        ]
+    );
+}

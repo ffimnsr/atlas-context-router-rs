@@ -10,7 +10,7 @@ use std::sync::OnceLock;
 
 pub use histogram::{
     Counter, FILE_COUNT_BUCKETS, Histogram, HistogramBucketSnapshot, HistogramSnapshot,
-    LATENCY_MS_BUCKETS,
+    LATENCY_MS_BUCKETS, PAYLOAD_BYTES_BUCKETS, PAYLOAD_TOKEN_BUCKETS,
 };
 pub use labeled::{LabeledCounter, LabeledHistogram};
 pub use snapshot::{McpToolCallCounts, MetricsSnapshot};
@@ -32,6 +32,10 @@ pub struct Metrics {
     mcp_tool_calls_ok: LabeledCounter,
     mcp_tool_calls_error: LabeledCounter,
     mcp_tool_duration_ms: LabeledHistogram,
+    context_builds: LabeledCounter,
+    context_duration_ms: LabeledHistogram,
+    context_payload_bytes: LabeledHistogram,
+    context_payload_tokens: LabeledHistogram,
 }
 
 impl Default for Metrics {
@@ -54,6 +58,10 @@ impl Metrics {
             mcp_tool_calls_ok: LabeledCounter::new(),
             mcp_tool_calls_error: LabeledCounter::new(),
             mcp_tool_duration_ms: LabeledHistogram::new(LATENCY_MS_BUCKETS),
+            context_builds: LabeledCounter::new(),
+            context_duration_ms: LabeledHistogram::new(LATENCY_MS_BUCKETS),
+            context_payload_bytes: LabeledHistogram::new(PAYLOAD_BYTES_BUCKETS),
+            context_payload_tokens: LabeledHistogram::new(PAYLOAD_TOKEN_BUCKETS),
         }
     }
 
@@ -103,6 +111,25 @@ impl Metrics {
         self.mcp_tool_duration_ms.observe(tool, duration_ms);
     }
 
+    /// Record one context build.
+    ///
+    /// `context_builds` is labeled by `"{intent}:{outcome}"`; duration and
+    /// payload sizes are labeled by intent alone.
+    pub fn record_context_build(
+        &self,
+        intent: &str,
+        outcome: &str,
+        duration_ms: u64,
+        emitted_bytes: u64,
+        emitted_tokens: u64,
+    ) {
+        self.context_builds
+            .increment(&format!("{intent}:{outcome}"));
+        self.context_duration_ms.observe(intent, duration_ms);
+        self.context_payload_bytes.observe(intent, emitted_bytes);
+        self.context_payload_tokens.observe(intent, emitted_tokens);
+    }
+
     /// Build a serializable point-in-time snapshot of every family.
     pub fn snapshot(&self) -> MetricsSnapshot {
         let parser_parses_total = self.parser_parses.value();
@@ -133,6 +160,10 @@ impl Metrics {
             query_duration_ms: self.query_duration_ms.snapshot(),
             mcp_tool_calls,
             mcp_tool_duration_ms: self.mcp_tool_duration_ms.snapshot(),
+            context_builds: self.context_builds.snapshot(),
+            context_duration_ms: self.context_duration_ms.snapshot(),
+            context_payload_bytes: self.context_payload_bytes.snapshot(),
+            context_payload_tokens: self.context_payload_tokens.snapshot(),
         }
     }
 }
@@ -171,6 +202,17 @@ pub fn record_query(mode: &str, duration_ms: u64) {
 /// Record an MCP tool call in the process-global registry.
 pub fn record_mcp_tool_call(tool: &str, duration_ms: u64, ok: bool) {
     metrics().record_mcp_tool_call(tool, duration_ms, ok);
+}
+
+/// Record one context build in the process-global registry.
+pub fn record_context_build(
+    intent: &str,
+    outcome: &str,
+    duration_ms: u64,
+    emitted_bytes: u64,
+    emitted_tokens: u64,
+) {
+    metrics().record_context_build(intent, outcome, duration_ms, emitted_bytes, emitted_tokens);
 }
 
 #[cfg(test)]

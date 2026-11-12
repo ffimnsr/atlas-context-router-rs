@@ -1,5 +1,7 @@
 use super::*;
-use atlas_core::model::{ContextSourceMix, PayloadTruncationMeta, TokenAccountingMeta};
+use atlas_core::model::{
+    ContextOutcome, ContextSourceMix, ContextTelemetry, PayloadTruncationMeta, TokenAccountingMeta,
+};
 use atlas_token_count::{TokenCount, TokenCountMethod, TokenCounter};
 use std::cmp::Ordering;
 
@@ -42,6 +44,8 @@ pub(super) fn apply_payload_budgets(
     let initial_files = result.files.len();
     let initial_sources = result.saved_context_sources.len();
     let initial_content_assets = result.content_assets.len();
+    let initial_overviews = result.overviews.len();
+    let requested_tokens = requested.tokens;
     let initial_node_drops = result.truncation.nodes_dropped;
     let initial_edge_drops = result.truncation.edges_dropped;
     let initial_file_drops = result.truncation.files_dropped;
@@ -168,6 +172,76 @@ pub(super) fn apply_payload_budgets(
             token_accounting: Some(build_token_accounting_meta(&emitted, fallback)),
         });
     }
+
+    // R7.1: always capture telemetry so the engine boundary can record metrics;
+    // `ContextEngine::build` drops it again unless the request opted in, keeping
+    // default output byte-identical.
+    let budget_hit = result.truncation.truncated;
+    let budget_name = context_budget_name(
+        result,
+        requested_tokens,
+        effective_token_limit,
+        requested_bytes,
+        effective_byte_limit,
+    );
+    result.telemetry = Some(ContextTelemetry {
+        intent: result.request.intent,
+        requested_nodes: initial_nodes,
+        emitted_nodes: result.nodes.len(),
+        requested_edges: initial_edges,
+        emitted_edges: result.edges.len(),
+        requested_files: initial_files,
+        emitted_files: result.files.len(),
+        requested_saved_sources: initial_sources,
+        emitted_saved_sources: result.saved_context_sources.len(),
+        requested_content_assets: initial_content_assets,
+        emitted_content_assets: result.content_assets.len(),
+        requested_overviews: initial_overviews,
+        emitted_overviews: result.overviews.len(),
+        requested_bytes,
+        emitted_bytes,
+        requested_tokens,
+        emitted_tokens: tokens_estimated,
+        budget_hit,
+        budget_name,
+        duration_ms: 0,
+        outcome: ContextOutcome::Ok,
+    });
+}
+
+fn context_budget_name(
+    result: &ContextResult,
+    requested_tokens: usize,
+    token_limit: usize,
+    requested_bytes: usize,
+    byte_limit: usize,
+) -> Option<String> {
+    if result
+        .truncation
+        .payload
+        .as_ref()
+        .and_then(|payload| payload.token_budget_applied)
+        .is_some()
+        || requested_tokens > token_limit
+    {
+        return Some("mcp_cli_payload_serialization.max_context_tokens_estimate".to_owned());
+    }
+    if requested_bytes > byte_limit {
+        return Some("mcp_cli_payload_serialization.max_context_payload_bytes".to_owned());
+    }
+    if result.truncation.nodes_dropped > 0 {
+        return Some("review_context_extraction.max_nodes".to_owned());
+    }
+    if result.truncation.edges_dropped > 0 {
+        return Some("review_context_extraction.max_edges".to_owned());
+    }
+    if result.truncation.files_dropped > 0 {
+        return Some("review_context_extraction.max_files".to_owned());
+    }
+    if result.truncation.content_assets_dropped > 0 {
+        return Some("content_saved_context_lookup.max_content_assets".to_owned());
+    }
+    None
 }
 
 /// Map a payload measurement plus load-time fallback info into JSON metadata.

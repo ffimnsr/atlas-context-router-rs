@@ -127,6 +127,8 @@ pub(crate) fn get_context_output_schema() -> Value {
             },
             "source_mix": { "type": "array", "items": { "$ref": "#/$defs/context_source_mix" } },
             "token_budget_applied": { "type": ["integer", "null"] },
+            "repo_provenance": { "$ref": "#/$defs/repo_provenance" },
+            "telemetry": { "$ref": "#/$defs/context_telemetry" },
             "budget_status": { "type": "string" },
             "linked_decisions": { "type": "array", "items": { "type": "object" } },
             "decision_lookup_query": { "type": "string" },
@@ -167,6 +169,8 @@ pub(crate) fn get_context_output_schema() -> Value {
             "context_source_mix": context_source_mix_schema(),
             "payload_truncation": payload_truncation_schema(),
             "token_accounting": token_accounting_schema(),
+            "repo_provenance": repo_provenance_schema(),
+            "context_telemetry": context_telemetry_schema(),
         })),
     )
 }

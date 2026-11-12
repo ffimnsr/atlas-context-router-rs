@@ -1221,6 +1221,8 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
             overview_max_bytes,
             exact_dir,
             exclude_subpaths,
+            telemetry,
+            include_ranking_evidence,
         ) = match &cli.command {
             Command::ReviewContext {
                 base,
@@ -1236,6 +1238,8 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
                 overview_max_bytes,
                 exact_dir,
                 exclude_subpaths,
+                telemetry,
+                include_ranking_evidence,
             } => (
                 base.clone(),
                 files.clone(),
@@ -1250,6 +1254,8 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
                 *overview_max_bytes,
                 exact_dir.clone(),
                 exclude_subpaths.clone(),
+                *telemetry,
+                *include_ranking_evidence,
             ),
             _ => unreachable!(),
         };
@@ -1353,6 +1359,8 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
                 })
                 .collect::<Result<Vec<_>>>()?,
             include_overviews,
+            include_telemetry: telemetry,
+            include_ranking_evidence,
             overview_limit,
             overview_max_bytes,
             overview_freshness: include_stale_overviews.then(|| {
@@ -1397,7 +1405,9 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
 
         if cli.json {
             let mut value = serde_json::to_value(&workflow_result)?;
-            if let Some(object) = value.as_object_mut() {
+            if let Some(object) = value.as_object_mut()
+                && include_ranking_evidence
+            {
                 object.insert(
                     "context_ranking_evidence_legend".to_owned(),
                     atlas_core::context_ranking_evidence_legend(),

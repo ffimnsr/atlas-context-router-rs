@@ -41,21 +41,11 @@
         "is_test": false,
         "file_hash": "<hash>",
         "extra_json": null,
-        "repo_provenance": {
-          "repo_id": "<repo_id>",
-          "repo_fingerprint": "<repo_fingerprint>",
-          "repo_root": "<repo_root>"
-        }
+        "repo_provenance": null
       },
       "selection_reason": "direct_target",
       "distance": 0,
-      "relevance_score": 121.0,
-      "context_ranking_evidence": {
-        "base_score": 121.0,
-        "final_score": 121.0,
-        "source_kind": "graph_node",
-        "direct_target": true
-      }
+      "relevance_score": 121.0
     },
     {
       "node": {
@@ -74,22 +64,11 @@
         "is_test": false,
         "file_hash": "<hash>",
         "extra_json": null,
-        "repo_provenance": {
-          "repo_id": "<repo_id>",
-          "repo_fingerprint": "<repo_fingerprint>",
-          "repo_root": "<repo_root>"
-        }
+        "repo_provenance": null
       },
       "selection_reason": "callee",
       "distance": 1,
-      "relevance_score": 96.0,
-      "context_ranking_evidence": {
-        "base_score": 96.0,
-        "final_score": 96.0,
-        "source_kind": "graph_node",
-        "callee_neighbor": true,
-        "graph_distance_penalty": 5.0
-      }
+      "relevance_score": 96.0
     },
     {
       "node": {
@@ -108,22 +87,11 @@
         "is_test": false,
         "file_hash": "<hash>",
         "extra_json": null,
-        "repo_provenance": {
-          "repo_id": "<repo_id>",
-          "repo_fingerprint": "<repo_fingerprint>",
-          "repo_root": "<repo_root>"
-        }
+        "repo_provenance": null
       },
       "selection_reason": "caller",
       "distance": 1,
-      "relevance_score": 88.0,
-      "context_ranking_evidence": {
-        "base_score": 88.0,
-        "final_score": 88.0,
-        "source_kind": "graph_node",
-        "caller_neighbor": true,
-        "graph_distance_penalty": 5.0
-      }
+      "relevance_score": 88.0
     }
   ],
   "edges": [
@@ -197,11 +165,7 @@
       "line_ranges": [],
       "language": "rust",
       "node_count_included": 2,
-      "repo_provenance": {
-        "repo_id": "<repo_id>",
-        "repo_fingerprint": "<repo_fingerprint>",
-        "repo_root": "<repo_root>"
-      }
+      "repo_provenance": null
     },
     {
       "path": "src/main.rs",
@@ -209,11 +173,7 @@
       "line_ranges": [],
       "language": "rust",
       "node_count_included": 1,
-      "repo_provenance": {
-        "repo_id": "<repo_id>",
-        "repo_fingerprint": "<repo_fingerprint>",
-        "repo_root": "<repo_root>"
-      }
+      "repo_provenance": null
     }
   ],
   "truncation": {
@@ -329,31 +289,13 @@
   "budget_observed": 3,
   "partial": false,
   "safe_to_answer": true,
-  "context_ranking_evidence_legend": {
-    "contract_scope": "Separate from retrieval ranking evidence: retrieval evidence explains why a result matched search, while context ranking evidence explains why a node, edge, or saved artifact was included and ranked inside a bounded context or review result.",
-    "base_score": "Initial context relevance score before impact or saved-context additive boosts.",
-    "final_score": "Final context relevance score after all recorded contributions.",
-    "source_kind": "Which retrieval surface produced this item: graph_node, graph_edge, file_asset, content_match, template, text_asset, or saved_context. Allows interpretation of other evidence fields across heterogeneous mixed results.",
-    "direct_target": "Item is the primary target resolved from the request.",
-    "changed_symbol": "Item is a changed symbol selected from changed-file or impact review seeds.",
-    "caller_neighbor": "Item was included as a caller of the target or neighbor.",
-    "callee_neighbor": "Item was included as a callee of the target or neighbor.",
-    "test_adjacent": "Item was included because of test adjacency.",
-    "exact_symbol_match": "Item matched an exact symbol name from the request target (set for graph nodes that are direct resolutions and for content assets whose text contains an exact symbol name).",
-    "bm25_score": "Raw BM25/FTS content-match score for content assets and saved-context sources retrieved via lexical search. Absent for graph nodes selected by graph traversal.",
-    "changed_file_boost": "Quantified additive boost applied because item is in or adjacent to a changed file.",
-    "same_package_dir_boost": "Additive boost applied for same-package or same-directory proximity relative to the request target.",
-    "trigram_correction": "Score contribution from trigram or fuzzy-match correction bringing a near-miss symbol or path hit into the result.",
-    "path_proximity_boost": "Additive boost from path-title proximity reranking when an asset path is similar to the target or changed-file paths.",
-    "graph_distance_penalty": "Score penalty from graph hop distance from the seed node (graph nodes only).",
-    "session_recency_boost": "Unified normalized signal for session recency/relevance across all surfaces. Mirrors recent_source_boost and same_session_boost for saved context; also set for content assets when session context is available.",
-    "impact_score_contribution": "Additive contribution from impact analysis weighting in review or impact context.",
-    "saved_context_rank_score": "Base saved-context ranking contribution derived from retrieval rank.",
-    "recent_source_boost": "Additive boost for recently created saved-context artifacts (kept for backward compatibility; see also session_recency_boost).",
-    "same_session_boost": "Additive boost for saved-context artifacts from the active session (kept for backward compatibility; see also session_recency_boost)."
-  },
   "agent_scope": {
     "agent_id": null,
     "merge_agent_partitions": false
+  },
+  "repo_provenance": {
+    "repo_id": "<repo_id>",
+    "repo_fingerprint": "<repo_fingerprint>",
+    "repo_root": "<repo_root>"
   }
 }

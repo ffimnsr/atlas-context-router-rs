@@ -96,16 +96,41 @@ fn review_context_changed_file_flow_stays_bounded_and_keeps_useful_neighbors() {
             }),
         "review-context workflow must surface useful changed-file call chain: {review_ctx:?}"
     );
-    assert!(review_ctx["context_ranking_evidence_legend"].is_object());
+    assert!(review_ctx.get("context_ranking_evidence_legend").is_none());
     assert!(
         review_ctx["nodes"]
+            .as_array()
+            .expect("review nodes array")
+            .iter()
+            .all(|node| node.get("context_ranking_evidence").is_none()),
+        "ranking evidence is opt-in"
+    );
+
+    let evidence_ctx = read_json_data_output(
+        "review_context",
+        run_atlas(
+            repo.path(),
+            &[
+                "--json",
+                "review-context",
+                "--base",
+                "HEAD",
+                "--max-nodes",
+                "4",
+                "--include-ranking-evidence",
+            ],
+        ),
+    );
+    assert!(evidence_ctx["context_ranking_evidence_legend"].is_object());
+    assert!(
+        evidence_ctx["nodes"]
             .as_array()
             .expect("review nodes array")
             .iter()
             .find(|node| node["selection_reason"] == json!("direct_target"))
             .and_then(|node| node["context_ranking_evidence"]["changed_symbol"].as_bool())
             == Some(true),
-        "review-context must expose changed-symbol evidence for direct targets: {review_ctx:?}"
+        "review-context must expose changed-symbol evidence for direct targets: {evidence_ctx:?}"
     );
 }
 

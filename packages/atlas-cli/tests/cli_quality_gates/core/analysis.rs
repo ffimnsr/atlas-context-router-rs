@@ -519,6 +519,78 @@ fn review_context_cli_and_get_context_share_review_seed_results() {
 }
 
 #[test]
+fn review_context_and_get_context_share_ranking_evidence_mode() {
+    use std::collections::BTreeMap;
+
+    let repo = setup_fixture_repo();
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let cli_review = read_json_data_output(
+        "review_context",
+        run_atlas(
+            repo.path(),
+            &[
+                "--json",
+                "review-context",
+                "--files",
+                "src/lib.rs",
+                "--include-ranking-evidence",
+            ],
+        ),
+    );
+    assert!(cli_review["context_ranking_evidence_legend"].is_object());
+
+    let output = run_serve_jsonrpc_session(
+        repo.path(),
+        &["serve"],
+        format!(
+            "{}{}",
+            initialized_session_prelude(1),
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"target\":{\"kind\":\"files\",\"files\":[\"src/lib.rs\"]},\"include_ranking_evidence\":true}}}\n"
+        ),
+    );
+    assert!(output.status.success(), "serve get_context failed");
+    let mcp_context = read_json_tool_result(&output, 2);
+    assert!(mcp_context["ranking_evidence_legend"].is_object());
+
+    let cli_evidence: BTreeMap<String, bool> = cli_review["nodes"]
+        .as_array()
+        .expect("cli nodes")
+        .iter()
+        .filter_map(|node| {
+            Some((
+                node["node"]["qualified_name"].as_str()?.to_owned(),
+                node["context_ranking_evidence"]["changed_symbol"]
+                    .as_bool()
+                    .unwrap_or(false),
+            ))
+        })
+        .collect();
+    let mcp_evidence: BTreeMap<String, bool> = mcp_context["nodes"]
+        .as_array()
+        .expect("mcp nodes")
+        .iter()
+        .filter_map(|node| {
+            Some((
+                node["qn"].as_str()?.to_owned(),
+                node["context_ranking_evidence"]["changed_symbol"]
+                    .as_bool()
+                    .unwrap_or(false),
+            ))
+        })
+        .collect();
+
+    assert!(!cli_evidence.is_empty());
+    assert_eq!(
+        cli_evidence, mcp_evidence,
+        "CLI and MCP ranking-evidence mode must agree"
+    );
+
+    cleanup_mcp_daemons(repo.path());
+}
+
+#[test]
 fn review_context_and_get_context_share_node_trimming_semantics() {
     let repo = setup_fixture_repo();
 

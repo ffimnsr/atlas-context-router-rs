@@ -295,6 +295,72 @@ pub(crate) fn get_impact_radius_output_schema() -> Value {
     )
 }
 
+pub(crate) fn repo_provenance_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "repo_id": { "type": "string" },
+            "repo_fingerprint": { "type": ["string", "null"] },
+            "repo_root": { "type": ["string", "null"] },
+            "remote_url": { "type": ["string", "null"] }
+        },
+        "required": ["repo_id"]
+    })
+}
+
+pub(crate) fn context_telemetry_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "intent": { "type": "string" },
+            "requested_nodes": { "type": "integer" },
+            "emitted_nodes": { "type": "integer" },
+            "requested_edges": { "type": "integer" },
+            "emitted_edges": { "type": "integer" },
+            "requested_files": { "type": "integer" },
+            "emitted_files": { "type": "integer" },
+            "requested_saved_sources": { "type": "integer" },
+            "emitted_saved_sources": { "type": "integer" },
+            "requested_content_assets": { "type": "integer" },
+            "emitted_content_assets": { "type": "integer" },
+            "requested_overviews": { "type": "integer" },
+            "emitted_overviews": { "type": "integer" },
+            "requested_bytes": { "type": "integer" },
+            "emitted_bytes": { "type": "integer" },
+            "requested_tokens": { "type": "integer" },
+            "emitted_tokens": { "type": "integer" },
+            "budget_hit": { "type": "boolean" },
+            "budget_name": { "type": ["string", "null"] },
+            "duration_ms": { "type": "integer" },
+            "outcome": { "type": "string", "enum": ["ok", "empty", "ambiguous", "budget_exhausted", "error"] }
+        },
+        "required": [
+            "intent",
+            "requested_nodes",
+            "emitted_nodes",
+            "requested_edges",
+            "emitted_edges",
+            "requested_files",
+            "emitted_files",
+            "requested_saved_sources",
+            "emitted_saved_sources",
+            "requested_content_assets",
+            "emitted_content_assets",
+            "requested_overviews",
+            "emitted_overviews",
+            "requested_bytes",
+            "emitted_bytes",
+            "requested_tokens",
+            "emitted_tokens",
+            "budget_hit",
+            "duration_ms",
+            "outcome"
+        ]
+    })
+}
+
 pub(crate) fn get_review_context_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({
@@ -348,6 +414,8 @@ pub(crate) fn get_review_context_output_schema() -> Value {
             },
             "source_mix": { "type": "array", "items": { "$ref": "#/$defs/context_source_mix" } },
             "token_budget_applied": { "type": ["integer", "null"] },
+            "repo_provenance": { "$ref": "#/$defs/repo_provenance" },
+            "telemetry": { "$ref": "#/$defs/context_telemetry" },
             "budget_status": { "type": "string" },
             "linked_decisions": { "type": "array", "items": { "type": "object" } },
             "decision_lookup_query": { "type": "string" },
@@ -381,6 +449,8 @@ pub(crate) fn get_review_context_output_schema() -> Value {
             "token_accounting": token_accounting_schema(),
             "review_risk_summary": review_risk_summary_schema(),
             "boundary_summary": boundary_summary_schema(),
+            "repo_provenance": repo_provenance_schema(),
+            "context_telemetry": context_telemetry_schema(),
         })),
     )
 }

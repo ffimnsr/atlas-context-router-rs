@@ -33,6 +33,8 @@ pub(crate) fn tool_get_context(
     let overview_max_bytes = u64_arg(args, "overview_max_bytes").map(|n| n as usize);
     let overview_freshness = string_list_arg(args, "overview_freshness");
     let overview_subject_kinds = string_list_arg(args, "overview_subject_kinds");
+    let include_telemetry = bool_arg(args, "include_telemetry").unwrap_or(false);
+    let include_ranking_evidence = bool_arg(args, "include_ranking_evidence").unwrap_or(false);
     let exact_dir = str_arg(args, "exact_dir")?
         .map(|raw| {
             atlas_repo::CanonicalRepoPath::from_repo_relative(raw)
@@ -124,6 +126,8 @@ pub(crate) fn tool_get_context(
     request.overview_subject_kinds = overview_subject_kinds;
     request.exact_dir = exact_dir;
     request.exclude_subpaths = exclude_subpaths;
+    request.include_telemetry = include_telemetry;
+    request.include_ranking_evidence = include_ranking_evidence;
 
     let store = open_store(db_path)?;
     let policy = load_budget_policy(repo_root)?;
@@ -190,7 +194,7 @@ pub(crate) fn tool_get_context(
         engine.build(&request).context("context engine failed")?
     };
 
-    let include_context_ranking_evidence = output_format == crate::output::OutputFormat::Json;
+    let include_context_ranking_evidence = request.include_ranking_evidence;
     let packaged = package_context_result(&result, include_context_ranking_evidence);
     let mut packaged_value = serde_json::to_value(&packaged)?;
     let linked_decisions = atlas_review::decision_lookup_query(&request)
@@ -405,6 +409,8 @@ pub(crate) fn tool_get_context(
             "allow_cross_repo_edges": result.request.allow_cross_repo_edges,
             "agent_id": result.request.agent_id,
             "merge_agent_partitions": result.request.merge_agent_partitions,
+            "include_telemetry": result.request.include_telemetry,
+            "include_ranking_evidence": result.request.include_ranking_evidence,
             "omitted_sections": omitted,
         }),
     );

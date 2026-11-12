@@ -50,7 +50,7 @@ pub(super) fn tools() -> Vec<Value> {
         }),
         json!({
                 "name": "wake_up",
-                "description": "Bounded session-start recall for hookless agents. Assembles a compact context pack from the resume snapshot, decision memory, saved-context hints, global memory, changed files, and graph readiness, then records the session-start event through the shared event service shared with native hooks. Large saved artifacts are referenced by source_id only, never inlined.",
+                "description": "Bounded session-start recall for hookless agents. Assembles a compact context pack from the resume snapshot, decision memory, saved-context hints, global memory, changed files, bounded classified runtime failures, and graph readiness, then records the session-start event through the shared event service shared with native hooks. Large saved artifacts are referenced by source_id only, never inlined.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {

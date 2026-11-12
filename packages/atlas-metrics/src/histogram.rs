@@ -16,6 +16,18 @@ pub const FILE_COUNT_BUCKETS: &[u64] = &[
     1, 2, 5, 10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000, 25_000, 50_000, 100_000,
 ];
 
+/// Upper bounds (inclusive) for serialized context payload byte counts.
+pub const PAYLOAD_BYTES_BUCKETS: &[u64] = &[
+    1_024, 2_048, 4_096, 8_192, 16_384, 32_768, 65_536, 131_072, 262_144, 524_288, 1_048_576,
+    2_097_152, 4_194_304, 8_388_608, 16_777_216,
+];
+
+/// Upper bounds (inclusive) for estimated context payload token counts.
+pub const PAYLOAD_TOKEN_BUCKETS: &[u64] = &[
+    256, 512, 1_024, 2_048, 4_096, 8_192, 16_384, 32_768, 65_536, 131_072, 262_144, 524_288,
+    1_048_576, 2_097_152, 4_194_304,
+];
+
 /// Monotonic counter backed by a single atomic.
 #[derive(Debug, Default)]
 pub struct Counter {

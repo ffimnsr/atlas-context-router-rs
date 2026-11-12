@@ -9,12 +9,12 @@ mod search;
 mod sufficiency;
 
 pub use self::context::{
-    AmbiguityMeta, ContentAsset, ContentAssetReason, ContextIntent, ContextOverview,
-    ContextRankingEvidence, ContextRequest, ContextResult, ContextScoreEvidence, ContextSourceMix,
-    ContextTarget, ExperienceShortcutEvidence, MixedResultKind, NoiseReductionSummary,
-    PayloadTruncationMeta, SavedContextSource, SeedBudgetMeta, SelectedEdge, SelectedFile,
-    SelectedNode, SelectionReason, TokenAccountingMeta, TraversalBudgetMeta, TruncationMeta,
-    WorkflowCallChain, WorkflowComponent, WorkflowFocusNode, WorkflowSummary,
+    AmbiguityMeta, ContentAsset, ContentAssetReason, ContextIntent, ContextOutcome,
+    ContextOverview, ContextRankingEvidence, ContextRequest, ContextResult, ContextScoreEvidence,
+    ContextSourceMix, ContextTarget, ContextTelemetry, ExperienceShortcutEvidence, MixedResultKind,
+    NoiseReductionSummary, PayloadTruncationMeta, SavedContextSource, SeedBudgetMeta, SelectedEdge,
+    SelectedFile, SelectedNode, SelectionReason, TokenAccountingMeta, TraversalBudgetMeta,
+    TruncationMeta, WorkflowCallChain, WorkflowComponent, WorkflowFocusNode, WorkflowSummary,
     context_ranking_evidence_legend,
 };
 pub use self::graph::{

@@ -375,6 +375,7 @@ fn normalize_context_result(value: &mut serde_json::Value) {
     if let Some(request) = value["request"].as_object_mut() {
         request.remove("allow_cross_repo_edges");
     }
+    normalize_repo_provenance_value(&mut value["repo_provenance"]);
     if let Some(nodes) = value["nodes"].as_array_mut() {
         for n in nodes.iter_mut() {
             n["node"]["id"] = json!(0);

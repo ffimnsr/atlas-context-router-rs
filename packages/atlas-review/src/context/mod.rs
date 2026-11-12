@@ -34,6 +34,7 @@ mod rank;
 mod resolve;
 mod saved;
 mod scope;
+mod slim;
 mod spans;
 mod sufficiency;
 mod symbol;
@@ -53,6 +54,7 @@ use self::payload::apply_payload_budgets;
 use self::rank::{rank_context, trim_context};
 use self::saved::retrieve_saved_context;
 use self::scope::{ContextScope, apply_context_scope};
+use self::slim::slim_context_metadata;
 use self::spans::apply_code_spans;
 use self::sufficiency::{
     budget_exhausted, escalation_reason, evaluate as evaluate_sufficiency, merge_round_two,
@@ -215,6 +217,52 @@ impl<'a> ContextEngine<'a> {
     /// attached, also populates `content_assets` under the unified graph/content
     /// selection ordering policy (Patch N2).
     pub fn build(&self, request: &ContextRequest) -> Result<ContextResult> {
+        let started = std::time::Instant::now();
+        let intent = context_intent_str(request.intent);
+        match self.build_inner(request) {
+            Ok(mut result) => {
+                let duration_ms = started.elapsed().as_millis() as u64;
+                let outcome = classify_context_outcome(&result);
+                if let Some(telemetry) = result.telemetry.as_mut() {
+                    telemetry.duration_ms = duration_ms;
+                    telemetry.outcome = outcome;
+                }
+                let emitted_bytes = result
+                    .telemetry
+                    .as_ref()
+                    .map(|telemetry| telemetry.emitted_bytes as u64)
+                    .unwrap_or(0);
+                let emitted_tokens = result
+                    .telemetry
+                    .as_ref()
+                    .map(|telemetry| telemetry.emitted_tokens as u64)
+                    .unwrap_or(0);
+                atlas_metrics::record_context_build(
+                    intent,
+                    outcome.as_str(),
+                    duration_ms,
+                    emitted_bytes,
+                    emitted_tokens,
+                );
+                if !result.request.include_telemetry {
+                    result.telemetry = None;
+                }
+                Ok(result)
+            }
+            Err(error) => {
+                atlas_metrics::record_context_build(
+                    intent,
+                    "error",
+                    started.elapsed().as_millis() as u64,
+                    0,
+                    0,
+                );
+                Err(error)
+            }
+        }
+    }
+
+    fn build_inner(&self, request: &ContextRequest) -> Result<ContextResult> {
         let mut budgets = BudgetManager::new();
         let mut effective_request = request.clone();
         effective_request.max_nodes = Some(budgets.resolve_limit(
@@ -355,6 +403,7 @@ impl<'a> ContextEngine<'a> {
             }
         }
         result.sufficiency = Some(report);
+        slim_context_metadata(&mut result, effective_request.include_ranking_evidence);
         apply_payload_budgets(
             &mut result,
             &self.budget_policy,
@@ -394,6 +443,51 @@ impl<'a> ContextEngine<'a> {
         );
         Ok(result)
     }
+}
+
+fn context_intent_str(intent: atlas_core::model::ContextIntent) -> &'static str {
+    match intent {
+        atlas_core::model::ContextIntent::Symbol => "symbol",
+        atlas_core::model::ContextIntent::File => "file",
+        atlas_core::model::ContextIntent::Review => "review",
+        atlas_core::model::ContextIntent::Impact => "impact",
+        atlas_core::model::ContextIntent::ImpactAnalysis => "impact_analysis",
+        atlas_core::model::ContextIntent::UsageLookup => "usage_lookup",
+        atlas_core::model::ContextIntent::RefactorSafety => "refactor_safety",
+        atlas_core::model::ContextIntent::DeadCodeCheck => "dead_code_check",
+        atlas_core::model::ContextIntent::RenamePreview => "rename_preview",
+        atlas_core::model::ContextIntent::DependencyRemoval => "dependency_removal",
+    }
+}
+
+fn classify_context_outcome(result: &ContextResult) -> atlas_core::model::ContextOutcome {
+    if result.ambiguity.is_some() {
+        return atlas_core::model::ContextOutcome::Ambiguous;
+    }
+    let telemetry = result.telemetry.as_ref();
+    let emitted_items = telemetry.map_or(
+        result.nodes.len()
+            + result.edges.len()
+            + result.files.len()
+            + result.content_assets.len()
+            + result.saved_context_sources.len()
+            + result.overviews.len(),
+        |telemetry| {
+            telemetry.emitted_nodes
+                + telemetry.emitted_edges
+                + telemetry.emitted_files
+                + telemetry.emitted_content_assets
+                + telemetry.emitted_saved_sources
+                + telemetry.emitted_overviews
+        },
+    );
+    if emitted_items == 0 {
+        return atlas_core::model::ContextOutcome::Empty;
+    }
+    if telemetry.is_some_and(|telemetry| telemetry.budget_hit) {
+        return atlas_core::model::ContextOutcome::BudgetExhausted;
+    }
+    atlas_core::model::ContextOutcome::Ok
 }
 
 fn record_seed_budget_reports(budgets: &mut BudgetManager, result: &ContextResult) {

@@ -82,6 +82,14 @@ pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
                     "properties/exclude_subpaths",
                     "Canonical subpath prefixes excluded from context selection (repeatable).",
                 ),
+                (
+                    "properties/include_telemetry",
+                    "Include requested/emitted count, byte, token, budget, duration, and outcome telemetry (default false).",
+                ),
+                (
+                    "properties/include_ranking_evidence",
+                    "Keep per-item context_ranking_evidence in output (default false).",
+                ),
                 ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
             ]),
         ),
@@ -293,6 +301,14 @@ pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
             (
                 "properties/exclude_subpaths",
                 "Canonical subpath prefixes excluded from context selection (repeatable).",
+            ),
+            (
+                "properties/include_telemetry",
+                "Include requested/emitted count, byte, token, budget, duration, and outcome telemetry (default false).",
+            ),
+            (
+                "properties/include_ranking_evidence",
+                "Keep per-item context_ranking_evidence in output (default false).",
             ),
             ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
         ])),

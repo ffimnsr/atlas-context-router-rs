@@ -81,7 +81,11 @@ pub(crate) fn get_metrics_output_schema() -> Value {
             "query_calls": { "type": "object", "additionalProperties": { "type": "integer" } },
             "query_duration_ms": { "type": "object", "additionalProperties": { "type": "object" } },
             "mcp_tool_calls": { "type": "object", "additionalProperties": { "type": "object" } },
-            "mcp_tool_duration_ms": { "type": "object", "additionalProperties": { "type": "object" } }
+            "mcp_tool_duration_ms": { "type": "object", "additionalProperties": { "type": "object" } },
+            "context_builds": { "type": "object", "additionalProperties": { "type": "integer" } },
+            "context_duration_ms": { "type": "object", "additionalProperties": { "type": "object" } },
+            "context_payload_bytes": { "type": "object", "additionalProperties": { "type": "object" } },
+            "context_payload_tokens": { "type": "object", "additionalProperties": { "type": "object" } }
         }),
         &[
             "build_runs",
@@ -95,6 +99,10 @@ pub(crate) fn get_metrics_output_schema() -> Value {
             "query_duration_ms",
             "mcp_tool_calls",
             "mcp_tool_duration_ms",
+            "context_builds",
+            "context_duration_ms",
+            "context_payload_bytes",
+            "context_payload_tokens",
         ],
         None,
     )

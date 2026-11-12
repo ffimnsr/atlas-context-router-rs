@@ -176,6 +176,9 @@ fn mcp_get_context_output_matches_golden() {
             if let Some(detail_controls) = value["detail_controls"].as_object_mut() {
                 detail_controls.remove("allow_cross_repo_edges");
             }
+            if !value["repo_provenance"].is_null() {
+                normalize_repo_provenance_value(&mut value["repo_provenance"]);
+            }
             if let Some(nodes) = value["nodes"].as_array_mut() {
                 for node in nodes.iter_mut() {
                     if node["repo_provenance"].is_null() {

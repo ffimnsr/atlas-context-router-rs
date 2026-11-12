@@ -122,6 +122,7 @@ pub struct WakePack {
     pub recent_feedback: Vec<WakeFeedback>,
     pub active_memoir_concepts: Vec<String>,
     pub changed_files: Vec<String>,
+    pub recent_runtime_failures: Vec<Value>,
     pub graph_readiness: Value,
     pub retrieval_hints: Vec<Value>,
     pub generated_at: String,
@@ -263,6 +264,53 @@ fn merge_decisions(
 /// Collect distinct concept strings (symbols, rules, workflows) for
 /// `active_memoir_concepts`. There is no dedicated memoir store yet; this is
 /// the closest bounded proxy until the ICM-E memoir surface ships.
+fn collect_runtime_failures(snapshot_view: Option<&Value>, limit: usize) -> Vec<Value> {
+    let Some(entries) = snapshot_view
+        .and_then(|view| view.get("unresolved_errors"))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+
+    let mut failures: Vec<Value> = entries
+        .iter()
+        .filter(|entry| {
+            entry
+                .get("classification")
+                .and_then(|classification| classification.get("severity"))
+                .and_then(Value::as_str)
+                == Some("error")
+        })
+        .map(|entry| {
+            json!({
+                "command": entry.get("command").cloned().unwrap_or(Value::Null),
+                "error": entry.get("error").cloned().unwrap_or(Value::Null),
+                "classification": entry.get("classification").cloned().unwrap_or(Value::Null),
+                "at": entry.get("at").cloned().unwrap_or(Value::Null),
+            })
+        })
+        .collect();
+
+    failures.sort_by(|left, right| {
+        let left_at = left.get("at").and_then(Value::as_str).unwrap_or("");
+        let right_at = right.get("at").and_then(Value::as_str).unwrap_or("");
+        left_at.cmp(right_at).then_with(|| {
+            let left_rule = left
+                .pointer("/classification/rule_id")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let right_rule = right
+                .pointer("/classification/rule_id")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            left_rule.cmp(right_rule)
+        })
+    });
+    failures.dedup();
+    failures.truncate(limit);
+    failures
+}
+
 fn collect_concepts(
     snapshot_view: Option<&Value>,
     store: Option<&SessionStore>,
@@ -713,6 +761,8 @@ pub fn build_wake_pack(opts: &WakePackOptions<'_>) -> WakePackBuild {
         opts.repo_root,
         opts.budget.max_items,
     );
+    let recent_runtime_failures =
+        collect_runtime_failures(snapshot_view.as_ref(), opts.budget.max_items);
     let changed_files: Vec<String> = snapshot_view
         .as_ref()
         .and_then(|view| view.get("changed_files"))
@@ -756,6 +806,7 @@ pub fn build_wake_pack(opts: &WakePackOptions<'_>) -> WakePackBuild {
             recent_feedback,
             active_memoir_concepts,
             changed_files,
+            recent_runtime_failures,
             graph_readiness: graph_readiness_value(&readiness, opts.budget.max_pending_changes),
             retrieval_hints,
             generated_at: format_now_rfc3339(),
@@ -777,7 +828,8 @@ mod tests {
     };
     use atlas_contentstore::{ContentStore, SourceMeta};
     use atlas_session::{
-        MemoryImportance, MemoryScope, NewFeedback, NewMemory, SessionId, SessionStore,
+        MemoryImportance, MemoryScope, NewFeedback, NewMemory, NewSessionEvent, SessionEventType,
+        SessionId, SessionStore,
     };
     use serde_json::{Value, json};
     use tempfile::TempDir;
@@ -873,6 +925,7 @@ mod tests {
         assert!(pack.recent_feedback.is_empty());
         assert!(pack.active_memoir_concepts.is_empty());
         assert!(pack.changed_files.is_empty());
+        assert!(pack.recent_runtime_failures.is_empty());
         assert!(pack.retrieval_hints.is_empty());
         assert_eq!(pack.graph_readiness["graph_built"], false);
         assert_eq!(pack.graph_readiness["execution_state"], "missing");
@@ -883,6 +936,57 @@ mod tests {
                 .any(|w| w.contains("graph has not been built"))
         );
         assert!(pack.generated_at.contains('T'));
+    }
+
+    #[test]
+    fn pack_surfaces_bounded_classified_runtime_failures() {
+        let dir = TempDir::new().unwrap();
+        let repo = dir.path().to_string_lossy().into_owned();
+        let db_path = setup_db_path(&dir);
+        let session_id = SessionId::derive(&repo, "", "cli");
+        let mut store = open_session(&db_path);
+        store
+            .upsert_session_meta(session_id.clone(), &repo, "cli", None)
+            .unwrap();
+
+        for (at, severity, kind) in [
+            ("2026-01-01T00:00:03Z", "error", "test_failure"),
+            ("2026-01-01T00:00:02Z", "warning", "dead_code_warning"),
+            ("2026-01-01T00:00:01Z", "error", "compiler_error"),
+        ] {
+            store
+                .append_event(NewSessionEvent {
+                    session_id: session_id.clone(),
+                    event_type: SessionEventType::CommandFail,
+                    priority: 2,
+                    payload: json!({
+                        "command": "cargo check",
+                        "hook_metadata": {
+                            "classification": {
+                                "kind": kind,
+                                "severity": severity,
+                                "rule_id": format!("rule_{kind}"),
+                                "matched_fields": ["stderr"]
+                            }
+                        }
+                    }),
+                    created_at: Some(at.to_owned()),
+                })
+                .unwrap();
+        }
+
+        let budget = WakeBudget::default().with_max_items(1);
+        let build = build_wake_pack(&options(&repo, &db_path, "cli", budget));
+        let failures = &build.pack.recent_runtime_failures;
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0]["at"], "2026-01-01T00:00:01Z");
+        assert_eq!(failures[0]["classification"]["severity"], "error");
+
+        let full = build_wake_pack(&options(&repo, &db_path, "cli", WakeBudget::default()));
+        let failures = &full.pack.recent_runtime_failures;
+        assert_eq!(failures.len(), 2);
+        assert_eq!(failures[0]["classification"]["kind"], "compiler_error");
+        assert_eq!(failures[1]["classification"]["kind"], "test_failure");
     }
 
     #[test]

@@ -103,31 +103,31 @@ The earlier post-retrieval compaction experiment is dropped. Atlas context paylo
 
 ##### R7.1 — Baseline context telemetry
 
-- [ ] add `ContextTelemetry` in `packages/atlas-core/src/model/context.rs` and `ContextResult::telemetry: Option<ContextTelemetry>` with `intent`, `requested_nodes`, `emitted_nodes`, `requested_edges`, `emitted_edges`, `requested_files`, `emitted_files`, `requested_saved_sources`, `emitted_saved_sources`, `requested_content_assets`, `emitted_content_assets`, `requested_overviews`, `emitted_overviews`, `requested_bytes`, `emitted_bytes`, `requested_tokens`, `emitted_tokens`, `budget_hit`, `budget_name`, `duration_ms`, and `outcome`
-- [ ] add `ContextRequest::include_telemetry` (default `false`) and populate it from the pre-trim and post-trim snapshots already captured in `apply_payload_budgets`
-- [ ] classify `outcome` as `ok`, `empty`, `ambiguous`, `budget_exhausted`, or `error` at the `ContextEngine::build` boundary in `packages/atlas-review/src/context/mod.rs`
-- [ ] keep `ContextResult::telemetry` optional and skipped when absent so default output stays byte-identical
-- [ ] add `--telemetry` to `atlas context` and `atlas review-context`, and `include_telemetry` to MCP `get_context` and `get_review_context`
-- [ ] add `atlas-metrics.workspace = true` to `packages/atlas-review/Cargo.toml`
-- [ ] add `atlas-metrics` families `context_builds` (labeled by intent and outcome), `context_duration_ms`, `context_payload_bytes`, and `context_payload_tokens` (labeled by intent)
-- [ ] extend `packages/atlas-review/benches/context_bench.rs` to emit telemetry JSON for a fixed corpus covering symbol, file, review, change-set, oversized-context, and provenance-sensitive requests
-- [ ] add tests for requested/emitted count parity, outcome classification, metric recording, default-output byte equality, and telemetry JSON shape
-- [ ] document telemetry fields, metric names, and the fixed corpus in `wiki/context-telemetry.md`
+- [x] add `ContextTelemetry` in `packages/atlas-core/src/model/context.rs` and `ContextResult::telemetry: Option<ContextTelemetry>` with `intent`, `requested_nodes`, `emitted_nodes`, `requested_edges`, `emitted_edges`, `requested_files`, `emitted_files`, `requested_saved_sources`, `emitted_saved_sources`, `requested_content_assets`, `emitted_content_assets`, `requested_overviews`, `emitted_overviews`, `requested_bytes`, `emitted_bytes`, `requested_tokens`, `emitted_tokens`, `budget_hit`, `budget_name`, `duration_ms`, and `outcome`
+- [x] add `ContextRequest::include_telemetry` (default `false`) and populate it from the pre-trim and post-trim snapshots already captured in `apply_payload_budgets`
+- [x] classify `outcome` as `ok`, `empty`, `ambiguous`, `budget_exhausted`, or `error` at the `ContextEngine::build` boundary in `packages/atlas-review/src/context/mod.rs`
+- [x] keep `ContextResult::telemetry` optional and skipped when absent so default output stays byte-identical
+- [x] add `--telemetry` to `atlas context` and `atlas review-context`, and `include_telemetry` to MCP `get_context` and `get_review_context`
+- [x] add `atlas-metrics.workspace = true` to `packages/atlas-review/Cargo.toml`
+- [x] add `atlas-metrics` families `context_builds` (labeled by intent and outcome), `context_duration_ms`, `context_payload_bytes`, and `context_payload_tokens` (labeled by intent)
+- [x] extend `packages/atlas-review/benches/context_bench.rs` to emit telemetry JSON for a fixed corpus covering symbol, file, review, change-set, oversized-context, and provenance-sensitive requests
+- [x] add tests for requested/emitted count parity, outcome classification, metric recording, default-output byte equality, and telemetry JSON shape
+- [x] document telemetry fields, metric names, and the fixed corpus in `wiki/context-telemetry.md`
 
 ##### R7.2 — Payload metadata slimming
 
-- [ ] add `ContextResult::repo_provenance: Option<RepoProvenance>` and hoist provenance from emitted `SelectedNode`, `SelectedFile`, and `SavedContextSource` items when every item shares the same provenance
-- [ ] keep per-item `repo_provenance` when the result spans multiple repos or when provenance differs across items
-- [ ] add `ContextRequest::include_ranking_evidence` (default `false`) and omit `context_ranking_evidence` from nodes, content assets, and saved-context sources when disabled
-- [ ] keep `selection_reason` and `relevance_score` on every emitted item, node identity fields on graph items (`qualified_name`, `file_path`, `line_start`, `line_end`), and `source_id` on content and saved-context items
-- [ ] add `--include-ranking-evidence` to `atlas context` and `atlas review-context`, and `include_ranking_evidence` to MCP `get_context` and `get_review_context`
-- [ ] update MCP output schemas, `MCP_TOOLS.md`, CLI JSON docs, and goldens for the new default shape
-- [ ] compare emitted bytes and tokens against the current schema on the fixed corpus, with acceptance threshold `>= 15%` token reduction at unchanged recall and unchanged required-evidence retention
-- [ ] add tests for uniform-provenance hoisting, multi-repo provenance preservation, opt-in ranking evidence, and CLI/MCP parity in both metadata modes
+- [x] add `ContextResult::repo_provenance: Option<RepoProvenance>` and hoist provenance from emitted `SelectedNode`, `SelectedFile`, and `SavedContextSource` items when every item shares the same provenance
+- [x] keep per-item `repo_provenance` when the result spans multiple repos or when provenance differs across items
+- [x] add `ContextRequest::include_ranking_evidence` (default `false`) and omit `context_ranking_evidence` from nodes, content assets, and saved-context sources when disabled
+- [x] keep `selection_reason` and `relevance_score` on every emitted item, node identity fields on graph items (`qualified_name`, `file_path`, `line_start`, `line_end`), and `source_id` on content and saved-context items
+- [x] add `--include-ranking-evidence` to `atlas context` and `atlas review-context`, and `include_ranking_evidence` to MCP `get_context` and `get_review_context`
+- [x] update MCP output schemas, `MCP_TOOLS.md`, CLI JSON docs, and goldens for the new default shape
+- [x] compare emitted bytes and tokens against the current schema on the fixed corpus, with acceptance threshold `>= 15%` token reduction at unchanged recall and unchanged required-evidence retention
+- [x] add tests for uniform-provenance hoisting, multi-repo provenance preservation, opt-in ranking evidence, and CLI/MCP parity in both metadata modes
 
 ##### Rejected experiment
 
-- [ ] do not add `PostRetrievalCompactionMode`, provider-backed compaction, or shadow compaction unless telemetry shows a measured text-bearing share of at least 10% of emitted bytes and metadata slimming has already been applied
+- [x] do not add `PostRetrievalCompactionMode`, provider-backed compaction, or shadow compaction unless telemetry shows a measured text-bearing share of at least 10% of emitted bytes and metadata slimming has already been applied
 
 Why:
 - measured payloads are dominated by repeated structural metadata, so hoisting and opt-in evidence removal are the real token lever
@@ -138,11 +138,11 @@ Why:
 
 This patch is complete when:
 
-- [ ] context telemetry is recorded for every build and exposed without changing default output
-- [ ] the fixed corpus covers symbol, file, review, change-set, oversized-context, and provenance-sensitive requests
-- [ ] hoisted provenance and opt-in ranking evidence reduce emitted tokens by at least 15% on the corpus
-- [ ] default and multi-repo payloads keep all required evidence fields and pass updated MCP/CLI parity tests
-- [ ] no text compactor or external provider is added to the context path
+- [x] context telemetry is recorded for every build and exposed without changing default output
+- [x] the fixed corpus covers symbol, file, review, change-set, oversized-context, and provenance-sensitive requests
+- [x] hoisted provenance and opt-in ranking evidence reduce emitted tokens by at least 15% on the corpus
+- [x] default and multi-repo payloads keep all required evidence fields and pass updated MCP/CLI parity tests
+- [x] no text compactor or external provider is added to the context path
 
 ---
 
@@ -171,68 +171,68 @@ Implementation structure:
 
 #### Patch X1 — Deterministic runtime classification
 
-- [ ] add `packages/atlas-agent-events/src/classification.rs`
-- [ ] define `RuntimeClassification { kind, severity, rule_id, matched_fields }` with serde `snake_case`
-- [ ] define `RuntimeClassificationKind` with exact values `panic`, `exception`, `stacktrace`, `compiler_error`, `test_failure`, `test_success`, `build_success`, `deprecation_warning`, `dead_code_warning`, `permission_denied`, `command_timeout`, `graph_not_ready`, and `retrieval_failure`
-- [ ] define `RuntimeClassificationSeverity` with exact values `error`, `warning`, and `info`
-- [ ] add `classify_runtime_payload(payload: &Value) -> Option<RuntimeClassification>`
-- [ ] scan bounded text from `stderr`, `stdout`, `output`, `error`, `message`, `result`, and `extra` fields up to `MAX_CLASSIFIER_INPUT_BYTES` (16 KiB)
-- [ ] reuse `extract_hook_status`, `extract_hook_command`, and `extract_tool_name` from `packages/atlas-agent-events/src/payload.rs`
-- [ ] classify `permission_denied` and `command_timeout` from status and error text before output-pattern rules
-- [ ] classify `panic`, `exception`, and `stacktrace` from stable markers (`panicked at`, `RUST_BACKTRACE`, `Traceback (most recent call last)`, `Exception in thread`, and stack-frame markers)
-- [ ] classify `compiler_error` from `error[E`, `error:`, `failed to compile`, and `--> file:line:col` markers
-- [ ] classify `test_failure` from `test result: FAILED`, `FAILED tests/`, `failures:`, and `error: test failed`
-- [ ] classify `test_success` from `test result: ok`, `passed`, and exit status `ok` on a test command
-- [ ] classify `build_success` from `Finished`, `Build succeeded`, and exit status `ok` on a build command
-- [ ] classify `deprecation_warning` and `dead_code_warning` from warning text and `unused` or `deprecated` markers
-- [ ] classify `graph_not_ready` from `graph_stale`, `graph is stale`, `graph_unavailable`, and readiness error codes
-- [ ] classify `retrieval_failure` from `retrieval_index_unavailable`, `content_store_unavailable`, and retrieval error codes
-- [ ] return `None` when no rule matches; never emit an `other` fallback
-- [ ] record only rule ids and matched field names in `matched_fields`; never record raw text
-- [ ] add `MAX_CLASSIFIER_INPUT_BYTES` and `MAX_CLASSIFIER_MATCHED_FIELDS` to `packages/atlas-agent-events/src/policy.rs`
-- [ ] add unit tests per kind, rule precedence, bounded input, no-match behavior, and absence of raw text in output
+- [x] add `packages/atlas-agent-events/src/classification.rs`
+- [x] define `RuntimeClassification { kind, severity, rule_id, matched_fields }` with serde `snake_case`
+- [x] define `RuntimeClassificationKind` with exact values `panic`, `exception`, `stacktrace`, `compiler_error`, `test_failure`, `test_success`, `build_success`, `deprecation_warning`, `dead_code_warning`, `permission_denied`, `command_timeout`, `graph_not_ready`, and `retrieval_failure`
+- [x] define `RuntimeClassificationSeverity` with exact values `error`, `warning`, and `info`
+- [x] add `classify_runtime_payload(payload: &Value) -> Option<RuntimeClassification>`
+- [x] scan bounded text from `stderr`, `stdout`, `output`, `error`, `message`, `result`, and `extra` fields up to `MAX_CLASSIFIER_INPUT_BYTES` (16 KiB)
+- [x] reuse `extract_hook_status`, `extract_hook_command`, and `extract_tool_name` from `packages/atlas-agent-events/src/payload.rs`
+- [x] classify `permission_denied` and `command_timeout` from status and error text before output-pattern rules
+- [x] classify `panic`, `exception`, and `stacktrace` from stable markers (`panicked at`, `RUST_BACKTRACE`, `Traceback (most recent call last)`, `Exception in thread`, and stack-frame markers)
+- [x] classify `compiler_error` from `error[E`, `error:`, `failed to compile`, and `--> file:line:col` markers
+- [x] classify `test_failure` from `test result: FAILED`, `FAILED tests/`, `failures:`, and `error: test failed`
+- [x] classify `test_success` from `test result: ok`, `passed`, and exit status `ok` on a test command
+- [x] classify `build_success` from `Finished`, `Build succeeded`, and exit status `ok` on a build command
+- [x] classify `deprecation_warning` and `dead_code_warning` from warning text and `unused` or `deprecated` markers
+- [x] classify `graph_not_ready` from `graph_stale`, `graph is stale`, `graph_unavailable`, and readiness error codes
+- [x] classify `retrieval_failure` from `retrieval_index_unavailable`, `content_store_unavailable`, and retrieval error codes
+- [x] return `None` when no rule matches; never emit an `other` fallback
+- [x] record only rule ids and matched field names in `matched_fields`; never record raw text
+- [x] add `MAX_CLASSIFIER_INPUT_BYTES` and `MAX_CLASSIFIER_MATCHED_FIELDS` to `packages/atlas-agent-events/src/policy.rs`
+- [x] add unit tests per kind, rule precedence, bounded input, no-match behavior, and absence of raw text in output
 
 #### Patch X2 — Attach classification to hook events
 
-- [ ] call `classify_runtime_payload` from `build_hook_event_metadata` in `packages/atlas-agent-events/src/metadata.rs`
-- [ ] add `classification` to hook metadata only when classification returns `Some`
-- [ ] keep `SessionEventType` and priority selection unchanged
-- [ ] keep classification deterministic so identical raw input produces the identical enriched payload and event hash
-- [ ] clamp `matched_fields` to `MAX_CLASSIFIER_MATCHED_FIELDS` and deduplicate field names
-- [ ] add tests proving panic, compiler error, test failure, test success, permission denial, timeout, no-match, and repeated-input dedupe under `dedup_window_secs`
+- [x] call `classify_runtime_payload` from `build_hook_event_metadata` in `packages/atlas-agent-events/src/metadata.rs`
+- [x] add `classification` to hook metadata only when classification returns `Some`
+- [x] keep `SessionEventType` and priority selection unchanged
+- [x] keep classification deterministic so identical raw input produces the identical enriched payload and event hash
+- [x] clamp `matched_fields` to `MAX_CLASSIFIER_MATCHED_FIELDS` and deduplicate field names
+- [x] add tests proving panic, compiler error, test failure, test success, permission denial, timeout, no-match, and repeated-input dedupe under `dedup_window_secs`
 
 #### Patch X3 — Resume grouping and wake-up surfacing
 
-- [ ] add `payload_classification(payload: &Value) -> Option<&Value>` in `packages/atlas-session/src/store/resume.rs` that reads `hook_metadata.classification` and top-level `classification`
-- [ ] extend resume `unresolved_errors` entries with `classification.kind`, `classification.severity`, and `classification.rule_id` in `packages/atlas-session/src/store/resume.rs`
-- [ ] extend resume `recent_commands` entries with optional classification metadata
-- [ ] add `recent_build_test_summaries` to the resume snapshot with `kind`, `command`, `status`, `classification`, and `at`, capped at 5 entries
-- [ ] add `recent_runtime_failures` to `WakePack` in `packages/atlas-agent-events/src/wake_pack.rs`, sourced from resume `unresolved_errors` filtered to `severity = error`
-- [ ] cap `recent_runtime_failures` with the existing wake-pack budget item limit
-- [ ] keep snapshots deterministic by sorting failures by `at` then rule id and deduplicating identical entries
-- [ ] add `recent_build_test_summaries` to the trim list in `trim_snapshot_to_limit`
-- [ ] add tests for classified errors, build/test summaries, caps, deterministic ordering, and byte-identical output when no classification exists
-- [ ] update the MCP `wake_up` output schema and regenerate `MCP_TOOLS.md`
-- [ ] update `wiki/session-memory-fallback.md` and `wiki/memory-architecture.md` for the new metadata and wake-up field
-- [ ] update CLI and MCP snapshots for `resume_session` and `wake_up`
+- [x] add `payload_classification(payload: &Value) -> Option<&Value>` in `packages/atlas-session/src/store/resume.rs` that reads `hook_metadata.classification` and top-level `classification`
+- [x] extend resume `unresolved_errors` entries with `classification.kind`, `classification.severity`, and `classification.rule_id` in `packages/atlas-session/src/store/resume.rs`
+- [x] extend resume `recent_commands` entries with optional classification metadata
+- [x] add `recent_build_test_summaries` to the resume snapshot with `kind`, `command`, `status`, `classification`, and `at`, capped at 5 entries
+- [x] add `recent_runtime_failures` to `WakePack` in `packages/atlas-agent-events/src/wake_pack.rs`, sourced from resume `unresolved_errors` filtered to `severity = error`
+- [x] cap `recent_runtime_failures` with the existing wake-pack budget item limit
+- [x] keep snapshots deterministic by sorting failures by `at` then rule id and deduplicating identical entries
+- [x] add `recent_build_test_summaries` to the trim list in `trim_snapshot_to_limit`
+- [x] add tests for classified errors, build/test summaries, caps, deterministic ordering, and byte-identical output when no classification exists
+- [x] update the MCP `wake_up` output schema and regenerate `MCP_TOOLS.md`
+- [x] update `wiki/session-memory-fallback.md` and `wiki/memory-architecture.md` for the new metadata and wake-up field
+- [x] update CLI and MCP snapshots for `resume_session` and `wake_up`
 
 #### Deferred and rejected work
 
-- [ ] do not add an `event_links` table or event-to-graph graph linking
-- [ ] do not add context-engine `include_runtime_events` or runtime-event retrieval
-- [ ] do not add a new `atlas-extractor` crate
-- [ ] do not re-plumb `ContentStore::route_output` thresholds through config in this patch
-- [ ] do not parse stacktraces into symbols; classification never creates graph links
+- [x] do not add an `event_links` table or event-to-graph graph linking
+- [x] do not add context-engine `include_runtime_events` or runtime-event retrieval
+- [x] do not add a new `atlas-extractor` crate
+- [x] do not re-plumb `ContentStore::route_output` thresholds through config in this patch
+- [x] do not parse stacktraces into symbols; classification never creates graph links
 
 #### Patch completion criteria
 
-- [ ] classification is deterministic, local, and stored only as metadata
-- [ ] `SessionEventType` values and repeated-input dedupe behavior are unchanged
-- [ ] no raw matched output text is persisted in classification
-- [ ] resume snapshot includes classified errors and build/test summaries within budget
-- [ ] wake-up includes bounded recent runtime failures
-- [ ] no runtime data is written to `worldtree.db`
-- [ ] no event-to-graph link table or context-engine runtime retrieval is added
+- [x] classification is deterministic, local, and stored only as metadata
+- [x] `SessionEventType` values and repeated-input dedupe behavior are unchanged
+- [x] no raw matched output text is persisted in classification
+- [x] resume snapshot includes classified errors and build/test summaries within budget
+- [x] wake-up includes bounded recent runtime failures
+- [x] no runtime data is written to `worldtree.db`
+- [x] no event-to-graph link table or context-engine runtime retrieval is added
 
 ---
 
@@ -408,27 +408,6 @@ Implementation structure:
 
 ---
 
-### Runtime Policy Surface — Deferred
-
-Not worth implementing now. Static AGENTS/CLAUDE instructions, install bootstrap text, MCP prompts, and hook capture already carry graph-first and minimal-first workflow guidance. A runtime `agent_instructions` tool plus hook-boundary enforcement adds a policy cache, version negotiation, protected-tool blocking, and host-specific fallback without measured compliance gain.
-
-Blockers:
-
-- hard enforcement conflicts with the existing best-effort hook contract and must not block primary CLI/MCP flow
-- hosts without native hooks cannot enforce preload, so behavior diverges by host
-- protected-tool blocking can break valid sessions when policy preload is delayed or unavailable
-- static instructions and VR3 escalation metadata already cover the guidance
-
-Revisit only if:
-
-- a host provides reliable mandatory pre-tool hooks
-- measured cases show agents ignoring static guidance
-- runtime policy versioning is required for compliance
-
-If revisited, limit the first step to a read-only `agent_instructions` MCP tool returning compact policy metadata. Do not add hook-boundary blocking, policy caches, or protected-tool enforcement.
-
----
-
 ## Additional Backlog
 
 - [ ] add CI-visible parser cache hit-ratio metric and fail when cache reuse drops below configured threshold
@@ -444,19 +423,4 @@ Tokenizer-backed context budget accounting is shipped. See SHIPPED.md for detail
 
 ## Part XII — RAG Adaptation Roadmap (VikingMem, VikingRAG, TrieHI)
 
-Source of truth: `docs/PLAN-RAG.md`. All VikingMem memory-operator tracks, VikingRAG + TrieHI retrieval tracks, and RAG evaluation gates are shipped; see SHIPPED.md for the typed operator algebra, structured consolidation and patch application, two-path recall, progressive overview levels and `atlas://` resources, directory-semantic query scope and TrieHI indexing, evidence sufficiency escalation, query-conditioned experience edges, and token-efficiency evaluation.
-
-Core Design Rules:
-
-- keep the three-database boundary: `worldtree.db` for static graph facts, `context.db` for chunked artifacts, `session.db` for events, memories, memoir, overviews, and experience edges; never add a fourth database
-- keep the non-LLM default: operators, EUA patching, deterministic `TIME_COMPRESS`, DSQ scope filters, and evidence sufficiency checks run locally with no required LLM or embedding provider
-- never drop merged or contradictory evidence: consolidation and `TIME_COMPRESS` preserve distinct facts from all inputs and keep `memory_supersessions` provenance
-- bind overviews and experience shortcuts to `commit_sha` plus canonical file hashes; stale links never surface as fresh structural evidence
-- canonicalize every path-derived scope, cache, or identity key through `atlas_repo::CanonicalRepoPath`
-- sync every new flag, filter, enum value, and JSON field across CLI, MCP wrappers, and `MCP_TOOLS.md`
-- respect the 1K LOC rule: add new modules instead of growing `packages/atlas-session/src/store/memory.rs`, `packages/atlas-session/src/store/memoir.rs`, `packages/atlas-session/src/store/types.rs`, and `packages/atlas-mcp/src/resources.rs`
-- implement only from the published algorithm descriptions; never copy AGPL-3.0 OpenViking code
-
-Rules above remain binding for any future Part XII work.
-
-No active Part XII items remain. The previously deferred memory-operator wiring is closed as out of scope: `feedback_records` remains the authoritative feedback table, and global symbol and file access counters keep their existing dedicated tables.
+See SHIPPED.md for details.

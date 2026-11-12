@@ -11,6 +11,7 @@ atlas-core.workspace = true
 atlas-contentstore = { path = "../atlas-contentstore" , version = "1.7.7"}
 atlas-adapters = { path = "../atlas-adapters" , version = "1.7.7"}
 atlas-impact = { path = "../atlas-impact" , version = "1.7.7"}
+atlas-metrics.workspace = true
 atlas-repo = { path = "../atlas-repo" , version = "1.7.7"}
 atlas-session = { path = "../atlas-session" , version = "1.7.7"}
 atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "1.7.7"}

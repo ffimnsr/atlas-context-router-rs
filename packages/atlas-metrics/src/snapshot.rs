@@ -38,4 +38,12 @@ pub struct MetricsSnapshot {
     pub mcp_tool_calls: BTreeMap<String, McpToolCallCounts>,
     /// MCP tool call duration in milliseconds by tool name.
     pub mcp_tool_duration_ms: BTreeMap<String, HistogramSnapshot>,
+    /// Context builds by `"{intent}:{outcome}"`.
+    pub context_builds: BTreeMap<String, u64>,
+    /// Context build duration in milliseconds by intent.
+    pub context_duration_ms: BTreeMap<String, HistogramSnapshot>,
+    /// Emitted context payload bytes by intent.
+    pub context_payload_bytes: BTreeMap<String, HistogramSnapshot>,
+    /// Emitted context payload estimated tokens by intent.
+    pub context_payload_tokens: BTreeMap<String, HistogramSnapshot>,
 }

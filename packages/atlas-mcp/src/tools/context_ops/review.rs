@@ -18,6 +18,8 @@ pub(crate) fn tool_get_review_context(
     let token_budget = u64_arg(args, "token_budget").map(|n| n as usize);
     let include_overviews = bool_arg(args, "include_overviews").unwrap_or(false);
     let include_stale_overviews = bool_arg(args, "include_stale_overviews").unwrap_or(false);
+    let include_telemetry = bool_arg(args, "include_telemetry").unwrap_or(false);
+    let include_ranking_evidence = bool_arg(args, "include_ranking_evidence").unwrap_or(false);
     let overview_limit = u64_arg(args, "overview_limit").map(|n| n as usize);
     let overview_max_bytes = u64_arg(args, "overview_max_bytes").map(|n| n as usize);
     let exact_dir = str_arg(args, "exact_dir")?
@@ -68,6 +70,8 @@ pub(crate) fn tool_get_review_context(
         exact_dir,
         exclude_subpaths,
         include_overviews,
+        include_telemetry,
+        include_ranking_evidence,
         overview_limit,
         overview_max_bytes,
         overview_freshness: include_stale_overviews.then(|| {
@@ -100,7 +104,7 @@ pub(crate) fn tool_get_review_context(
         )
         .context("review impact query failed")?;
     let advanced = atlas_impact::analyze(review_impact);
-    let include_context_ranking_evidence = output_format == crate::output::OutputFormat::Json;
+    let include_context_ranking_evidence = request.include_ranking_evidence;
     let packaged = package_context_result(&result, include_context_ranking_evidence);
     let mut packaged_value = serde_json::to_value(&packaged)?;
     let response_budget_limit = policy

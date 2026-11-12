@@ -33,7 +33,7 @@ pub(super) fn tools() -> Vec<Value> {
         }),
         json!({
                 "name": "get_metrics",
-                "description": "Return in-process runtime metrics for this Atlas process: counter and histogram data for build/update duration and parsed-file counts, parser tree-cache reuse ratio, query latency by execution mode, and MCP tool call counts. Metrics are process-local and reset when the process restarts.",
+                "description": "Return in-process runtime metrics for this Atlas process: counter and histogram data for build/update duration and parsed-file counts, parser tree-cache reuse ratio, query latency by execution mode, MCP tool call counts, and context build outcome, duration, payload-byte, and payload-token families. Metrics are process-local and reset when the process restarts.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {

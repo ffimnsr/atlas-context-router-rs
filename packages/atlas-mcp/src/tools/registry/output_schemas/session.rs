@@ -133,6 +133,29 @@ pub(crate) fn wake_up_output_schema() -> Value {
             "recent_feedback": { "type": "array", "items": { "type": "object" } },
             "active_memoir_concepts": { "type": "array", "items": { "type": "string" } },
             "changed_files": { "type": "array", "items": { "type": "string" } },
+            "recent_runtime_failures": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "command": { "type": ["string", "null"] },
+                        "error": {},
+                        "classification": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "kind": { "type": "string" },
+                                "severity": { "type": "string" },
+                                "rule_id": { "type": "string" }
+                            },
+                            "required": ["kind", "severity", "rule_id"]
+                        },
+                        "at": { "type": ["string", "null"] }
+                    },
+                    "required": ["command", "error", "classification", "at"]
+                }
+            },
             "graph_readiness": {
                 "type": "object",
                 "additionalProperties": false,
@@ -178,10 +201,11 @@ pub(crate) fn wake_up_output_schema() -> Value {
                     "feedback_count": { "type": "integer" },
                     "concept_count": { "type": "integer" },
                     "changed_file_count": { "type": "integer" },
+                    "runtime_failure_count": { "type": "integer" },
                     "retrieval_hint_count": { "type": "integer" },
                     "recorded": { "type": "string" }
                 },
-                "required": ["status", "pending_resume", "event_count", "decision_count", "critical_memory_count", "feedback_count", "concept_count", "changed_file_count", "retrieval_hint_count", "recorded"]
+                "required": ["status", "pending_resume", "event_count", "decision_count", "critical_memory_count", "feedback_count", "concept_count", "changed_file_count", "runtime_failure_count", "retrieval_hint_count", "recorded"]
             },
             "warnings": { "type": "array", "items": { "type": "string" } },
             "atlas_provenance": { "type": "object" },
@@ -198,6 +222,7 @@ pub(crate) fn wake_up_output_schema() -> Value {
             "recent_feedback",
             "active_memoir_concepts",
             "changed_files",
+            "recent_runtime_failures",
             "graph_readiness",
             "retrieval_hints",
             "generated_at",

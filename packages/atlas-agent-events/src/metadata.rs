@@ -8,10 +8,11 @@ use atlas_core::model::ContextTarget;
 use atlas_review::query_parser;
 use atlas_session::{ResumeSnapshot, SessionId, SessionStore};
 
+use crate::classification::classify_runtime_payload;
 use crate::payload::{collect_source_ids, extract_changed_files, extract_prompt_text};
 use crate::policy::{
-    HookMetadataContext, HookPolicy, HookStorage, MAX_HOOK_EVENT_SCAN, MAX_HOOK_PROMPT_HITS,
-    MAX_HOOK_SOURCE_HINTS, PromptRoutingMetadata,
+    HookMetadataContext, HookPolicy, HookStorage, MAX_CLASSIFIER_MATCHED_FIELDS,
+    MAX_HOOK_EVENT_SCAN, MAX_HOOK_PROMPT_HITS, MAX_HOOK_SOURCE_HINTS, PromptRoutingMetadata,
 };
 
 pub(crate) fn build_restore_metadata(
@@ -139,7 +140,7 @@ pub(crate) fn build_hook_event_metadata(context: HookMetadataContext<'_>) -> Val
     let source_summaries = read_source_summaries(context.graph_db_path, &saved_artifact_refs);
     let freshness = build_freshness_metadata(context.policy, context.repo, context.payload);
 
-    json!({
+    let mut metadata = json!({
         "storage_mode": storage_mode,
         "event_source": context.event_source,
         "agent_id": context.agent_id,
@@ -152,7 +153,31 @@ pub(crate) fn build_hook_event_metadata(context: HookMetadataContext<'_>) -> Val
         "saved_artifact_refs": saved_artifact_refs,
         "source_summaries": source_summaries,
         "freshness": freshness,
-    })
+    });
+
+    // X2: classification is metadata only. It never changes event type or
+    // priority, and identical raw input produces identical classification and
+    // event hash for the existing dedupe window.
+    if let Some(classification) = classify_runtime_payload(context.payload)
+        && let Some(object) = metadata.as_object_mut()
+    {
+        let mut value = serde_json::to_value(classification).unwrap_or(Value::Null);
+        if let Some(fields) = value
+            .get_mut("matched_fields")
+            .and_then(Value::as_array_mut)
+        {
+            let mut seen = BTreeSet::new();
+            fields.retain(|field| {
+                field
+                    .as_str()
+                    .is_some_and(|name| seen.insert(name.to_owned()))
+            });
+            fields.truncate(MAX_CLASSIFIER_MATCHED_FIELDS);
+        }
+        object.insert("classification".to_owned(), value);
+    }
+
+    metadata
 }
 
 pub(crate) fn build_freshness_metadata(policy: &HookPolicy, repo: &str, payload: &Value) -> Value {

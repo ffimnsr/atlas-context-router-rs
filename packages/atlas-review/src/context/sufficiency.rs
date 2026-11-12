@@ -247,6 +247,8 @@ mod tests {
             content_assets: vec![],
             overviews: vec![],
             sufficiency: None,
+            repo_provenance: None,
+            telemetry: None,
             budget: BudgetReport::not_applicable(),
         }
     }

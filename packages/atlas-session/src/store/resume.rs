@@ -50,6 +50,74 @@ fn collect_hook_saved_artifact_refs(
     }
 }
 
+/// Read classification metadata from a stored event payload (X3).
+///
+/// Native hook events carry it under `hook_metadata.classification`; fallback
+/// capture may place it at the top level.
+pub(super) fn payload_classification(payload: &serde_json::Value) -> Option<&serde_json::Value> {
+    payload
+        .get("hook_metadata")
+        .and_then(|metadata| metadata.get("classification"))
+        .or_else(|| payload.get("classification"))
+}
+
+fn classification_summary(classification: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "kind": classification.get("kind").cloned().unwrap_or(serde_json::Value::Null),
+        "severity": classification.get("severity").cloned().unwrap_or(serde_json::Value::Null),
+        "rule_id": classification.get("rule_id").cloned().unwrap_or(serde_json::Value::Null),
+    })
+}
+
+fn collect_build_test_summary(
+    summaries: &mut Vec<serde_json::Value>,
+    payload: &serde_json::Value,
+    classification: &serde_json::Value,
+    at: &str,
+) {
+    let Some(kind) = classification
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return;
+    };
+    if !matches!(kind, "test_failure" | "test_success" | "build_success") {
+        return;
+    }
+    summaries.push(serde_json::json!({
+        "kind": kind,
+        "command": payload.get("command"),
+        "status": payload.get("status"),
+        "classification": classification_summary(classification),
+        "at": at,
+    }));
+}
+
+fn classification_rule_id(entry: &serde_json::Value) -> &str {
+    entry
+        .get("classification")
+        .and_then(|classification| classification.get("rule_id"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+}
+
+fn sort_and_dedupe_runtime_entries(entries: &mut Vec<serde_json::Value>) {
+    entries.sort_by(|left, right| {
+        let left_at = left
+            .get("at")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let right_at = right
+            .get("at")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        left_at
+            .cmp(right_at)
+            .then_with(|| classification_rule_id(left).cmp(classification_rule_id(right)))
+    });
+    entries.dedup();
+}
+
 fn collect_hook_retrieval_hints(
     payload: &serde_json::Value,
     retrieval_hints: &mut Vec<serde_json::Value>,
@@ -119,6 +187,7 @@ fn build_resume_snapshot_json(
     let mut active_rules: Vec<serde_json::Value> = Vec::new();
     let mut graph_state: Option<serde_json::Value> = None;
     let mut retrieval_hints: Vec<serde_json::Value> = Vec::new();
+    let mut recent_build_test_summaries: Vec<serde_json::Value> = Vec::new();
 
     for event in &filtered_events {
         let payload: serde_json::Value =
@@ -130,6 +199,7 @@ fn build_resume_snapshot_json(
             collect_hook_retrieval_hints(hook_metadata, &mut retrieval_hints);
         }
         collect_hook_retrieval_hints(&payload, &mut retrieval_hints);
+        let classification = payload_classification(&payload);
 
         match event.event_type {
             SessionEventType::UserIntent => {
@@ -138,22 +208,40 @@ fn build_resume_snapshot_json(
                 }
             }
             SessionEventType::CommandRun => {
-                let entry = serde_json::json!({
+                let mut entry = serde_json::json!({
                     "command": payload.get("command"),
                     "status": payload.get("status"),
                     "at": event.created_at,
                 });
+                if let Some(classification) = classification {
+                    entry["classification"] = classification_summary(classification);
+                    collect_build_test_summary(
+                        &mut recent_build_test_summaries,
+                        &payload,
+                        classification,
+                        event.created_at.as_str(),
+                    );
+                }
                 recent_commands.push(entry);
                 if recent_commands.len() > 10 {
                     recent_commands.remove(0);
                 }
             }
             SessionEventType::CommandFail | SessionEventType::Error => {
-                let entry = serde_json::json!({
+                let mut entry = serde_json::json!({
                     "command": payload.get("command").or_else(|| payload.get("tool")),
                     "error": payload.get("error").or_else(|| payload.get("extra")),
                     "at": event.created_at,
                 });
+                if let Some(classification) = classification {
+                    entry["classification"] = classification_summary(classification);
+                    collect_build_test_summary(
+                        &mut recent_build_test_summaries,
+                        &payload,
+                        classification,
+                        event.created_at.as_str(),
+                    );
+                }
                 unresolved_errors.push(entry);
                 if unresolved_errors.len() > 5 {
                     unresolved_errors.remove(0);
@@ -263,6 +351,10 @@ fn build_resume_snapshot_json(
         }
     }
 
+    sort_and_dedupe_runtime_entries(&mut unresolved_errors);
+    sort_and_dedupe_runtime_entries(&mut recent_build_test_summaries);
+    recent_build_test_summaries.truncate(5);
+
     let snapshot = serde_json::json!({
         "session_id": session_id.as_str(),
         "agent_id": agent_id,
@@ -276,6 +368,7 @@ fn build_resume_snapshot_json(
         "changed_files": changed_files,
         "impacted_symbols": impacted_symbols,
         "unresolved_errors": unresolved_errors,
+        "recent_build_test_summaries": recent_build_test_summaries,
         "recent_reasoning": recent_reasoning,
         "saved_artifact_refs": saved_artifact_refs,
         "recent_decisions": recent_decisions,
@@ -366,6 +459,7 @@ fn trim_snapshot_to_limit(mut snapshot: serde_json::Value, max_bytes: usize) -> 
         "retrieval_hints",
         "recent_commands",
         "unresolved_errors",
+        "recent_build_test_summaries",
         "recent_reasoning",
         "recent_decisions",
         "active_rules",
