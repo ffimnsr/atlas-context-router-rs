@@ -56,6 +56,9 @@ Agents must document any complexities or friction encountered during test execut
    - Flag any tool call taking longer than 100ms on a warm in-memory database.
 4. **Session Continuity Drift**:
    - Verify that session compactions did not inadvertently drop critical decision memories or active resume snapshot anchors.
+5. **Database Lock Contention & Concurrency**:
+   - Flag any SQLite lock errors (`database is locked`).
+   - Verify that `build_graph` (Tool 79) and `update_graph` (Tool 80) were executed strictly in serial after all concurrent reader subagents completed.
 
 ### 1.4 Agent Expectation Verification Checklist
 Before completing a test run, verify:
@@ -95,6 +98,11 @@ Before completing a test run, verify:
    - Call `purge_saved_context(keep_days: 1)` after running memory or artifact tests to prevent database inflation.
 5. **Read File Slices via Excerpt Tools**:
    - When referencing this file, do **not** read all 4,000+ lines. Use `read_file_excerpt` or `view_file` with precise `start_line` and `end_line` ranges for the target tool.
+6. **Strict Serial Isolation for Graph Mutations (`build_graph` & `update_graph`)**:
+   - **NEVER execute `build_graph` (Tool 79) or `update_graph` (Tool 80) in parallel with other tests!**
+   - Both tools execute deep structural mutations and acquire exclusive write locks on `.atlas/worldtree.db`.
+   - Running them concurrently causes database lock contention (`database is locked`), corrupted state reads, or broken assertions in reader threads.
+   - All parallel category test threads must finish first. Run Tool 79 and Tool 80 in strict sequence as the final step.
 
 
 ---
@@ -2189,164 +2197,12 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ---
 
 
-### Category: Graph Mutation, Build & Embedding Lifecycle
-#### Tool 24: `build_graph`
-**Description**: Scans, parses, and persists a complete code graph from scratch into .atlas/worldtree.db.
-**Canonical CLI Parity Command**: `./target/debug/atlas build --json`
-
-##### Test 24.1: Full Code Graph Rebuild Invocation
-**Intent in Plain English**: Trigger a complete repository scan and parse cycle using the canonical empty object input.
-
-**MCP Arguments (JSON)**:
-```json
-{}
-```
-
-**Expected Clean Output & Assertions**:
-- Verify `structuredContent.build_status.state == 'built'`
-- Verify `structuredContent.build_status.nodes_written > 20000`
-- Verify `structuredContent.build_status.edges_written > 80000`
-- Verify `structuredContent.build_status.files_processed > 900`
-
-**CLI Parity Command**:
-```./target/debug/atlas build --json```
-
-**CLI Parity Verification Statement**:
-Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
-
-**Agent Expectation Check**:
-Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
-
-##### Test 24.2: Verify Build Status Post-Conditions
-**Intent in Plain English**: Confirm `last_built_at` timestamp is updated and `last_error` is null.
-
-**MCP Arguments (JSON)**:
-```json
-{}
-```
-
-**Expected Clean Output & Assertions**:
-- Verify `build_status.last_error == null`
-- Verify `build_status.quarantine_path == null`
-
-**CLI Parity Command**:
-```./target/debug/atlas build --json```
-
-**CLI Parity Verification Statement**:
-Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
-
-**Agent Expectation Check**:
-Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
-
-##### Test 24.3: Enforce Empty Argument Contract
-**Intent in Plain English**: Confirm the server validates that `build_graph` expects an empty JSON object.
-
-**MCP Arguments (JSON)**:
-```json
-{}
-```
-
-**Expected Clean Output & Assertions**:
-- Verify successful execution without requiring redundant parameters
-
-**CLI Parity Command**:
-```./target/debug/atlas build --json```
-
-**CLI Parity Verification Statement**:
-Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
-
-**Agent Expectation Check**:
-Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
-
-
----
-
-#### Tool 25: `update_graph`
-**Description**: Incrementally updates the code graph from one explicit change source (working_tree, staged, or base ref).
-**Canonical CLI Parity Command**: `./target/debug/atlas update --json`
-
-##### Test 25.1: Incremental Update from Working Tree Changes
-**Intent in Plain English**: Refresh the graph for modified files without reparsing unchanged files in the workspace.
-
-**MCP Arguments (JSON)**:
-```json
-{
-  "change_source": {
-    "kind": "working_tree"
-  }
-}
-```
-
-**Expected Clean Output & Assertions**:
-- Verify `structuredContent.updated_files` contains recently modified files
-- Verify `status` subsequently reports `graph_state.stale_index == false`
-
-**CLI Parity Command**:
-```./target/debug/atlas update --json```
-
-**CLI Parity Verification Statement**:
-Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
-
-**Agent Expectation Check**:
-Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
-
-##### Test 25.2: Incremental Update from Staged Changes
-**Intent in Plain English**: Run update strictly for staged changes.
-
-**MCP Arguments (JSON)**:
-```json
-{
-  "change_source": {
-    "kind": "staged"
-  }
-}
-```
-
-**Expected Clean Output & Assertions**:
-- Verify succeeds cleanly even when staged files list is empty
-
-**CLI Parity Command**:
-```./target/debug/atlas update --json```
-
-**CLI Parity Verification Statement**:
-Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
-
-**Agent Expectation Check**:
-Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
-
-##### Test 25.3: Verify Invariant Consistency After Incremental Update
-**Intent in Plain English**: Confirm that incremental graph updates do not introduce dangling edges or orphan nodes.
-
-**MCP Arguments (JSON)**:
-```json
-{
-  "change_source": {
-    "kind": "working_tree"
-  }
-}
-```
-
-**Expected Clean Output & Assertions**:
-- Verify `structuredContent.success == true`
-- Confirm no integrity check warnings are returned
-
-**CLI Parity Command**:
-```./target/debug/atlas update --json```
-
-**CLI Parity Verification Statement**:
-Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
-
-**Agent Expectation Check**:
-Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
-
-
----
-
-#### Tool 26: `embed_chunks`
+### Category: Graph Embedding & Post-Processing
+#### Tool 24: `embed_chunks`
 **Description**: Generates and persists embeddings for retrieval chunks lacking vectors. Requires [search.embedding] config. Supports dry_run.
 **Canonical CLI Parity Command**: `./target/debug/atlas query --embed --dry-run --json`
 
-##### Test 26.1: Dry Run Pending Embeddings Count
+##### Test 24.1: Dry Run Pending Embeddings Count
 **Intent in Plain English**: Count how many text chunks require vector embeddings without invoking external embedding provider APIs.
 
 **MCP Arguments (JSON)**:
@@ -2370,7 +2226,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 26.2: Bounded Embedding Batch Size
+##### Test 24.2: Bounded Embedding Batch Size
 **Intent in Plain English**: Enforce chunk limit on embedding generation.
 
 **MCP Arguments (JSON)**:
@@ -2393,7 +2249,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 26.3: Inspect Provider Readiness Report
+##### Test 24.3: Inspect Provider Readiness Report
 **Intent in Plain English**: Verify reporting of embedding model configuration (`all-minilm` default).
 
 **MCP Arguments (JSON)**:
@@ -2418,11 +2274,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 27: `postprocess_graph`
+#### Tool 25: `postprocess_graph`
 **Description**: Runs explicit derived-analytics postprocessing after build/update without reparsing source files.
 **Canonical CLI Parity Command**: `./target/debug/atlas postprocess --stage metrics --dry-run --json`
 
-##### Test 27.1: Dry Run Derived Analytics Lifecycle Preview
+##### Test 25.1: Dry Run Derived Analytics Lifecycle Preview
 **Intent in Plain English**: Preview which postprocessing stages (metrics, cycles, dead code) would execute without altering tables.
 
 **MCP Arguments (JSON)**:
@@ -2445,7 +2301,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 27.2: Changed-Only Incremental Postprocessing
+##### Test 25.2: Changed-Only Incremental Postprocessing
 **Intent in Plain English**: Run derived analytics strictly on recently updated nodes.
 
 **MCP Arguments (JSON)**:
@@ -2468,7 +2324,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 27.3: Execute Single-Stage Analytics
+##### Test 25.3: Execute Single-Stage Analytics
 **Intent in Plain English**: Execute only the 'metrics' calculation stage.
 
 **MCP Arguments (JSON)**:
@@ -2496,11 +2352,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 
 ### Category: Code Analysis, Metrics & Refactoring Safety
-#### Tool 28: `analyze_safety`
+#### Tool 26: `analyze_safety`
 **Description**: Scores how safe it is to refactor a symbol, returning fan-in, fan-out, test adjacency, cross-module callers, and safety score (0-1).
 **Canonical CLI Parity Command**: `./target/debug/atlas insights risk packages/atlas-core/src/health.rs::fn::classify_graph_store_error --json`
 
-##### Test 28.1: Refactor Safety Score for Core Public Function
+##### Test 26.1: Refactor Safety Score for Core Public Function
 **Intent in Plain English**: Assess the refactoring risk of `classify_graph_store_error` to understand breaking change blast radius.
 
 **MCP Arguments (JSON)**:
@@ -2525,7 +2381,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 28.2: Refactor Safety of Private Internal Helper
+##### Test 26.2: Refactor Safety of Private Internal Helper
 **Intent in Plain English**: Evaluate an internal private function to verify reduced blast radius.
 
 **MCP Arguments (JSON)**:
@@ -2548,7 +2404,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 28.3: Factor Evidence Verification
+##### Test 26.3: Factor Evidence Verification
 **Intent in Plain English**: Confirm factor evidence array details all scoring dimensions.
 
 **MCP Arguments (JSON)**:
@@ -2573,11 +2429,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 29: `analyze_remove`
+#### Tool 27: `analyze_remove`
 **Description**: Analyses the impact of removing one or more symbols, returning impacted symbols, files, and tests separated by confidence tier.
 **Canonical CLI Parity Command**: `./target/debug/atlas analyze remove packages/atlas-core/src/health.rs::fn::classify_graph_store_error --json`
 
-##### Test 29.1: Removal Blast Radius for Core Function
+##### Test 27.1: Removal Blast Radius for Core Function
 **Intent in Plain English**: Analyze impact if `classify_graph_store_error` were removed from the codebase.
 
 **MCP Arguments (JSON)**:
@@ -2603,7 +2459,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 29.2: Bounded Removal Traversal (Depth 2, Max Nodes 15)
+##### Test 27.2: Bounded Removal Traversal (Depth 2, Max Nodes 15)
 **Intent in Plain English**: Cap removal impact analysis to prevent unbounded cascade through entire dependency graph.
 
 **MCP Arguments (JSON)**:
@@ -2629,7 +2485,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 29.3: Multi-Symbol Batch Removal Impact
+##### Test 27.3: Multi-Symbol Batch Removal Impact
 **Intent in Plain English**: Analyze combined impact of removing both an error classifier and its helper.
 
 **MCP Arguments (JSON)**:
@@ -2657,11 +2513,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 30: `analyze_dependency`
+#### Tool 28: `analyze_dependency`
 **Description**: Checks whether removing a symbol is safe by verifying it has no remaining semantic references. Returns removable verdict and blocking callers.
 **Canonical CLI Parity Command**: `./target/debug/atlas analyze dependency packages/atlas-core/src/health.rs::fn::classify_graph_store_error --json`
 
-##### Test 30.1: Verify Referenced Symbol is NOT Removable
+##### Test 28.1: Verify Referenced Symbol is NOT Removable
 **Intent in Plain English**: Confirm `classify_graph_store_error` is flagged as non-removable due to active callers.
 
 **MCP Arguments (JSON)**:
@@ -2685,7 +2541,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 30.2: Suggested Cleanups for Blocking Callers
+##### Test 28.2: Suggested Cleanups for Blocking Callers
 **Intent in Plain English**: Check recommended cleanups provided by the tool when a symbol cannot be removed.
 
 **MCP Arguments (JSON)**:
@@ -2707,7 +2563,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 30.3: Dependency Analysis of Inner Helper
+##### Test 28.3: Dependency Analysis of Inner Helper
 **Intent in Plain English**: Check blocking callers for `is_schema_mismatch_error`.
 
 **MCP Arguments (JSON)**:
@@ -2733,11 +2589,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 31: `analyze_dead_code`
+#### Tool 29: `analyze_dead_code`
 **Description**: Detects dead-code candidates: private/unexported symbols with no inbound semantic edges, not in entrypoints, not tests.
 **Canonical CLI Parity Command**: `./target/debug/atlas analyze dead-code --json`
 
-##### Test 31.1: Dead Code Candidate Scan in Core Subpath
+##### Test 29.1: Dead Code Candidate Scan in Core Subpath
 **Intent in Plain English**: Detect unreferenced internal code candidates in `packages/atlas-core/src`.
 
 **MCP Arguments (JSON)**:
@@ -2762,7 +2618,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 31.2: Strict Code-Only Dead Code Filter
+##### Test 29.2: Strict Code-Only Dead Code Filter
 **Intent in Plain English**: Constrain dead code search strictly to code symbols (functions/structs), excluding docs.
 
 **MCP Arguments (JSON)**:
@@ -2785,7 +2641,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 31.3: Dead Code Summary Statistics
+##### Test 29.3: Dead Code Summary Statistics
 **Intent in Plain English**: Retrieve aggregate summary metrics on unreferenced code across the repository.
 
 **MCP Arguments (JSON)**:
@@ -2810,11 +2666,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 32: `assess_risk`
+#### Tool 30: `assess_risk`
 **Description**: Scores deterministic risk for one symbol with factor evidence and ranked findings (LOC, complexity, callers, public API exposure).
 **Canonical CLI Parity Command**: `./target/debug/atlas insights risk packages/atlas-core/src/health.rs::fn::classify_graph_store_error --json`
 
-##### Test 32.1: Deterministic Risk Scoring for Core Function
+##### Test 30.1: Deterministic Risk Scoring for Core Function
 **Intent in Plain English**: Score change risk for `classify_graph_store_error` in non-verbose compact form.
 
 **MCP Arguments (JSON)**:
@@ -2839,7 +2695,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 32.2: Detailed Verbose Risk Factor Inspection
+##### Test 30.2: Detailed Verbose Risk Factor Inspection
 **Intent in Plain English**: Inspect comprehensive breakdown of risk weights and line range evidence.
 
 **MCP Arguments (JSON)**:
@@ -2862,7 +2718,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 32.3: Risk Comparison on Low-Coupling Symbol
+##### Test 30.3: Risk Comparison on Low-Coupling Symbol
 **Intent in Plain English**: Assess risk of a self-contained leaf function (`now_utc`).
 
 **MCP Arguments (JSON)**:
@@ -2888,11 +2744,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 33: `analyze_architecture`
+#### Tool 31: `analyze_architecture`
 **Description**: Analyzes module-level cycles, layer violations, and coupling hotspots across packages.
 **Canonical CLI Parity Command**: `./target/debug/atlas insights architecture --json`
 
-##### Test 33.1: Module Layer Violations and Hotspots Audit
+##### Test 31.1: Module Layer Violations and Hotspots Audit
 **Intent in Plain English**: Audit architectural layering between packages (`atlas-core` -> `atlas-mcp` -> `atlas-cli`).
 
 **MCP Arguments (JSON)**:
@@ -2915,7 +2771,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 33.2: Bounded Architecture Findings (Limit 5)
+##### Test 31.2: Bounded Architecture Findings (Limit 5)
 **Intent in Plain English**: Retrieve top 5 architectural coupling hotspots.
 
 **MCP Arguments (JSON)**:
@@ -2938,7 +2794,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 33.3: Cyclic Dependency Scan
+##### Test 31.3: Cyclic Dependency Scan
 **Intent in Plain English**: Verify that zero cyclic package dependencies exist in the workspace.
 
 **MCP Arguments (JSON)**:
@@ -2963,11 +2819,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 34: `analyze_metrics`
+#### Tool 32: `analyze_metrics`
 **Description**: Analyzes graph health metrics, outliers, complexity hotspots, and coupling findings repo-wide.
 **Canonical CLI Parity Command**: `./target/debug/atlas insights metrics --json`
 
-##### Test 34.1: Identify Graph Complexity Hotspots
+##### Test 32.1: Identify Graph Complexity Hotspots
 **Intent in Plain English**: Discover functions with high cyclomatic complexity and large fan-out.
 
 **MCP Arguments (JSON)**:
@@ -2991,7 +2847,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 34.2: Repository Graph Density Metrics
+##### Test 32.2: Repository Graph Density Metrics
 **Intent in Plain English**: Check aggregate graph density, average node degree, and diameter.
 
 **MCP Arguments (JSON)**:
@@ -3013,7 +2869,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 34.3: Bounded Outlier Inspection (Limit 3)
+##### Test 32.3: Bounded Outlier Inspection (Limit 3)
 **Intent in Plain English**: Retrieve exactly the top 3 extreme coupling outliers.
 
 **MCP Arguments (JSON)**:
@@ -3038,11 +2894,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 35: `analyze_patterns`
+#### Tool 33: `analyze_patterns`
 **Description**: Detects repeated call chains, isolated structures, hubs, bottlenecks, and deep dependency paths.
 **Canonical CLI Parity Command**: `./target/debug/atlas insights patterns --json`
 
-##### Test 35.1: Detect Hub Symbols and Bottlenecks
+##### Test 33.1: Detect Hub Symbols and Bottlenecks
 **Intent in Plain English**: Identify structural hubs (symbols with high centrality) in the dispatch architecture.
 
 **MCP Arguments (JSON)**:
@@ -3066,7 +2922,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 35.2: Deep Dependency Path Detection
+##### Test 33.2: Deep Dependency Path Detection
 **Intent in Plain English**: Identify the deepest call chains across packages to target for flattening.
 
 **MCP Arguments (JSON)**:
@@ -3089,7 +2945,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 35.3: Isolated Structure Detection
+##### Test 33.3: Isolated Structure Detection
 **Intent in Plain English**: Identify disconnected subgraphs or standalone modules.
 
 **MCP Arguments (JSON)**:
@@ -3114,11 +2970,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 36: `find_large_functions`
+#### Tool 34: `find_large_functions`
 **Description**: Finds large or complex functions repo-wide or within selected files using deterministic LOC and complexity thresholds.
 **Canonical CLI Parity Command**: `./target/debug/atlas insights large-functions --json`
 
-##### Test 36.1: Repo-Wide Large Functions Discovery
+##### Test 34.1: Repo-Wide Large Functions Discovery
 **Intent in Plain English**: Find top 5 largest functions in the repository exceeding 100 LOC.
 
 **MCP Arguments (JSON)**:
@@ -3143,7 +2999,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 36.2: File-Specific Large Functions Check on Dispatch Module
+##### Test 34.2: File-Specific Large Functions Check on Dispatch Module
 **Intent in Plain English**: Audit `packages/atlas-mcp/src/tools/dispatch.rs` for functions exceeding 50 lines.
 
 **MCP Arguments (JSON)**:
@@ -3170,7 +3026,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 36.3: Excluding Test Functions from LOC Audit
+##### Test 34.3: Excluding Test Functions from LOC Audit
 **Intent in Plain English**: Ensure test functions are excluded from large function audits.
 
 **MCP Arguments (JSON)**:
@@ -3197,11 +3053,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 37: `find_complex_functions`
+#### Tool 35: `find_complex_functions`
 **Description**: Finds complex functions repo-wide or within selected files using deterministic cyclomatic and cognitive complexity thresholds.
 **Canonical CLI Parity Command**: `./target/debug/atlas insights complex-functions --json`
 
-##### Test 37.1: High Cyclomatic Complexity Scan (Threshold 15)
+##### Test 35.1: High Cyclomatic Complexity Scan (Threshold 15)
 **Intent in Plain English**: Identify functions with cyclomatic complexity > 15 to prioritize for unit testing.
 
 **MCP Arguments (JSON)**:
@@ -3225,7 +3081,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 37.2: Cognitive Complexity Audit
+##### Test 35.2: Cognitive Complexity Audit
 **Intent in Plain English**: Scan for functions with cognitive complexity > 20 measuring mental burden.
 
 **MCP Arguments (JSON)**:
@@ -3248,7 +3104,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 37.3: File-Scoped Complexity Audit on Health Module
+##### Test 35.3: File-Scoped Complexity Audit on Health Module
 **Intent in Plain English**: Check complexity metrics specifically in `packages/atlas-core/src/health.rs`.
 
 **MCP Arguments (JSON)**:
@@ -3276,11 +3132,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 38: `find_similar_functions`
+#### Tool 36: `find_similar_functions`
 **Description**: Finds semantically similar functions for one callable symbol using name, signature, body-shingle, and neighbor overlap.
 **Canonical CLI Parity Command**: `./target/debug/atlas insights similar-functions packages/atlas-core/src/health.rs::fn::classify_graph_store_error --json`
 
-##### Test 38.1: Find Similar Functions to Error Classifier
+##### Test 36.1: Find Similar Functions to Error Classifier
 **Intent in Plain English**: Discover functions across the repo that perform similar error classification or mapping logic.
 
 **MCP Arguments (JSON)**:
@@ -3304,7 +3160,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 38.2: Exclude Same-File Matches for Cross-Crate Deduplication
+##### Test 36.2: Exclude Same-File Matches for Cross-Crate Deduplication
 **Intent in Plain English**: Find similar functions strictly in other files to identify duplicate helper implementations.
 
 **MCP Arguments (JSON)**:
@@ -3328,7 +3184,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 38.3: Enforce Strict Minimum Similarity Score (0.6)
+##### Test 36.3: Enforce Strict Minimum Similarity Score (0.6)
 **Intent in Plain English**: Filter out weak matches by setting `min_score: 0.6`.
 
 **MCP Arguments (JSON)**:
@@ -3354,11 +3210,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 39: `find_duplicates`
+#### Tool 37: `find_duplicates`
 **Description**: Finds exact-normalized and near-duplicate callable bodies using normalized token shingles.
 **Canonical CLI Parity Command**: `./target/debug/atlas insights duplicates --json`
 
-##### Test 39.1: Repo-Wide Near-Duplicate Body Detection
+##### Test 37.1: Repo-Wide Near-Duplicate Body Detection
 **Intent in Plain English**: Scan for duplicated function bodies with `min_score: 0.85`.
 
 **MCP Arguments (JSON)**:
@@ -3382,7 +3238,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 39.2: Scoped Duplicate Scan in Target Files
+##### Test 37.2: Scoped Duplicate Scan in Target Files
 **Intent in Plain English**: Audit specific paired files for duplicated logic.
 
 **MCP Arguments (JSON)**:
@@ -3408,7 +3264,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 39.3: Exclude Test Utilities from Duplicate Audit
+##### Test 37.3: Exclude Test Utilities from Duplicate Audit
 **Intent in Plain English**: Ensure repeated test fixtures do not pollute production duplicate reports.
 
 **MCP Arguments (JSON)**:
@@ -3434,11 +3290,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 40: `infer_modules`
+#### Tool 38: `infer_modules`
 **Description**: Infers module buckets from package ownership, path layout, and dependency structure.
 **Canonical CLI Parity Command**: `./target/debug/atlas insights infer-modules --json`
 
-##### Test 40.1: Infer Workspace Module Architecture
+##### Test 38.1: Infer Workspace Module Architecture
 **Intent in Plain English**: Inspect automatic module segmentation across crates in compact mode.
 
 **MCP Arguments (JSON)**:
@@ -3461,7 +3317,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 40.2: Bounded Module Listing (Limit 5)
+##### Test 38.2: Bounded Module Listing (Limit 5)
 **Intent in Plain English**: Retrieve top 5 module buckets by symbol count.
 
 **MCP Arguments (JSON)**:
@@ -3483,7 +3339,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 40.3: Inspect Module Boundaries and Export Ratios
+##### Test 38.3: Inspect Module Boundaries and Export Ratios
 **Intent in Plain English**: Check public API export ratio for inferred modules.
 
 **MCP Arguments (JSON)**:
@@ -3509,11 +3365,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 41: `label_components`
+#### Tool 39: `label_components`
 **Description**: Labels files and symbols with Atlas component taxonomy such as cli, mcp, parse, review_context, and session_continuity.
 **Canonical CLI Parity Command**: `./target/debug/atlas insights label-components --json`
 
-##### Test 41.1: Label MCP Dispatch File with Taxonomy
+##### Test 39.1: Label MCP Dispatch File with Taxonomy
 **Intent in Plain English**: Verify that `packages/atlas-mcp/src/tools/dispatch.rs` is classified under the `mcp` component taxonomy.
 
 **MCP Arguments (JSON)**:
@@ -3539,7 +3395,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 41.2: Label Core Function with Component Taxonomy
+##### Test 39.2: Label Core Function with Component Taxonomy
 **Intent in Plain English**: Verify component categorization for `classify_graph_store_error`.
 
 **MCP Arguments (JSON)**:
@@ -3563,7 +3419,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 41.3: Bounded Taxonomy Listing
+##### Test 39.3: Bounded Taxonomy Listing
 **Intent in Plain English**: Retrieve labeled components with a small limit.
 
 **MCP Arguments (JSON)**:
@@ -3590,11 +3446,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 
 ### Category: Companion Content & Asset Discovery
-#### Tool 42: `search_files`
+#### Tool 40: `search_files`
 **Description**: Discovers files by name or path glob. Companion lookup for non-code assets (docs, config, SQL, Markdown, templates) after graph resolution.
 **Canonical CLI Parity Command**: `./target/debug/atlas query --files '*error_codes*' --json`
 
-##### Test 42.1: Discover Error Code Documentation by Glob
+##### Test 40.1: Discover Error Code Documentation by Glob
 **Intent in Plain English**: Locate error code reference files across docs and code using glob `*error_codes*`.
 
 **MCP Arguments (JSON)**:
@@ -3618,7 +3474,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 42.2: Subpath-Restricted File Discovery
+##### Test 40.2: Subpath-Restricted File Discovery
 **Intent in Plain English**: Discover Rust source files strictly within `packages/atlas-repo/src`.
 
 **MCP Arguments (JSON)**:
@@ -3642,7 +3498,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 42.3: Case-Sensitive Exact Config Discovery
+##### Test 40.3: Case-Sensitive Exact Config Discovery
 **Intent in Plain English**: Locate top-level `Cargo.toml` files with exact case sensitivity.
 
 **MCP Arguments (JSON)**:
@@ -3668,11 +3524,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 43: `search_content`
+#### Tool 41: `search_content`
 **Description**: Searches file contents by literal string or regex. Use as companion lookup when symbols depend on non-code text (config keys, errors, prompts).
 **Canonical CLI Parity Command**: `./target/debug/atlas query --content 'classify_graph_store_error' --json`
 
-##### Test 43.1: Search Exact Error String in Documentation
+##### Test 41.1: Search Exact Error String in Documentation
 **Intent in Plain English**: Search for documentation of the error code `stale_index` inside `docs` subpath.
 
 **MCP Arguments (JSON)**:
@@ -3696,7 +3552,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 43.2: Search Constant Literal in Core Subpath
+##### Test 41.2: Search Constant Literal in Core Subpath
 **Intent in Plain English**: Locate references to the SQLite database name `worldtree.db` in `packages/atlas-core`.
 
 **MCP Arguments (JSON)**:
@@ -3719,7 +3575,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 43.3: Symbol Search Anti-Pattern Warning Check
+##### Test 41.3: Symbol Search Anti-Pattern Warning Check
 **Intent in Plain English**: Verify that searching code symbol names in search_content returns smart guidance suggesting query_graph or symbol_neighbors.
 
 **MCP Arguments (JSON)**:
@@ -3745,11 +3601,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 44: `read_file_excerpt`
+#### Tool 42: `read_file_excerpt`
 **Description**: Reads bounded file content from a repo-relative path using selector (range, ranges, context) without running full content search.
 **Canonical CLI Parity Command**: `./target/debug/atlas context --file packages/atlas-core/src/health.rs --lines 62-70 --json`
 
-##### Test 44.1: Read Exact Function Line Range
+##### Test 42.1: Read Exact Function Line Range
 **Intent in Plain English**: Read lines 62 to 70 of `packages/atlas-core/src/health.rs` containing `classify_graph_store_error`.
 
 **MCP Arguments (JSON)**:
@@ -3778,7 +3634,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 44.2: Read Multiple Non-Contiguous Line Ranges
+##### Test 42.2: Read Multiple Non-Contiguous Line Ranges
 **Intent in Plain English**: Read two separate function signatures in the same file in a single request.
 
 **MCP Arguments (JSON)**:
@@ -3815,7 +3671,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 44.3: Enforce Strict Line Truncation Limit
+##### Test 42.3: Enforce Strict Line Truncation Limit
 **Intent in Plain English**: Read top of `Cargo.toml` capped at 10 lines.
 
 **MCP Arguments (JSON)**:
@@ -3847,11 +3703,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 45: `read_file_around_match`
+#### Tool 43: `read_file_around_match`
 **Description**: Reads grouped snippets around literal or regex matches inside one repo-relative file, with before/after line context.
 **Canonical CLI Parity Command**: `./target/debug/atlas context --file packages/atlas-core/src/health.rs --match 'classify_graph_store_error' --json`
 
-##### Test 45.1: Retrieve Function Match Context Window
+##### Test 43.1: Retrieve Function Match Context Window
 **Intent in Plain English**: Read 3 lines before and 3 lines after `pub fn classify_graph_store_error` in `packages/atlas-core/src/health.rs`.
 
 **MCP Arguments (JSON)**:
@@ -3879,7 +3735,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 45.2: Regex Match Context Window
+##### Test 43.2: Regex Match Context Window
 **Intent in Plain English**: Retrieve context around regex pattern `fn is_schema_[a-z]+`.
 
 **MCP Arguments (JSON)**:
@@ -3906,7 +3762,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 45.3: Bounded Match Count (Max 2 Matches)
+##### Test 43.3: Bounded Match Count (Max 2 Matches)
 **Intent in Plain English**: Limit occurrences of common token `GraphStoreHealthClass` to 2 snippets.
 
 **MCP Arguments (JSON)**:
@@ -3934,11 +3790,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 46: `get_docs_section`
+#### Tool 44: `get_docs_section`
 **Description**: Resolves a Markdown section from a repo-relative documentation file using heading or line selectors, returning excerpt, heading path, and hash.
 **Canonical CLI Parity Command**: `./target/debug/atlas docs-section docs/error_codes.md '`stale_index`' --json`
 
-##### Test 46.1: Extract Exact Error Code Heading Section
+##### Test 44.1: Extract Exact Error Code Heading Section
 **Intent in Plain English**: Retrieve the exact markdown section for `stale_index` from `docs/error_codes.md`.
 
 **MCP Arguments (JSON)**:
@@ -3967,7 +3823,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 46.2: Extract Documentation by Line Selector
+##### Test 44.2: Extract Documentation by Line Selector
 **Intent in Plain English**: Retrieve the documentation block surrounding line 91.
 
 **MCP Arguments (JSON)**:
@@ -3994,7 +3850,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 46.3: Handle Non-Existent Heading Gracefully
+##### Test 44.3: Handle Non-Existent Heading Gracefully
 **Intent in Plain English**: Confirm querying a missing heading produces a structured candidate or error without crashing.
 
 **MCP Arguments (JSON)**:
@@ -4024,11 +3880,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 47: `search_templates`
+#### Tool 45: `search_templates`
 **Description**: Discovers template files (HTML, Jinja2, Handlebars, Tera, Liquid, Pug) by extension as companion lookup for UI/view dependencies.
 **Canonical CLI Parity Command**: `./target/debug/atlas query --templates --json`
 
-##### Test 47.1: Discover Workspace Template Fixtures
+##### Test 45.1: Discover Workspace Template Fixtures
 **Intent in Plain English**: Find template files across the repo without subpath constraint.
 
 **MCP Arguments (JSON)**:
@@ -4050,7 +3906,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 47.2: Filter Templates by Kind 'html'
+##### Test 45.2: Filter Templates by Kind 'html'
 **Intent in Plain English**: Restrict template discovery strictly to HTML templates.
 
 **MCP Arguments (JSON)**:
@@ -4072,7 +3928,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 47.3: Subpath Scoped Template Discovery
+##### Test 45.3: Subpath Scoped Template Discovery
 **Intent in Plain English**: Search for templates strictly inside `packages/atlas-parser`.
 
 **MCP Arguments (JSON)**:
@@ -4097,11 +3953,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 48: `search_text_assets`
+#### Tool 46: `search_text_assets`
 **Description**: Discovers SQL, config (TOML/YAML/INI), environment (.env), and prompt files as non-code dependency companions.
 **Canonical CLI Parity Command**: `./target/debug/atlas query --text-assets --json`
 
-##### Test 48.1: Discover Repository Configuration Files
+##### Test 46.1: Discover Repository Configuration Files
 **Intent in Plain English**: Find TOML and YAML configuration files across the repository.
 
 **MCP Arguments (JSON)**:
@@ -4124,7 +3980,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 48.2: Discover GitHub Action Workflows
+##### Test 46.2: Discover GitHub Action Workflows
 **Intent in Plain English**: Find YAML workflows in `.github` subpath.
 
 **MCP Arguments (JSON)**:
@@ -4146,7 +4002,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 48.3: Bounded Asset Discovery (Max 10)
+##### Test 46.3: Bounded Asset Discovery (Max 10)
 **Intent in Plain English**: Limit asset search results to 10 entries.
 
 **MCP Arguments (JSON)**:
@@ -4174,11 +4030,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 
 ### Category: Session Continuity, Event Ledger & Memory Operations
-#### Tool 49: `wake_up`
+#### Tool 47: `wake_up`
 **Description**: Bounded session-start recall for hookless agents: assembles compact context pack from resume snapshot, decision memory, changed files, and graph readiness.
 **Canonical CLI Parity Command**: `./target/debug/atlas wake-up --json`
 
-##### Test 49.1: Cold Session Start Recall Pack Assembly
+##### Test 47.1: Cold Session Start Recall Pack Assembly
 **Intent in Plain English**: Initialize a fresh agent session and verify the generated context pack contains graph readiness and recent changes.
 
 **MCP Arguments (JSON)**:
@@ -4200,7 +4056,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 49.2: Topic-Conditioned Wake Up
+##### Test 47.2: Topic-Conditioned Wake Up
 **Intent in Plain English**: Wake up an agent session conditioned on a specific work topic (`mcp_refactoring`).
 
 **MCP Arguments (JSON)**:
@@ -4222,7 +4078,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 49.3: Bounded Wake-Up Item Cap
+##### Test 47.3: Bounded Wake-Up Item Cap
 **Intent in Plain English**: Enforce a 5-item maximum on context items to conserve startup tokens.
 
 **MCP Arguments (JSON)**:
@@ -4247,11 +4103,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 50: `get_session_status`
+#### Tool 48: `get_session_status`
 **Description**: Returns status of current MCP session: identity, event count, last compaction time, and resume snapshot presence.
 **Canonical CLI Parity Command**: `./target/debug/atlas session status --json`
 
-##### Test 50.1: Inspect Active Session Status
+##### Test 48.1: Inspect Active Session Status
 **Intent in Plain English**: Verify that the current MCP session is active and tracks event counters.
 
 **MCP Arguments (JSON)**:
@@ -4273,7 +4129,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 50.2: Verify Compaction Metadata
+##### Test 48.2: Verify Compaction Metadata
 **Intent in Plain English**: Check whether previous compactions ran and when last curation occurred.
 
 **MCP Arguments (JSON)**:
@@ -4293,7 +4149,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 50.3: Specific Session ID Query
+##### Test 48.3: Specific Session ID Query
 **Intent in Plain English**: Query status of an explicit named test session.
 
 **MCP Arguments (JSON)**:
@@ -4318,11 +4174,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 51: `compact_session`
+#### Tool 49: `compact_session`
 **Description**: Compacts and curates the session event ledger: removes stale events, deduplicates outputs, and promotes high-value events.
 **Canonical CLI Parity Command**: `./target/debug/atlas session compact --json`
 
-##### Test 51.1: Trigger Session Event Ledger Compaction
+##### Test 49.1: Trigger Session Event Ledger Compaction
 **Intent in Plain English**: Curate the active session event ledger to evict low-value telemetry events.
 
 **MCP Arguments (JSON)**:
@@ -4343,7 +4199,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 51.2: Compaction Idempotency Verification
+##### Test 49.2: Compaction Idempotency Verification
 **Intent in Plain English**: Confirm calling `compact_session` repeatedly on an unchanged ledger is safe and changes nothing.
 
 **MCP Arguments (JSON)**:
@@ -4363,7 +4219,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 51.3: Session-Scoped Compaction
+##### Test 49.3: Session-Scoped Compaction
 **Intent in Plain English**: Compact a specific target session ID.
 
 **MCP Arguments (JSON)**:
@@ -4388,11 +4244,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 52: `resume_session`
+#### Tool 50: `resume_session`
 **Description**: Retrieves and optionally consumes the resume snapshot for current session, building a snapshot on demand if absent.
 **Canonical CLI Parity Command**: `./target/debug/atlas session resume --json`
 
-##### Test 52.1: Inspect Resume Snapshot Without Consuming
+##### Test 50.1: Inspect Resume Snapshot Without Consuming
 **Intent in Plain English**: Retrieve session resume snapshot while setting `mark_consumed: false`.
 
 **MCP Arguments (JSON)**:
@@ -4415,7 +4271,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 52.2: Consume and Invalidate Resume Snapshot
+##### Test 50.2: Consume and Invalidate Resume Snapshot
 **Intent in Plain English**: Read and atomically mark the resume snapshot as consumed.
 
 **MCP Arguments (JSON)**:
@@ -4438,7 +4294,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 52.3: On-Demand Snapshot Construction
+##### Test 50.3: On-Demand Snapshot Construction
 **Intent in Plain English**: Verify that when no snapshot exists, one is synthesized on demand from recent session events.
 
 **MCP Arguments (JSON)**:
@@ -4461,11 +4317,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 53: `record_session_event`
+#### Tool 51: `record_session_event`
 **Description**: Session capture for hosts without native LLM hooks, mirroring atlas hook <event>: session-start, user-prompt, tool-use, stop, file-changed.
 **Canonical CLI Parity Command**: `./target/debug/atlas hook user-prompt --json`
 
-##### Test 53.1: Record User Prompt Event
+##### Test 51.1: Record User Prompt Event
 **Intent in Plain English**: Record incoming user prompt in the session event ledger.
 
 **MCP Arguments (JSON)**:
@@ -4491,7 +4347,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 53.2: Record Post-Tool-Use Telemetry Event
+##### Test 51.2: Record Post-Tool-Use Telemetry Event
 **Intent in Plain English**: Log successful tool execution event.
 
 **MCP Arguments (JSON)**:
@@ -4518,7 +4374,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 53.3: Record File Changed Event Triggering Freshness Check
+##### Test 51.3: Record File Changed Event Triggering Freshness Check
 **Intent in Plain English**: Simulate editor file modification event.
 
 **MCP Arguments (JSON)**:
@@ -4546,11 +4402,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 54: `save_context_artifact`
+#### Tool 52: `save_context_artifact`
 **Description**: Indexes and stores large tool outputs or context payloads, returning a source_id pointer for large content or a raw preview for small content.
 **Canonical CLI Parity Command**: `./target/debug/atlas session save-artifact --json`
 
-##### Test 54.1: Store Large Payload Returning Source Pointer
+##### Test 52.1: Store Large Payload Returning Source Pointer
 **Intent in Plain English**: Persist a large JSON payload and verify Atlas returns a compact `source_id` pointer instead of inlining the text.
 
 **MCP Arguments (JSON)**:
@@ -4576,7 +4432,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 54.2: Store Small Note with Inline Preview
+##### Test 52.2: Store Small Note with Inline Preview
 **Intent in Plain English**: Persist small string and verify compact preview handling.
 
 **MCP Arguments (JSON)**:
@@ -4599,7 +4455,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 54.3: Scoped Artifact Storage with Source Type
+##### Test 52.3: Scoped Artifact Storage with Source Type
 **Intent in Plain English**: Store artifact tagged with `source_type: 'tool_output'`.
 
 **MCP Arguments (JSON)**:
@@ -4626,11 +4482,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 55: `read_saved_context`
+#### Tool 53: `read_saved_context`
 **Description**: Retrieves the full content of a saved artifact by source_id, supporting paging via chunk_offset and max_bytes.
 **Canonical CLI Parity Command**: `./target/debug/atlas session read-artifact test_id --json`
 
-##### Test 55.1: Read Saved Artifact Content by Pointer
+##### Test 53.1: Read Saved Artifact Content by Pointer
 **Intent in Plain English**: Fetch saved payload using the `source_id` returned from `save_context_artifact`.
 
 **MCP Arguments (JSON)**:
@@ -4653,7 +4509,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 55.2: Bounded Paged Retrieval with Max Bytes
+##### Test 53.2: Bounded Paged Retrieval with Max Bytes
 **Intent in Plain English**: Page through a large artifact using `max_bytes: 100` and `chunk_offset: 0`.
 
 **MCP Arguments (JSON)**:
@@ -4677,7 +4533,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 55.3: Graceful Handling of Missing Artifact
+##### Test 53.3: Graceful Handling of Missing Artifact
 **Intent in Plain English**: Verify requesting a non-existent artifact produces a structured not-found error.
 
 **MCP Arguments (JSON)**:
@@ -4702,11 +4558,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 56: `search_saved_context`
+#### Tool 54: `search_saved_context`
 **Description**: Searches previously saved artifacts in the content store using BM25 + trigram fallback, returning preview matches.
 **Canonical CLI Parity Command**: `./target/debug/atlas session search 'graph' --json`
 
-##### Test 56.1: BM25 Search Over Saved Session Artifacts
+##### Test 54.1: BM25 Search Over Saved Session Artifacts
 **Intent in Plain English**: Search for saved analysis outputs mentioning 'graph analysis'.
 
 **MCP Arguments (JSON)**:
@@ -4729,7 +4585,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 56.2: Bounded Search Results (Limit 3)
+##### Test 54.2: Bounded Search Results (Limit 3)
 **Intent in Plain English**: Cap search results to top 3 matches.
 
 **MCP Arguments (JSON)**:
@@ -4752,7 +4608,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 56.3: Filter Saved Context by Source Type
+##### Test 54.3: Filter Saved Context by Source Type
 **Intent in Plain English**: Search strictly artifacts marked as `tool_output`.
 
 **MCP Arguments (JSON)**:
@@ -4778,11 +4634,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 57: `cross_session_search`
+#### Tool 55: `cross_session_search`
 **Description**: Searches saved context artifacts across all sessions for this repo, returning query, sessions, preview matches, and summary.
 **Canonical CLI Parity Command**: `./target/debug/atlas session search --cross-session 'error' --json`
 
-##### Test 57.1: Cross-Session Context Recall
+##### Test 55.1: Cross-Session Context Recall
 **Intent in Plain English**: Search historical session artifacts for previous mentions of `classify_graph_store_error`.
 
 **MCP Arguments (JSON)**:
@@ -4805,7 +4661,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 57.2: Bounded Cross-Session Recall (Limit 5)
+##### Test 55.2: Bounded Cross-Session Recall (Limit 5)
 **Intent in Plain English**: Cap cross-session search to 5 items.
 
 **MCP Arguments (JSON)**:
@@ -4828,7 +4684,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 57.3: Agent Partitioned Cross-Session Search
+##### Test 55.3: Agent Partitioned Cross-Session Search
 **Intent in Plain English**: Search across sessions created by a specific agent ID.
 
 **MCP Arguments (JSON)**:
@@ -4854,11 +4710,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 58: `get_context_stats`
+#### Tool 56: `get_context_stats`
 **Description**: Returns storage statistics for current (or specified) session: event count, saved source count, chunk count, and DB paths.
 **Canonical CLI Parity Command**: `./target/debug/atlas session stats --json`
 
-##### Test 58.1: Inspect Active Session Storage Footprint
+##### Test 56.1: Inspect Active Session Storage Footprint
 **Intent in Plain English**: Inspect database paths and counts for events, saved sources, and chunks.
 
 **MCP Arguments (JSON)**:
@@ -4880,7 +4736,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 58.2: Inspect Target Session Storage Stats
+##### Test 56.2: Inspect Target Session Storage Stats
 **Intent in Plain English**: Query stats for a specific historical session.
 
 **MCP Arguments (JSON)**:
@@ -4902,7 +4758,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 58.3: Chunk and Token Metrics Verification
+##### Test 56.3: Chunk and Token Metrics Verification
 **Intent in Plain English**: Verify chunk counts reflect indexed text asset segments.
 
 **MCP Arguments (JSON)**:
@@ -4925,11 +4781,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 59: `purge_saved_context`
+#### Tool 57: `purge_saved_context`
 **Description**: Deletes saved artifacts. Provide session_id to delete artifacts for that session, or omit to apply age-based cleanup (default 30 days).
 **Canonical CLI Parity Command**: `./target/debug/atlas session purge --json`
 
-##### Test 59.1: Age-Based Context Cleanup (Keep Last 30 Days)
+##### Test 57.1: Age-Based Context Cleanup (Keep Last 30 Days)
 **Intent in Plain English**: Purge stale temporary artifacts older than 30 days.
 
 **MCP Arguments (JSON)**:
@@ -4952,7 +4808,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 59.2: Purge Ephemeral Test Session Artifacts
+##### Test 57.2: Purge Ephemeral Test Session Artifacts
 **Intent in Plain English**: Delete all artifacts belonging to a completed test session.
 
 **MCP Arguments (JSON)**:
@@ -4974,7 +4830,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 59.3: Safe Deletion Boundary Verification
+##### Test 57.3: Safe Deletion Boundary Verification
 **Intent in Plain English**: Ensure keep_days 365 produces 0 deletions on fresh repository.
 
 **MCP Arguments (JSON)**:
@@ -4999,11 +4855,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 60: `get_global_memory`
+#### Tool 58: `get_global_memory`
 **Description**: Returns cross-session global memory summary for repo: frequently-accessed symbols/files and recurring workflow patterns.
 **Canonical CLI Parity Command**: `./target/debug/atlas memory global --json`
 
-##### Test 60.1: Inspect Cross-Session Global Memory Summary
+##### Test 58.1: Inspect Cross-Session Global Memory Summary
 **Intent in Plain English**: Retrieve repository-wide hot symbols, frequently accessed files, and recurring patterns.
 
 **MCP Arguments (JSON)**:
@@ -5024,7 +4880,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 60.2: Context-Conditioned Global Memory Matching
+##### Test 58.2: Context-Conditioned Global Memory Matching
 **Intent in Plain English**: Provide focus symbols to retrieve relevant historical sessions.
 
 **MCP Arguments (JSON)**:
@@ -5051,7 +4907,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 60.3: Bounded Global Memory Limit
+##### Test 58.3: Bounded Global Memory Limit
 **Intent in Plain English**: Cap global memory results to 5 entries.
 
 **MCP Arguments (JSON)**:
@@ -5076,11 +4932,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 61: `memory_store`
+#### Tool 59: `memory_store`
 **Description**: Stores a memory record for this repo through the shared memory service, returning id, scope, importance, and source_id.
 **Canonical CLI Parity Command**: `./target/debug/atlas memory store --topic architecture --json`
 
-##### Test 61.1: Store Project-Scoped Architecture Memory
+##### Test 59.1: Store Project-Scoped Architecture Memory
 **Intent in Plain English**: Store an architectural invariant regarding health error classification.
 
 **MCP Arguments (JSON)**:
@@ -5108,7 +4964,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 61.2: Store Session-Scoped Temporary Memory
+##### Test 59.2: Store Session-Scoped Temporary Memory
 **Intent in Plain English**: Store an ephemeral note for current session.
 
 **MCP Arguments (JSON)**:
@@ -5133,7 +4989,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 61.3: Store Memory with Linked Patch File
+##### Test 59.3: Store Memory with Linked Patch File
 **Intent in Plain English**: Store a memory linked directly to a target file path.
 
 **MCP Arguments (JSON)**:
@@ -5161,11 +5017,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 62: `memory_recall`
+#### Tool 60: `memory_recall`
 **Description**: Recalls memories for this repo with lexical ranking, defaults, and visibility rules. Exact topic matches rank first.
 **Canonical CLI Parity Command**: `./target/debug/atlas memory recall 'error' --json`
 
-##### Test 62.1: Recall Memories by Lexical Query
+##### Test 60.1: Recall Memories by Lexical Query
 **Intent in Plain English**: Search persisted memories for 'classify_graph_store_error'.
 
 **MCP Arguments (JSON)**:
@@ -5189,7 +5045,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 62.2: Topic-Filtered Memory Recall
+##### Test 60.2: Topic-Filtered Memory Recall
 **Intent in Plain English**: Query memories filtered strictly to topic 'architecture'.
 
 **MCP Arguments (JSON)**:
@@ -5212,7 +5068,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 62.3: Shared Scope Recall (Project + Global Only)
+##### Test 60.3: Shared Scope Recall (Project + Global Only)
 **Intent in Plain English**: Recall only shared memories while excluding ephemeral session notes.
 
 **MCP Arguments (JSON)**:
@@ -5238,11 +5094,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 63: `memory_ops`
+#### Tool 61: `memory_ops`
 **Description**: Returns bounded typed-operator history for one memory row (store, update, evict). Read-only parity with atlas memory ops.
 **Canonical CLI Parity Command**: `./target/debug/atlas memory ops mem_001 --json`
 
-##### Test 63.1: Inspect Memory Operator Mutation History
+##### Test 61.1: Inspect Memory Operator Mutation History
 **Intent in Plain English**: Inspect audit history of operators applied to a specific memory ID.
 
 **MCP Arguments (JSON)**:
@@ -5265,7 +5121,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 63.2: Verify Audit Trail Fields
+##### Test 61.2: Verify Audit Trail Fields
 **Intent in Plain English**: Confirm memory operator events carry operator identity and timestamps.
 
 **MCP Arguments (JSON)**:
@@ -5287,7 +5143,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 63.3: Missing ID Non-Error Handling
+##### Test 61.3: Missing ID Non-Error Handling
 **Intent in Plain English**: Verify nonexistent memory ID returns `found: false` instead of an error payload.
 
 **MCP Arguments (JSON)**:
@@ -5312,11 +5168,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 64: `search_decisions`
+#### Tool 62: `search_decisions`
 **Description**: Searches persisted decision memory for prior conclusions, linked evidence, and artifact references.
 **Canonical CLI Parity Command**: `./target/debug/atlas memory decisions 'health' --json`
 
-##### Test 64.1: Search Decisions on Architectural Boundaries
+##### Test 62.1: Search Decisions on Architectural Boundaries
 **Intent in Plain English**: Search previous engineering decisions regarding health checks and readiness.
 
 **MCP Arguments (JSON)**:
@@ -5339,7 +5195,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 64.2: Bounded Decision Query (Limit 3)
+##### Test 62.2: Bounded Decision Query (Limit 3)
 **Intent in Plain English**: Retrieve at most 3 historical decision records.
 
 **MCP Arguments (JSON)**:
@@ -5362,7 +5218,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 64.3: Empty Query Handling
+##### Test 62.3: Empty Query Handling
 **Intent in Plain English**: Search for a concept with zero decisions recorded.
 
 **MCP Arguments (JSON)**:
@@ -5388,11 +5244,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 65: `experience_inspect`
+#### Tool 63: `experience_inspect`
 **Description**: Inspects query-conditioned experience edges touching one atlas:// URI in session.db.
 **Canonical CLI Parity Command**: `./target/debug/atlas experience 'atlas://health/status' --json`
 
-##### Test 65.1: Inspect Experience Edges for Symbol URI
+##### Test 63.1: Inspect Experience Edges for Symbol URI
 **Intent in Plain English**: Inspect dynamic experience edges touching `atlas://repo/current/symbol/packages/atlas-core/src/health.rs::fn::classify_graph_store_error`.
 
 **MCP Arguments (JSON)**:
@@ -5415,7 +5271,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 65.2: Directional Inbound Experience Inspection
+##### Test 63.2: Directional Inbound Experience Inspection
 **Intent in Plain English**: Filter experience edges to inbound references for a file URI.
 
 **MCP Arguments (JSON)**:
@@ -5438,7 +5294,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 65.3: Bounded Experience Edge Limit
+##### Test 63.3: Bounded Experience Edge Limit
 **Intent in Plain English**: Cap inspected experience edges to 5.
 
 **MCP Arguments (JSON)**:
@@ -5464,11 +5320,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 66: `feedback_record`
+#### Tool 64: `feedback_record`
 **Description**: Records a correction when an analysis prediction was wrong, stored as deterministic correction memory to adjust future confidence.
 **Canonical CLI Parity Command**: `./target/debug/atlas feedback record --json`
 
-##### Test 66.1: Record Refactoring Safety Prediction Correction
+##### Test 64.1: Record Refactoring Safety Prediction Correction
 **Intent in Plain English**: Record that `classify_graph_store_error` was predicted risky but determined safe due to internal testing harness usage.
 
 **MCP Arguments (JSON)**:
@@ -5496,7 +5352,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 66.2: Record Dead Code Candidate False Positive
+##### Test 64.2: Record Dead Code Candidate False Positive
 **Intent in Plain English**: Record feedback that a flagged dead code candidate is actually invoked via macro dispatch.
 
 **MCP Arguments (JSON)**:
@@ -5523,7 +5379,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 66.3: Enforce Required Prediction and Actual Fields
+##### Test 64.3: Enforce Required Prediction and Actual Fields
 **Intent in Plain English**: Confirm the server enforces the required `predicted` and `actual` parameters.
 
 **MCP Arguments (JSON)**:
@@ -5551,11 +5407,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 
 ### Category: Memoir Knowledge Graph Layer
-#### Tool 67: `memoir_create`
+#### Tool 65: `memoir_create`
 **Description**: Creates a memoir concept graph in the continuity database as a separate knowledge layer from the code graph.
 **Canonical CLI Parity Command**: `./target/debug/atlas memoir create ArchitectureConcepts --json`
 
-##### Test 67.1: Create Project-Scoped Architecture Memoir Graph
+##### Test 65.1: Create Project-Scoped Architecture Memoir Graph
 **Intent in Plain English**: Create a new memoir concept graph named 'ArchitectureConcepts' to store conceptual architectural models.
 
 **MCP Arguments (JSON)**:
@@ -5581,7 +5437,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 67.2: Duplicate Graph Name Deterministic Rejection
+##### Test 65.2: Duplicate Graph Name Deterministic Rejection
 **Intent in Plain English**: Verify that creating a graph with an existing name in the same scope fails deterministically.
 
 **MCP Arguments (JSON)**:
@@ -5604,7 +5460,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 67.3: Create Session-Scoped Ephemeral Memoir Graph
+##### Test 65.3: Create Session-Scoped Ephemeral Memoir Graph
 **Intent in Plain English**: Create an ephemeral memoir graph scoped strictly to the current session.
 
 **MCP Arguments (JSON)**:
@@ -5630,11 +5486,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 68: `memoir_add_concept`
+#### Tool 66: `memoir_add_concept`
 **Description**: Adds a concept to an existing memoir graph. Missing graphs are never auto-created. Concept names are unique per graph.
 **Canonical CLI Parity Command**: `./target/debug/atlas memoir add-concept ArchitectureConcepts HealthDiagnostics --json`
 
-##### Test 68.1: Add Health Diagnostics Concept to Architecture Graph
+##### Test 66.1: Add Health Diagnostics Concept to Architecture Graph
 **Intent in Plain English**: Add concept 'HealthDiagnostics' with rich description to the 'ArchitectureConcepts' graph.
 
 **MCP Arguments (JSON)**:
@@ -5659,7 +5515,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 68.2: Add Related Readiness Concept
+##### Test 66.2: Add Related Readiness Concept
 **Intent in Plain English**: Add second concept 'ReadinessVerification' to enable conceptual linking.
 
 **MCP Arguments (JSON)**:
@@ -5683,7 +5539,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 68.3: Missing Graph Auto-Creation Rejection
+##### Test 66.3: Missing Graph Auto-Creation Rejection
 **Intent in Plain English**: Confirm adding a concept to a nonexistent graph fails without auto-creating the graph.
 
 **MCP Arguments (JSON)**:
@@ -5710,11 +5566,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 69: `memoir_link`
+#### Tool 67: `memoir_link`
 **Description**: Links two memoir concepts with a controlled relation type (e.g. depends_on, relates_to). Rejects unknown relation types.
 **Canonical CLI Parity Command**: `./target/debug/atlas memoir link ArchitectureConcepts Readiness Health depends_on --json`
 
-##### Test 69.1: Link Concepts with Controlled 'depends_on' Relation
+##### Test 67.1: Link Concepts with Controlled 'depends_on' Relation
 **Intent in Plain English**: Establish directional link from 'ReadinessVerification' to 'HealthDiagnostics'.
 
 **MCP Arguments (JSON)**:
@@ -5741,7 +5597,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 69.2: Normalize Alias Relation 'replaced_by'
+##### Test 67.2: Normalize Alias Relation 'replaced_by'
 **Intent in Plain English**: Verify that relation alias `replaced_by` reverses direction and normalizes properly.
 
 **MCP Arguments (JSON)**:
@@ -5767,7 +5623,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 69.3: Reject Unknown Relation Type
+##### Test 67.3: Reject Unknown Relation Type
 **Intent in Plain English**: Verify that arbitrary unsupported relation types are rejected with a controlled relation list.
 
 **MCP Arguments (JSON)**:
@@ -5795,11 +5651,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 70: `memoir_inspect`
+#### Tool 68: `memoir_inspect`
 **Description**: Inspects a concept's bounded memoir neighbourhood with canonical edge directions, clamped depth (1..=5), and node caps.
 **Canonical CLI Parity Command**: `./target/debug/atlas memoir inspect ArchitectureConcepts HealthDiagnostics --json`
 
-##### Test 70.1: Inspect Concept Immediate Neighborhood (Depth 1)
+##### Test 68.1: Inspect Concept Immediate Neighborhood (Depth 1)
 **Intent in Plain English**: Inspect connected concepts, edge directions, and confidence scores for 'HealthDiagnostics'.
 
 **MCP Arguments (JSON)**:
@@ -5824,7 +5680,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 70.2: Multi-Hop Traversal Clamped to Depth Ceiling
+##### Test 68.2: Multi-Hop Traversal Clamped to Depth Ceiling
 **Intent in Plain English**: Verify traversal depth is strictly clamped within 1..=5.
 
 **MCP Arguments (JSON)**:
@@ -5848,7 +5704,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 70.3: Filter Neighborhood by Relation Type
+##### Test 68.3: Filter Neighborhood by Relation Type
 **Intent in Plain English**: Inspect only `depends_on` relations touching the concept.
 
 **MCP Arguments (JSON)**:
@@ -5877,11 +5733,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 
 ### Category: Overview Analysis & Caching
-#### Tool 71: `overview_export`
+#### Tool 69: `overview_export`
 **Description**: Exports bounded overview analysis packets for external LLM or human analysis with subject identity, commit SHA, graph freshness, and evidence.
 **Canonical CLI Parity Command**: `./target/debug/atlas overview export packages/atlas-core/src/health.rs --json`
 
-##### Test 71.1: Export Overview Packet for Core Health File
+##### Test 69.1: Export Overview Packet for Core Health File
 **Intent in Plain English**: Export a bounded overview packet for `packages/atlas-core/src/health.rs` with token budget 2,000.
 
 **MCP Arguments (JSON)**:
@@ -5906,7 +5762,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 71.2: Export Overview for Changed Files Only
+##### Test 69.2: Export Overview for Changed Files Only
 **Intent in Plain English**: Export analysis packets strictly for modified files.
 
 **MCP Arguments (JSON)**:
@@ -5929,7 +5785,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 71.3: Export Symbol Overview with Callers and Callees
+##### Test 69.3: Export Symbol Overview with Callers and Callees
 **Intent in Plain English**: Include relational call boundaries in export packet.
 
 **MCP Arguments (JSON)**:
@@ -5956,11 +5812,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 72: `overview_ingest`
+#### Tool 70: `overview_ingest`
 **Description**: Ingests externally produced overview analysis JSON, validating packet IDs, subject identity, commit SHA, line spans, and redaction.
 **Canonical CLI Parity Command**: `./target/debug/atlas overview ingest overview.json --json`
 
-##### Test 72.1: Ingest Valid Overview Analysis Packet
+##### Test 70.1: Ingest Valid Overview Analysis Packet
 **Intent in Plain English**: Persist an externally generated overview summary for `packages/atlas-core/src/health.rs`.
 
 **MCP Arguments (JSON)**:
@@ -5987,7 +5843,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 72.2: Reject Malformed Overview Payload
+##### Test 70.2: Reject Malformed Overview Payload
 **Intent in Plain English**: Verify that missing canonical subject or corrupt schemas are rejected.
 
 **MCP Arguments (JSON)**:
@@ -6011,7 +5867,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 72.3: Large Body Overview Ingestion Routing
+##### Test 70.3: Large Body Overview Ingestion Routing
 **Intent in Plain English**: Verify large body routing persists via content store.
 
 **MCP Arguments (JSON)**:
@@ -6036,11 +5892,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 73: `overview_search`
+#### Tool 71: `overview_search`
 **Description**: Searches overview memory with FTS plus explicit ranking (exact subject, title, freshness, confidence, recency).
 **Canonical CLI Parity Command**: `./target/debug/atlas overview search 'error' --json`
 
-##### Test 73.1: Full-Text Search Overview Memory
+##### Test 71.1: Full-Text Search Overview Memory
 **Intent in Plain English**: Search persisted overview summaries for 'error classification'.
 
 **MCP Arguments (JSON)**:
@@ -6064,7 +5920,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 73.2: Package-Scoped Overview Search
+##### Test 71.2: Package-Scoped Overview Search
 **Intent in Plain English**: Restrict overview search to `atlas-core` package.
 
 **MCP Arguments (JSON)**:
@@ -6087,7 +5943,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 73.3: Filter by Freshness State
+##### Test 71.3: Filter by Freshness State
 **Intent in Plain English**: Exclude stale overviews by setting `freshness: 'fresh'`.
 
 **MCP Arguments (JSON)**:
@@ -6113,11 +5969,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 74: `overview_show`
+#### Tool 72: `overview_show`
 **Description**: Shows one overview record by subject id, qualified name, canonical file path, package, or module.
 **Canonical CLI Parity Command**: `./target/debug/atlas overview show packages/atlas-core/src/health.rs --json`
 
-##### Test 74.1: Show Overview by Canonical File Path
+##### Test 72.1: Show Overview by Canonical File Path
 **Intent in Plain English**: Retrieve overview for `packages/atlas-core/src/health.rs`.
 
 **MCP Arguments (JSON)**:
@@ -6140,7 +5996,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 74.2: Show Overview by Qualified Symbol Name
+##### Test 72.2: Show Overview by Qualified Symbol Name
 **Intent in Plain English**: Show overview for `packages/atlas-core/src/health.rs::fn::classify_graph_store_error`.
 
 **MCP Arguments (JSON)**:
@@ -6162,7 +6018,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 74.3: Ambiguous Subject Graceful Candidate List
+##### Test 72.3: Ambiguous Subject Graceful Candidate List
 **Intent in Plain English**: Verify ambiguous query returns candidate list rather than crashing.
 
 **MCP Arguments (JSON)**:
@@ -6187,11 +6043,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 75: `overview_refresh_plan`
+#### Tool 73: `overview_refresh_plan`
 **Description**: Plans overview freshness refresh after changes: reports directly stale, possibly stale, and orphaned subjects with export commands.
 **Canonical CLI Parity Command**: `./target/debug/atlas overview refresh-plan --json`
 
-##### Test 75.1: Read-Only Overview Freshness Inspection
+##### Test 73.1: Read-Only Overview Freshness Inspection
 **Intent in Plain English**: Inspect stale overview subjects without modifying state (`apply: false`).
 
 **MCP Arguments (JSON)**:
@@ -6214,7 +6070,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 75.2: Apply Overview Freshness Plan
+##### Test 73.2: Apply Overview Freshness Plan
 **Intent in Plain English**: Apply refresh plan to mark stale overview records.
 
 **MCP Arguments (JSON)**:
@@ -6236,7 +6092,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 75.3: Plan Refresh Relative to Base Commit
+##### Test 73.3: Plan Refresh Relative to Base Commit
 **Intent in Plain English**: Evaluate overview freshness delta since `HEAD~1`.
 
 **MCP Arguments (JSON)**:
@@ -6263,11 +6119,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 
 ### Category: MCP Registry, Introspection & Tool Documentation
-#### Tool 76: `tool_list`
+#### Tool 74: `tool_list`
 **Description**: Lists visible exported MCP tools in compact runtime inventory form with input schemas and result contracts.
 **Canonical CLI Parity Command**: `./target/debug/atlas man --list --json`
 
-##### Test 76.1: Full Tool Inventory Enumeration
+##### Test 74.1: Full Tool Inventory Enumeration
 **Intent in Plain English**: Enumerate all exported MCP tools to verify total registry size and completeness.
 
 **MCP Arguments (JSON)**:
@@ -6288,7 +6144,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 76.2: Filter Tool Inventory by Category 'graph'
+##### Test 74.2: Filter Tool Inventory by Category 'graph'
 **Intent in Plain English**: List only tools belonging to the 'graph' category.
 
 **MCP Arguments (JSON)**:
@@ -6310,7 +6166,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 76.3: Verify Result Contract Annotations
+##### Test 74.3: Verify Result Contract Annotations
 **Intent in Plain English**: Verify that all tools declare `stable-object` result contract.
 
 **MCP Arguments (JSON)**:
@@ -6333,11 +6189,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 77: `tool_search`
+#### Tool 75: `tool_search`
 **Description**: Searches visible exported MCP tools by name, title, or description with typo-tolerant fuzzy matching.
 **Canonical CLI Parity Command**: `./target/debug/atlas man --search 'trace' --json`
 
-##### Test 77.1: Typo-Tolerant Tool Discovery
+##### Test 75.1: Typo-Tolerant Tool Discovery
 **Intent in Plain English**: Search for 'travers' and verify `traverse_graph` ranks at the top.
 
 **MCP Arguments (JSON)**:
@@ -6360,7 +6216,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 77.2: Search by Functional Intent (Dead Code)
+##### Test 75.2: Search by Functional Intent (Dead Code)
 **Intent in Plain English**: Search for 'dead code detection'.
 
 **MCP Arguments (JSON)**:
@@ -6382,7 +6238,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 77.3: Search Call Chain Tracing Tools
+##### Test 75.3: Search Call Chain Tracing Tools
 **Intent in Plain English**: Search for 'trace callers and callees'.
 
 **MCP Arguments (JSON)**:
@@ -6407,11 +6263,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 78: `tool_help`
+#### Tool 76: `tool_help`
 **Description**: Returns runtime manual documentation for one visible exported MCP tool by exact name.
 **Canonical CLI Parity Command**: `./target/debug/atlas man trace --json`
 
-##### Test 78.1: Retrieve Runtime Help for Graph Traversal
+##### Test 76.1: Retrieve Runtime Help for Graph Traversal
 **Intent in Plain English**: Fetch documentation and parameter guidance for `traverse_graph`.
 
 **MCP Arguments (JSON)**:
@@ -6435,7 +6291,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 78.2: Retrieve Help for trace_calls Tool
+##### Test 76.2: Retrieve Help for trace_calls Tool
 **Intent in Plain English**: Fetch parameter documentation for `trace_calls`.
 
 **MCP Arguments (JSON)**:
@@ -6457,7 +6313,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 78.3: Graceful Help Error for Unknown Tool
+##### Test 76.3: Graceful Help Error for Unknown Tool
 **Intent in Plain English**: Request help for non-existent tool name.
 
 **MCP Arguments (JSON)**:
@@ -6482,11 +6338,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 79: `man`
+#### Tool 77: `man`
 **Description**: Returns authoritative runtime manual documentation for one visible exported MCP tool (requires namespace='mcp' and tool_name).
 **Canonical CLI Parity Command**: `./target/debug/atlas man trace --json`
 
-##### Test 79.1: Authoritative Manual for query_graph
+##### Test 77.1: Authoritative Manual for query_graph
 **Intent in Plain English**: Retrieve authoritative manual pages for `query_graph` under namespace 'mcp'.
 
 **MCP Arguments (JSON)**:
@@ -6510,7 +6366,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 79.2: Authoritative Manual for symbol_neighbors
+##### Test 77.2: Authoritative Manual for symbol_neighbors
 **Intent in Plain English**: Retrieve manual documentation for `symbol_neighbors`.
 
 **MCP Arguments (JSON)**:
@@ -6533,7 +6389,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 79.3: Enforce Required MCP Namespace Parameter
+##### Test 77.3: Enforce Required MCP Namespace Parameter
 **Intent in Plain English**: Verify that non-'mcp' namespaces are rejected.
 
 **MCP Arguments (JSON)**:
@@ -6559,11 +6415,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
-#### Tool 80: `repo_registry`
+#### Tool 78: `repo_registry`
 **Description**: Inspects persisted multi-repo registry metadata under .atlas/, including registered repo identities, relationship kinds, and trust states.
 **Canonical CLI Parity Command**: `./target/debug/atlas repo list --json`
 
-##### Test 80.1: Inspect Workspace Repository Identity
+##### Test 78.1: Inspect Workspace Repository Identity
 **Intent in Plain English**: Verify the primary repository ID and registered root path.
 
 **MCP Arguments (JSON)**:
@@ -6585,7 +6441,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 80.2: Check for Bootstrap Warnings
+##### Test 78.2: Check for Bootstrap Warnings
 **Intent in Plain English**: Confirm multi-repo registry contains zero bootstrap warnings or path conflicts.
 
 **MCP Arguments (JSON)**:
@@ -6605,7 +6461,7 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 80.3: Inspect Multi-Repo Relationships
+##### Test 78.3: Inspect Multi-Repo Relationships
 **Intent in Plain English**: Verify registered inter-repo linkage metadata.
 
 **MCP Arguments (JSON)**:
@@ -6628,6 +6484,175 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ---
 
+
+
+
+---
+
+### Category: Serial Graph Mutations (Execute Solo & In Serial Only)
+
+> [!WARNING]
+> **CRITICAL EXECUTION ORDER: MUST RUN IN SERIAL AFTER ALL PARALLEL TESTS COMPLETE**  
+> `build_graph` and `update_graph` perform intrusive graph mutations and acquire exclusive SQLite write locks on `.atlas/worldtree.db`.  
+> - **NEVER** run these two tools in parallel with reader tools (`list_symbols`, `traverse_graph`, `query_graph`, etc.) or with each other. Parallel execution causes SQLite lock contention errors (`database is locked`) and poisons concurrent test assertions.  
+> - All category test subagents running in parallel MUST finish before these tests are initiated.  
+> - Execute `build_graph` first, verify its post-conditions, and only then execute `update_graph`.
+
+#### Tool 79: `build_graph`
+**Description**: Scans, parses, and persists a complete code graph from scratch into .atlas/worldtree.db.
+**Canonical CLI Parity Command**: `./target/debug/atlas build --json`
+
+##### Test 79.1: Full Code Graph Rebuild Invocation
+**Intent in Plain English**: Trigger a complete repository scan and parse cycle using the canonical empty object input.
+
+**MCP Arguments (JSON)**:
+```json
+{}
+```
+
+**Expected Clean Output & Assertions**:
+- Verify `structuredContent.build_status.state == 'built'`
+- Verify `structuredContent.build_status.nodes_written > 20000`
+- Verify `structuredContent.build_status.edges_written > 80000`
+- Verify `structuredContent.build_status.files_processed > 900`
+
+**CLI Parity Command**:
+```./target/debug/atlas build --json```
+
+**CLI Parity Verification Statement**:
+Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
+
+**Agent Expectation Check**:
+Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
+
+##### Test 79.2: Verify Build Status Post-Conditions
+**Intent in Plain English**: Confirm `last_built_at` timestamp is updated and `last_error` is null.
+
+**MCP Arguments (JSON)**:
+```json
+{}
+```
+
+**Expected Clean Output & Assertions**:
+- Verify `build_status.last_error == null`
+- Verify `build_status.quarantine_path == null`
+
+**CLI Parity Command**:
+```./target/debug/atlas build --json```
+
+**CLI Parity Verification Statement**:
+Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
+
+**Agent Expectation Check**:
+Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
+
+##### Test 79.3: Enforce Empty Argument Contract
+**Intent in Plain English**: Confirm the server validates that `build_graph` expects an empty JSON object.
+
+**MCP Arguments (JSON)**:
+```json
+{}
+```
+
+**Expected Clean Output & Assertions**:
+- Verify successful execution without requiring redundant parameters
+
+**CLI Parity Command**:
+```./target/debug/atlas build --json```
+
+**CLI Parity Verification Statement**:
+Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
+
+**Agent Expectation Check**:
+Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
+
+
+---
+
+#### Tool 80: `update_graph`
+**Description**: Incrementally updates the code graph from one explicit change source (working_tree, staged, or base ref).
+**Canonical CLI Parity Command**: `./target/debug/atlas update --json`
+
+##### Test 80.1: Incremental Update from Working Tree Changes
+**Intent in Plain English**: Refresh the graph for modified files without reparsing unchanged files in the workspace.
+
+**MCP Arguments (JSON)**:
+```json
+{
+  "change_source": {
+    "kind": "working_tree"
+  }
+}
+```
+
+**Expected Clean Output & Assertions**:
+- Verify `structuredContent.updated_files` contains recently modified files
+- Verify `status` subsequently reports `graph_state.stale_index == false`
+
+**CLI Parity Command**:
+```./target/debug/atlas update --json```
+
+**CLI Parity Verification Statement**:
+Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
+
+**Agent Expectation Check**:
+Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
+
+##### Test 80.2: Incremental Update from Staged Changes
+**Intent in Plain English**: Run update strictly for staged changes.
+
+**MCP Arguments (JSON)**:
+```json
+{
+  "change_source": {
+    "kind": "staged"
+  }
+}
+```
+
+**Expected Clean Output & Assertions**:
+- Verify succeeds cleanly even when staged files list is empty
+
+**CLI Parity Command**:
+```./target/debug/atlas update --json```
+
+**CLI Parity Verification Statement**:
+Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
+
+**Agent Expectation Check**:
+Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
+
+##### Test 80.3: Verify Invariant Consistency After Incremental Update
+**Intent in Plain English**: Confirm that incremental graph updates do not introduce dangling edges or orphan nodes.
+
+**MCP Arguments (JSON)**:
+```json
+{
+  "change_source": {
+    "kind": "working_tree"
+  }
+}
+```
+
+**Expected Clean Output & Assertions**:
+- Verify `structuredContent.success == true`
+- Confirm no integrity check warnings are returned
+
+**CLI Parity Command**:
+```./target/debug/atlas update --json```
+
+**CLI Parity Verification Statement**:
+Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
+
+**Agent Expectation Check**:
+Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
+
+
+---
+
+
+
+---
 
 ## 7. New Surfaces: MCP Resource Templates & CLI Companion Tools
 Atlas exposes additional surfaces beyond standard MCP tools: **MCP Resource Templates** (accessed via `resources/read` for `atlas://` URIs) and **CLI Companion Tools** (for execution flows, community detection, history, and URI resolution).
@@ -7030,7 +7055,8 @@ Run CLI: `./target/debug/atlas feedback adjust --json`
 | **Search & Exploration** | 6 tools | Deterministic symbol pagination, exact QN resolution, FTS phrase intent |
 | **Traversal & Relationships** | 5 tools | Callers/callees tracing, shortest call path, coupling density, clusters |
 | **Context & Review** | 6 tools | Bounded review bundles, blast radius calculation, risk classification |
-| **Build & Mutation** | 4 tools | Rebuild stats, incremental working-tree indexing, embedding dry runs |
+| **Embedding & Post-Processing** | 2 tools | Embedding dry-runs and post-processing link enrichment |
+| **Serial Graph Mutations** | 2 tools | Full graph rebuilding (`build_graph`) and incremental syncing (`update_graph`) — strictly serial |
 | **Code Analysis & Safety** | 14 tools | Refactoring safety score, blocking callers, cyclomatic/cognitive complexity |
 | **Companion Content** | 7 tools | Markdown doc heading extraction, line range excerpts, config asset search |
 | **Session & Memory** | 18 tools | Ledger compaction, resume snapshot lifecycle, memory recall, feedback |
