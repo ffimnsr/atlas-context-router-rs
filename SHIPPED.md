@@ -462,4 +462,4 @@ For active backlog, see ISSUES.md.
 - Context payload telemetry and metadata slimming remain in ISSUES.md (retrieval follow-up patch).
 - Runtime event classification and resume grouping, reachability measurement and Rust guard, shared parser query migration remainder (Go and final validation pass), minimal-context escalation metadata, and measured SQLite read pooling remain in ISSUES.md.
 - Remaining Additional Backlog items (parser-cache CI gate, LSP shim) remain in ISSUES.md.
-- Deferred memory-operator wiring (feedback confidence penalties and global symbol and file access counters) remains in ISSUES.md.
+

@@ -40,7 +40,6 @@ For terms that are easy to misread in this document:
 ## Roadmap Layout
 
 - Part V. Remaining focused follow-up patches: Retrieval Follow-Up Patch remainder, Runtime Event Classification and Resume Grouping Patch, Reachability Measurement and Rust Guard Patch, Shared Parser Query Migration Patch remainder, and Minimal-Context Escalation Metadata Patch. Runtime policy surface is deferred.
-- Part XII. Remaining RAG follow-up: deferred memory-operator wiring only. VM1–VM3, VR1–VR4, and VQ1 are shipped; see SHIPPED.md.
 
 ## Cross-Cutting Track Map
 
@@ -49,7 +48,7 @@ For terms that are easy to misread in this document:
 - Graph safety and workflow: Minimal-Context Escalation Metadata Patch
 - Rust parser correctness: Reachability Measurement and Rust Guard Patch, Shared Parser Query Migration Patch remainder
 - Agent policy and enforcement: no active work; runtime policy surface is deferred
-- RAG adaptation: deferred memory-operator wiring in Part XII; all retrieval and memory tracks shipped
+- RAG adaptation: all retrieval and memory tracks shipped; no active work
 
 ---
 
@@ -458,9 +457,6 @@ Core Design Rules:
 - respect the 1K LOC rule: add new modules instead of growing `packages/atlas-session/src/store/memory.rs`, `packages/atlas-session/src/store/memoir.rs`, `packages/atlas-session/src/store/types.rs`, and `packages/atlas-mcp/src/resources.rs`
 - implement only from the published algorithm descriptions; never copy AGPL-3.0 OpenViking code
 
-Rules apply to every checklist item in this part.
+Rules above remain binding for any future Part XII work.
 
-Remaining deferred memory-operator wiring:
-
-- [ ] deferred (VM3/ICM-C): route `feedback_record` confidence penalties through `Count` plus `Set(confidence_penalty)` once an analysis-rule memory entity exists; `feedback_records` remains the authoritative table
-- [ ] deferred: route `global_symbol_access` and `global_file_access` updates through `Sum` plus `Max(last_accessed)` when those counters become memory entities; they currently own dedicated tables
+No active Part XII items remain. The previously deferred memory-operator wiring is closed as out of scope: `feedback_records` remains the authoritative feedback table, and global symbol and file access counters keep their existing dedicated tables.
