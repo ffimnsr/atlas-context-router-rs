@@ -39,7 +39,7 @@ For terms that are easy to misread in this document:
 
 ## Roadmap Layout
 
-- Part V. Remaining focused follow-up patches: Retrieval Follow-Up Patch remainder, Runtime Event Classification and Resume Grouping Patch, Rust Reachability Guard Patch, Shared Parser Query Migration Patch remainder, Context Escalation Contract Patch, Dynamic Agent Policy and Hook Enforcement Patch.
+- Part V. Remaining focused follow-up patches: Retrieval Follow-Up Patch remainder, Runtime Event Classification and Resume Grouping Patch, Reachability Measurement and Rust Guard Patch, Shared Parser Query Migration Patch remainder, Context Escalation Contract Patch, Dynamic Agent Policy and Hook Enforcement Patch.
 - Part XII. Remaining RAG follow-up: deferred memory-operator wiring only. VM1–VM3, VR1–VR4, and VQ1 are shipped; see SHIPPED.md.
 
 ## Cross-Cutting Track Map
@@ -47,7 +47,7 @@ For terms that are easy to misread in this document:
 - Retrieval and search follow-ups: Retrieval Follow-Up Patch remainder
 - Context continuity and runtime memory: Runtime Event Classification and Resume Grouping Patch
 - Graph safety and workflow: Context Escalation Contract Patch
-- Rust parser correctness: Rust Reachability Guard Patch, Shared Parser Query Migration Patch remainder
+- Rust parser correctness: Reachability Measurement and Rust Guard Patch, Shared Parser Query Migration Patch remainder
 - Agent policy and enforcement: Dynamic Agent Policy and Hook Enforcement Patch
 - RAG adaptation: deferred memory-operator wiring in Part XII; all retrieval and memory tracks shipped
 
@@ -237,153 +237,117 @@ Implementation structure:
 
 ---
 
-### Code Reachability Guard Patch — All Languages
+### Reachability Measurement and Rust Guard Patch
 
-Atlas cross-file call resolution can over-report references for orphan, excluded, generated, or stale files because `same_package` heuristics use owner membership, same-directory proximity, and simple-name matching without proving that a language build can include both caller and candidate. `cross_file_links` then treats these weak heuristic edges as evidence that files are connected.
+`resolve_same_package_target` in `packages/atlas-engine/src/call_resolution.rs` resolves weak cross-file calls by Cargo/npm/go owner membership plus same-directory proximity. That owner is a package, not a compiler inclusion unit, so a candidate can be in an orphan file or a separate crate target and still receive a `same_package` edge.
 
-`resolve_same_package_target` in `packages/atlas-engine/src/call_resolution.rs` is language-independent. It resolves direct import-backed edges first, then applies its weak `same_package` fallback across supported languages. This patch adds a shared, capability-driven reachability guard only to that fallback. Exact, import-backed, and parser-proven edges remain valid without a reachability provider.
+Measured on this repository: 6,433 `same_package` call edges (8.7% of edges), but only 3 cross-crate-root edges, all valid `fuzz/fuzz_targets` to `fuzz/src` dependencies. That is not enough evidence to build multi-language reachability indexes first.
 
-Design overview:
+This patch is split into two parts. Part A ships regardless and makes weak evidence visible and measurable. Part B is gated on Part A measurements and starts with Rust only.
 
-1. **`CodeReachabilityIndex`** — language-provider output, built once per owner/build unit during parse/build/update. It records canonical roots and files included from each root. It is in-memory build state, never persisted to `worldtree.db`.
+Rules:
 
-2. **`ReachabilityProvider`** — language-specific builder/query implementation. Provider semantics follow compiler/build-system inclusion rules; no generic filesystem scan may infer source reachability.
+- measure before building a guard; do not add providers from assumption
+- keep every weak-edge decision deterministic and explainable
+- treat incomplete indexes as `Unknown`, never `Unreachable`
+- keep direct import-backed and parser-proven edges untouched
+- keep `packages/atlas-engine/src/call_resolution.rs` below 1,000 LOC; extract new logic into new modules
+- store reachability provenance in `Edge.extra_json`; do not add an edge column
+- preserve `atlas_repo::CanonicalRepoPath` identity for every file key
+- never infer reachability by scanning directories alone
 
-3. **`ReachabilityGuard`** — shared wrapper keyed by `(language, owner_id)`, passed into `resolve_same_package_target`. It answers whether caller and candidate occur under at least one common inclusion root.
+Implementation structure:
 
-4. **Provenance** — add `reachability: ReachabilityStatus` edge metadata: `Verified`, `Unreachable`, `Unknown`, or `NotApplicable`. Do not use a boolean: it cannot distinguish legacy/provider-absent fallback from a deliberate check.
+#### Part A — `cross_file_links` provenance and weak-edge measurement
 
-`ReachabilityResult` variants: `Reachable`, `Unreachable`, and `Unknown { reason }`. `Unknown` preserves current fallback behavior but records unverified provenance; `Unreachable` suppresses only weak `same_package` edges. This avoids both false positives and regressions for languages/configurations without providers.
+- [ ] add `SemanticReferenceEdge { source_file, target_qn, edge_kind, confidence_tier, extra_json }` in `packages/atlas-store-sqlite/src/store/context.rs`
+- [ ] add `Store::semantic_reference_edges(file_path, max_edges) -> Vec<SemanticReferenceEdge>` selecting `e.kind`, `e.confidence_tier`, and `e.extra_json`
+- [ ] keep `Store::files_referencing_symbols_in` as a thin wrapper over the new query for existing callers
+- [ ] add `confidence_tier: Option<String>` and `reachability: Option<String>` to `SemanticLink` in `packages/atlas-search/src/semantic.rs`
+- [ ] add `cross_file_links_with_options(store, file_path, limit, include_weak)` and keep `cross_file_links` as the default weak-edge-excluding path
+- [ ] define weak edges as `confidence_tier = 'same_package'`; exclude them by default
+- [ ] keep every edge whose `confidence_tier` is not `same_package` in the default result
+- [ ] add `include_weak: Option<bool>` (default `false`) to MCP `cross_file_links` in `packages/atlas-mcp/src/tools/graph.rs`
+- [ ] add `confidence_tier` and `reachability` to the `cross_file_links` output schema in `packages/atlas-mcp/src/tools/registry/output_schemas/relationships.rs`
+- [ ] add `reachability_measurement` to `atlas doctor --json` and MCP `doctor` with:
+  - [ ] `total_same_package_edges`
+  - [ ] `sampled_edges`
+  - [ ] `cross_crate_root_edges`
+  - [ ] `orphan_candidate_edges`
+  - [ ] `unknown_edges`
+  - [ ] `measurement_source` and `sample_limit`
+- [ ] add `packages/atlas-engine/src/reachability_measure.rs` with `ReachabilityMeasurement` and `measure_same_package_edges(store, repo_id, sample_limit)`
+- [ ] classify Rust file paths for measurement only as `lib`, `main`, `example`, `test`, `bench`, or `other` using standard Cargo layout names
+- [ ] count `cross_crate_root_edges` when caller and candidate path kinds differ and neither is `other`
+- [ ] count `orphan_candidate_edges` when caller and candidate path kinds differ and the candidate path kind is `other`
+- [ ] add `packages/atlas-engine/benches/reachability_bench.rs` emitting the measurement as JSON
+- [ ] add a fixture repo with `src/lib.rs`, `src/bin/tool.rs`, `tests/integration.rs`, and an orphan `src/orphan.rs` that receives a wrong `same_package` edge
+- [ ] add tests for weak-edge filtering, default `cross_file_links` output, `include_weak = true`, provenance fields, measurement counts, and fixture stability
+- [ ] update existing `cross_file_links` tests and goldens for the default weak-edge filtering behavior
+- [ ] document weak-edge filtering and measurement fields in `MCP_TOOLS.md`, `wiki/reachability.md`, and the `cross_file_links` manual
 
-#### Patch R1 — Rust `CrateReachabilityIndex` provider and builder
+#### Part B entry gate
 
-- [ ] define `CrateReachabilityIndex` struct in `atlas-engine` (or `atlas-parser` if mod-walk lives there):
-  - [ ] `owner_id: String` — Cargo manifest key, matches existing `owner_id` field
-  - [ ] `crate_roots: Vec<CrateRoot>` — one entry per compiled crate target
-  - [ ] each `CrateRoot`:
-    - [ ] `root_file: CanonicalRepoPath` — e.g. `src/lib.rs`, `src/main.rs`, `examples/foo.rs`
-    - [ ] `crate_kind: CrateKind` — `Lib`, `Bin`, `Example`, `Test`, `Bench`
-    - [ ] `reachable_files: HashSet<CanonicalRepoPath>` — all files reachable via `mod` from this root
-- [ ] implement `CrateReachabilityIndex::build(owner_id, manifest_path, parsed_files)`:
-  - [ ] identify crate roots by standard Cargo layout heuristics: `src/lib.rs`, `src/main.rs`, `examples/*.rs`, `tests/*.rs`, `benches/*.rs`
-  - [ ] respect `[[bin]]`, `[[example]]`, `[[test]]`, `[[bench]]` `path` overrides from `Cargo.toml` when parsed
-  - [ ] walk `mod <name>;` declarations in each root file using already-parsed AST nodes (no re-parse)
-  - [ ] resolve sibling `mod` paths relative to declaring file using Rust module path rules (`mod foo;` → `foo.rs` or `foo/mod.rs`)
-  - [ ] recursively follow `mod` declarations up to a configurable depth cap (default: 64 levels)
-  - [ ] treat `mod foo { ... }` inline modules as transparent (they do not add a new file, all their declarations remain in the declaring file)
-  - [ ] treat unresolvable `mod` targets as absent rather than erroring out; record them in `unresolved_mods` for diagnostics
-  - [ ] all file paths stored as `CanonicalRepoPath` via `atlas_repo::CanonicalRepoPath`
-- [ ] expose `is_file_reachable(file: &CanonicalRepoPath) -> bool` helper that checks across all `CrateRoot` entries in the index
-- [ ] expose `reachable_from_same_root(caller: &CanonicalRepoPath, candidate: &CanonicalRepoPath) -> bool` — returns `true` only when both files appear in the same `CrateRoot.reachable_files` set
-- [ ] add unit tests:
-  - [ ] standard `src/lib.rs` layout with one level of `mod`
-  - [ ] nested `mod foo { mod bar; }` inline with sibling file
-  - [ ] multi-target package: lib + bin + example each have separate reachable sets
-  - [ ] orphan `.rs` file in same package directory not reachable from any crate root
-  - [ ] unresolvable `mod` target is recorded but does not panic or block other mods
-  - [ ] path identity: same file via different path strings produces one entry
+Do not start Part B until all gates pass:
 
-Why:
-- `owner_id` covers Cargo package membership, not Rust module-tree membership
-- index must be built from AST, not filesystem, to stay consistent with parsed graph facts
+- [ ] `orphan_candidate_edges / sampled_edges >= 0.05` on at least one representative multi-crate repository
+- [ ] the fixture reproduces at least one wrong `same_package` edge that `cross_file_links` would otherwise report
+- [ ] Part A ships with default weak-edge filtering and provenance
 
-#### Patch R2 — shared `ReachabilityProvider`, `CodeReachabilityIndex`, and `ReachabilityGuard` integration
+#### Part B — Rust module reachability guard
 
-- [ ] define `ReachabilityGuard` in `atlas-engine`:
-  - [ ] wraps language providers and `HashMap<(String, String), CodeReachabilityIndex>` keyed by `(language, owner_id)`
-  - [ ] `is_reachable_from_same_root(language, owner_id, caller, candidate) -> ReachabilityResult`
-  - [ ] `ReachabilityResult` variants: `Reachable`, `Unreachable`, `Unknown { reason }`
-  - [ ] `Unknown` falls back to existing heuristic behavior and records `reachability: Unknown`; only `Unreachable` blocks weak edge emission
-- [ ] build `ReachabilityGuard` once per engine build/update run, before resolution pass
-- [ ] thread `ReachabilityGuard` into `resolve_same_package_target` alongside existing `owner_cache`
-- [ ] update `resolve_same_package_target` resolution order:
-  1. filter candidates by `owner_id` (existing step — coarse package filter)
-  2. apply receiver-hint filtering (existing step — keep)
-  3. **new**: query `ReachabilityGuard` for each `same_owner_matches` candidate
-  4. retain `Reachable`; suppress `Unreachable`; retain `Unknown` only as existing fallback candidates
-  5. apply existing same-dir tie-break, preferring `Reachable` candidates over `Unknown`
-  6. write `reachability: Verified` for reachable fallback edges and `reachability: Unknown` for provider-absent/inconclusive fallback edges
-- [ ] add `reachability: ReachabilityStatus` to edge metadata or edge extra fields (stored in existing `metadata` JSON or new column)
-- [ ] add regression tests:
-  - [ ] orphan file in same Cargo package is rejected as same-package target after reachability filtering
-  - [ ] live file reachable via `mod` chain is accepted as same-package target
-  - [ ] receiver-hint still narrows candidates correctly after reachability filtering
-  - [ ] absent index falls back gracefully and does not panic
+- [ ] extract `callable_candidates`, `resolve_same_package_target`, `cached_owner_id`, `same_dir`, and `unique_node` into `packages/atlas-engine/src/package_resolution.rs` without behavior changes
+- [ ] add `packages/atlas-engine/src/reachability.rs`
+- [ ] define `ReachabilityStatus` with exact values `verified`, `unreachable`, `unknown`, and `not_applicable`
+- [ ] define `ReachabilityResult` with `Reachable`, `Unreachable`, and `Unknown { reason }`
+- [ ] define `CrateRootKind` with exact values `lib`, `bin`, `example`, `test`, and `bench`
+- [ ] define `CrateRoot { root_file, kind, reachable_files, has_unknown_modules, has_cfg_modules }`
+- [ ] define `RustReachabilityIndex { owner_id, roots, unresolved_mods, index_complete }`
+- [ ] add Rust module facts to parser output in `packages/atlas-parser/src/lang/rust/emitter.rs` and `facts.rs`:
+  - [ ] `inline: bool` on every module node
+  - [ ] `module_file: Option<String>` for external `mod foo;` declarations resolved to `foo.rs` or `foo/mod.rs`
+  - [ ] `has_cfg: bool` when the module has a `#[cfg(...)]` attribute
+  - [ ] `has_path_attr: bool` and `path_attr_value` when `#[path = "..."]` is present
+- [ ] store module facts in `Node.extra_json` so build and incremental update can reconstruct the tree from the store
+- [ ] add parser tests for `mod foo;`, `foo/mod.rs`, inline `mod foo {}`, `#[path]`, and `#[cfg]`
+- [ ] implement `RustReachabilityIndex::from_store(store, repo_id, owner_id)` over persisted module nodes and file nodes
+- [ ] mark `index_complete = false` when any module lacks facts, has `has_cfg`, has `has_path_attr`, resolves outside the owner, resolves to a missing file, or depends on `include!` or macro-generated declarations
+- [ ] add `ReachabilityGuard` keyed by `(language, owner_id)` with `is_reachable_from_same_root(caller, candidate) -> ReachabilityResult`
+- [ ] build the guard once per `reconcile_call_targets` run from the store, not from `ParsedFile`, so incremental update works
+- [ ] query the guard only for `same_package` fallback candidates after receiver-hint filtering
+- [ ] retain `Reachable`; suppress `Unreachable`; retain `Unknown` as existing fallback behavior
+- [ ] when `Unreachable` rejects a prior `same_package` edge, reset the edge target to the original callee name from `extra_json.callee_name`, clear `confidence_tier`, and mark `extra_json.unresolved = true`
+- [ ] write `extra_json.reachability = verified | unknown` on accepted `same_package` edges and `extra_json.reachability = not_applicable` for non-Rust or provider-absent resolution
+- [ ] add `[reachability]` config with `enabled` (default `true`), `budget_ms` (default `250`), and `max_owners_per_run` (default `64`)
+- [ ] validate `budget_ms >= 1` and `max_owners_per_run >= 1` with config-key-named errors
+- [ ] skip owners with no changed files during incremental update
+- [ ] mark indexes `Unknown` with `budget_exhausted` when `budget_ms` is exceeded
+- [ ] emit `reachability` summary in `atlas build --json`, `atlas update --json`, `atlas doctor --json`, and MCP `doctor` with owners indexed, owners skipped, unknown reasons, unresolved mods, and weak edges accepted or rejected
+- [ ] extend `atlas db_check` only with validation of persisted `extra_json.reachability` values; do not report in-memory index stats from `db_check`
+- [ ] add tests for crate-root separation, orphan files, `mod.rs`, inline modules, `#[path]`, `#[cfg]`, budget exhaustion, receiver hints, direct-import bypass, incremental deleted-file cleanup, stale-target clearing, and persisted provenance
+- [ ] add `wiki/reachability.md` covering provider scope, completeness, `Unknown` behavior, and diagnostics
 
-Why:
-- package membership alone is too broad; reachability narrows to files the compiler actually sees
-- `IndexAbsent` fallback prevents breaking existing resolution for languages or layouts where index is not built
+#### Out of scope
 
-#### Patch R3 — Edge provenance and `cross_file_links` filtering for all languages
+- [ ] do not add Go, JavaScript, TypeScript, Python, Java, Kotlin, C#, C, C++, PHP, Ruby, or Bash providers until Atlas has owner or build-metadata facts for them
+- [ ] do not ingest compiler databases, Gradle/Maven models, `tsconfig` entrypoint graphs, or `.NET` project includes in this patch
+- [ ] do not infer reachability from directory scans
+- [ ] do not add a new edge column or a new database
+- [ ] do not suppress import-backed, same-file, or parser-proven edges
 
-- [ ] audit `cross_file_links` query for heuristic-edge false positives in every provider-supported language:
-  - [ ] identify whether `cross_file_links` joins only on edge existence or also on confidence tier
-  - [ ] determine whether filtering at read time or write time is safer given incremental update semantics
-- [ ] decide and document filter strategy:
-  - [ ] **preferred**: filter at write time — do not persist `same_package` edges for unreachable candidates; `cross_file_links` naturally sees correct graph
-  - [ ] **acceptable fallback**: filter at read time — exclude `reachability: Unreachable` heuristic edges; preserve `Unknown` edges while exposing unverified provenance
-  - [ ] document chosen strategy in a code comment near the `cross_file_links` query
-- [ ] ensure incremental update removes stale node rows and their inbound `same_package` edges when a file is deleted
-  - [ ] verify existing node deletion cascade covers edge rows; add explicit edge cleanup if missing
-- [ ] expose edge provenance in `cross_file_links` output:
-  - [ ] add `confidence_tier` to `CrossFileLink` result struct if not already present
-  - [ ] add `reachability: ReachabilityStatus` to `CrossFileLink` when available
-- [ ] add tests:
-  - [ ] orphan/excluded file shows zero heuristic `cross_file_links` inbound edges after a reachability-gated build
-  - [ ] deleted file shows zero `cross_file_links` results after incremental refresh removes its nodes
-  - [ ] import-backed edge still appears in `cross_file_links` regardless of reachability guard
-  - [ ] provider-absent language preserves fallback edge with `reachability: Unknown`
+#### Patch completion criteria
 
-Why:
-- `cross_file_links` is the user-visible surface; false-positive heuristic edges here mislead dead-code and impact analysis
-- write-time filtering is cleaner than read-time masking
-
-#### Patch R4 — Diagnostics and observability for all providers
-
-- [ ] expose reachability index stats in `atlas doctor` / `atlas db_check` output:
-  - [ ] number of owners/build units with an index, grouped by language/provider
-  - [ ] number of provider builds failed, skipped, or `Unknown`, grouped by reason
-  - [ ] number of unresolved inclusion references, grouped by language
-  - [ ] number of `same_package` edges grouped by `ReachabilityStatus`
-- [ ] expose reachability status per file in `atlas status --json` or a dedicated debug command:
-  - [ ] file is reachable from which inclusion root(s), with provider and language
-  - [ ] file has no reachable root (orphan/excluded) or has `Unknown` reachability with reason
-- [ ] log reachability provider build failures at `warn` level with owner/build-unit path; do not fail the build
-- [ ] add MCP `doctor` response fields for reachability index health when data is available
-
-Why:
-- operators need to see whether the guard is active and which packages lack an index
-- silent guard absence produces the same false positives as before, so visibility is required
-
-#### Patch R5 — Language-provider rollout
-
-- [ ] define provider capability and coverage contract for every language in `ParserRegistry`; unsupported providers return `Unknown`, never fabricate reachability
-- [ ] implement providers in priority order:
-  - [ ] Rust: Cargo targets plus parsed-AST `mod` traversal (R1)
-  - [ ] Go: package directories, build constraints/tags, generated files, and distinct external/internal test packages
-  - [ ] JavaScript/TypeScript: configured entrypoints plus static import/export graph, `tsconfig` paths, package exports, and extension rules
-  - [ ] Python: configured import roots plus package/module imports; configured script and test roots remain valid execution roots
-  - [ ] Java/Kotlin: Gradle/Maven source sets, module descriptors, and build dependency boundaries
-  - [ ] C#: project compile includes, source generators where declared, and project/assembly boundaries
-  - [ ] C/C++: compilation database translation units plus include graph; headers are reachable only through a translation unit
-  - [ ] PHP/Ruby/Bash and remaining languages: provider only after build/framework entrypoint semantics are modeled; otherwise report `Unknown`
-- [ ] use existing parsed AST/import facts where available; configuration/build metadata may be parsed as companion assets, but never infer reachability by scanning directories alone
-- [ ] add per-provider fixtures covering reachable candidate, excluded/orphan candidate, multi-root project, provider failure/absence, and direct import-backed edge bypass
-- [ ] expose provider name, status, root count, reachable file count, unresolved inclusion references, and `Unknown` reason in diagnostics
-
-Why:
-- language inclusion semantics differ: Rust module trees, Go packages, JS/TS entrypoint dependency graphs, Python import roots, JVM/.NET build source sets, and C/C++ translation units are not interchangeable
-- phased capability avoids silently degrading valid resolution where Atlas has not yet modeled build semantics
-
-#### Patch R completion criteria
-
-- [ ] `CodeReachabilityIndex`, `ReachabilityProvider`, and tri-state `ReachabilityGuard` exist; Rust `CrateReachabilityIndex` is first provider
-- [ ] `resolve_same_package_target` in `packages/atlas-engine/src/call_resolution.rs` filters only weak fallback candidates through `ReachabilityGuard`; direct/import-backed resolution remains unaffected
-- [ ] `same_package` edges carry `ReachabilityStatus` provenance, with `Unknown` fallback explicit
-- [ ] `cross_file_links` does not claim provider-confirmed orphan/excluded files are connected after a reachability-gated build
-- [ ] incremental refresh removes deleted-file nodes and clears inbound edges
-- [ ] `atlas doctor` reports provider coverage, unknown/failure reasons, and unresolved inclusion references
-- [ ] tests cover every shipped provider: orphan/excluded rejection, live acceptance, receiver-hint interaction, `Unknown` fallback, deleted-file cleanup, direct import bypass, and `cross_file_links` false-positive regression
+- [ ] Part A produces deterministic weak-edge measurements and ships independent of Part B
+- [ ] `cross_file_links` hides weak `same_package` edges by default and exposes `confidence_tier` plus `reachability`
+- [ ] `include_weak = true` restores the previous weak-edge output
+- [ ] Part B starts only after its entry gate passes
+- [ ] Rust `same_package` edges carry `verified`, `unknown`, or `not_applicable` provenance
+- [ ] incomplete Rust module indexes never emit `unreachable`
+- [ ] unreachable candidates cannot leave a stale `same_package` target
+- [ ] `packages/atlas-engine/src/call_resolution.rs` stays below 1,000 LOC
+- [ ] non-Rust languages remain `not_applicable` or `unknown`
+- [ ] `doctor` reports provider coverage, unknown reasons, budget exhaustion, and unresolved modules
+- [ ] `db_check` validates persisted provenance only
 
 ---
 
