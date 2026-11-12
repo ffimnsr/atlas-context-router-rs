@@ -39,13 +39,13 @@ For terms that are easy to misread in this document:
 
 ## Roadmap Layout
 
-- Part V. Remaining focused follow-up patches: Retrieval Follow-Up Patch remainder, Runtime Event Enrichment and Graph Linking Patch, Rust Reachability Guard Patch, Shared Parser Query Migration Patch remainder, Context Escalation Contract Patch, Dynamic Agent Policy and Hook Enforcement Patch.
+- Part V. Remaining focused follow-up patches: Retrieval Follow-Up Patch remainder, Runtime Event Classification and Resume Grouping Patch, Rust Reachability Guard Patch, Shared Parser Query Migration Patch remainder, Context Escalation Contract Patch, Dynamic Agent Policy and Hook Enforcement Patch.
 - Part XII. Remaining RAG follow-up: deferred memory-operator wiring only. VM1–VM3, VR1–VR4, and VQ1 are shipped; see SHIPPED.md.
 
 ## Cross-Cutting Track Map
 
 - Retrieval and search follow-ups: Retrieval Follow-Up Patch remainder
-- Context continuity and runtime memory: Runtime Event Enrichment and Graph Linking Patch
+- Context continuity and runtime memory: Runtime Event Classification and Resume Grouping Patch
 - Graph safety and workflow: Context Escalation Contract Patch
 - Rust parser correctness: Rust Reachability Guard Patch, Shared Parser Query Migration Patch remainder
 - Agent policy and enforcement: Dynamic Agent Policy and Hook Enforcement Patch
@@ -148,269 +148,94 @@ This patch is complete when:
 ---
 
 
-### Runtime Event Enrichment and Graph Linking Patch
+### Runtime Event Classification and Resume Grouping Patch
 
-Atlas already has session events, adapter extraction helpers, content-store artifact routing, resume snapshots, saved-context retrieval, and context-engine saved-context merge. Do not replace that foundation with a parallel extractor system. Extend it with deterministic enrichment that turns runtime activity into bounded, graph-aware memory while preserving the existing storage boundaries: graph facts stay in `worldtree.db`, large/runtime artifacts stay in `context.db`, and session timelines stay in `session.db`.
+Runtime event capture, redaction, artifact routing, hook policy, and resume grouping are already shipped. The event-to-graph link table and context-engine runtime-event retrieval are dropped: they add a new session schema, heuristic symbol linking, ranking and budget paths, and noisy cross-session signal without evidence that current context misses runtime evidence.
 
-#### Patch X1 — Scope and crate boundary
+This patch keeps only the cheap, deterministic layer that improves existing resume and wake-up surfaces:
 
-- [ ] define this as enrichment over existing `atlas-session`, `atlas-contentstore`, and `atlas-adapters`
-- [ ] avoid creating `packages/atlas-extractor` unless extraction logic grows large enough to justify a separate crate
-- [ ] if a new crate is created later, require it to depend on service APIs, not write SQLite directly
-- [ ] keep extractor pipeline deterministic, local, and non-LLM
-- [ ] keep extractor best-effort; extraction failure must not block primary CLI/MCP tool output
-- [ ] keep raw runtime output out of graph DB
-- [ ] document storage ownership:
-  - [ ] `worldtree.db` stores static code graph facts only
-  - [ ] `session.db` stores bounded event metadata and references
-  - [ ] `context.db` stores large artifacts, chunks, previews, and searchable runtime text
+- classify bounded runtime output with stable rules
+- keep event types unchanged and store classification as metadata
+- extend resume and wake-up grouping with classified failures and build/test summaries
 
-Why:
-- existing continuity architecture already solved session/content boundaries
-- a parallel extractor crate or DB path would duplicate behavior and increase drift
+Rules:
 
-#### Patch X2 — Raw input envelope and deterministic event enrichment
+- keep classification deterministic, local, and non-LLM
+- keep `SessionEventType` values unchanged; classification is metadata
+- never store raw matched output text in classification metadata
+- bound classifier input bytes and matched fields through policy constants
+- keep resume and wake-up output deterministic and budget-trimmed
+- do not add an event-to-graph link table, graph linking, or context-engine runtime-event retrieval in this patch
+- do not write runtime data to `worldtree.db`
 
-- [ ] define a `RuntimeInput` / `RawActivityInput` envelope for enrichment:
-  - [ ] `frontend` (`cli`, `mcp`, adapter host)
-  - [ ] `session_id`
-  - [ ] `repo_root`
-  - [ ] `input_kind`
-  - [ ] `tool_or_command`
-  - [ ] `status`
-  - [ ] `stdout_preview`
-  - [ ] `stderr_preview`
-  - [ ] `artifact_source_id`
-  - [ ] `files`
-  - [ ] `metadata`
-  - [ ] `created_at`
-- [ ] define enriched output that maps onto existing `NewSessionEvent` payloads:
-  - [ ] `event_type`
-  - [ ] `summary`
-  - [ ] `symbols`
-  - [ ] `file_paths`
-  - [ ] `source_ids`
-  - [ ] `classification`
-  - [ ] `confidence`
-  - [ ] `metadata`
-- [ ] enrich existing event constructors rather than bypassing them:
-  - [ ] `extract_cli_event`
-  - [ ] `extract_graph_event`
-  - [ ] `extract_context_event`
-  - [ ] `extract_reasoning_event`
-  - [ ] `extract_user_event`
-  - [ ] `extract_tool_event`
-  - [ ] `normalize_event`
-- [ ] keep outputs canonical JSON so existing event hashing and dedupe remain stable
-- [ ] add tests proving same input produces same enriched event and hash
+Implementation structure:
 
-Why:
-- enrichment should preserve existing event persistence and dedupe semantics
-- deterministic input/output keeps resume snapshots stable
+#### Patch X1 — Deterministic runtime classification
 
-#### Patch X3 — Rule-based classification
+- [ ] add `packages/atlas-agent-events/src/classification.rs`
+- [ ] define `RuntimeClassification { kind, severity, rule_id, matched_fields }` with serde `snake_case`
+- [ ] define `RuntimeClassificationKind` with exact values `panic`, `exception`, `stacktrace`, `compiler_error`, `test_failure`, `test_success`, `build_success`, `deprecation_warning`, `dead_code_warning`, `permission_denied`, `command_timeout`, `graph_not_ready`, and `retrieval_failure`
+- [ ] define `RuntimeClassificationSeverity` with exact values `error`, `warning`, and `info`
+- [ ] add `classify_runtime_payload(payload: &Value) -> Option<RuntimeClassification>`
+- [ ] scan bounded text from `stderr`, `stdout`, `output`, `error`, `message`, `result`, and `extra` fields up to `MAX_CLASSIFIER_INPUT_BYTES` (16 KiB)
+- [ ] reuse `extract_hook_status`, `extract_hook_command`, and `extract_tool_name` from `packages/atlas-agent-events/src/payload.rs`
+- [ ] classify `permission_denied` and `command_timeout` from status and error text before output-pattern rules
+- [ ] classify `panic`, `exception`, and `stacktrace` from stable markers (`panicked at`, `RUST_BACKTRACE`, `Traceback (most recent call last)`, `Exception in thread`, and stack-frame markers)
+- [ ] classify `compiler_error` from `error[E`, `error:`, `failed to compile`, and `--> file:line:col` markers
+- [ ] classify `test_failure` from `test result: FAILED`, `FAILED tests/`, `failures:`, and `error: test failed`
+- [ ] classify `test_success` from `test result: ok`, `passed`, and exit status `ok` on a test command
+- [ ] classify `build_success` from `Finished`, `Build succeeded`, and exit status `ok` on a build command
+- [ ] classify `deprecation_warning` and `dead_code_warning` from warning text and `unused` or `deprecated` markers
+- [ ] classify `graph_not_ready` from `graph_stale`, `graph is stale`, `graph_unavailable`, and readiness error codes
+- [ ] classify `retrieval_failure` from `retrieval_index_unavailable`, `content_store_unavailable`, and retrieval error codes
+- [ ] return `None` when no rule matches; never emit an `other` fallback
+- [ ] record only rule ids and matched field names in `matched_fields`; never record raw text
+- [ ] add `MAX_CLASSIFIER_INPUT_BYTES` and `MAX_CLASSIFIER_MATCHED_FIELDS` to `packages/atlas-agent-events/src/policy.rs`
+- [ ] add unit tests per kind, rule precedence, bounded input, no-match behavior, and absence of raw text in output
 
-- [ ] add bounded rule-based classifiers for runtime activity:
-  - [ ] panic
-  - [ ] exception
-  - [ ] stacktrace
-  - [ ] compiler error
-  - [ ] test failure
-  - [ ] test success
-  - [ ] build success
-  - [ ] deprecation warning
-  - [ ] unused/dead-code warning
-  - [ ] permission denied
-  - [ ] command timeout
-  - [ ] graph stale/readiness warning
-  - [ ] retrieval/content-store failure
-- [ ] map classifications to existing `SessionEventType` values where possible:
-  - [ ] `ERROR`
-  - [ ] `COMMAND_RUN`
-  - [ ] `COMMAND_FAIL`
-  - [ ] `CONTEXT_REQUEST`
-  - [ ] `REASONING_RESULT`
-  - [ ] `FILE_READ`
-  - [ ] `FILE_WRITE`
-  - [ ] `GRAPH_BUILD`
-  - [ ] `GRAPH_UPDATE`
-- [ ] add new event types only when existing types cannot represent the event safely
-- [ ] include classification metadata instead of exploding event-type count:
-  - [ ] `classification.kind`
-  - [ ] `classification.severity`
-  - [ ] `classification.rule_id`
-  - [ ] `classification.matched_fields`
-- [ ] add tests for error parsing, warning parsing, test summary parsing, and no-match behavior
+#### Patch X2 — Attach classification to hook events
 
-Why:
-- event type should stay stable; detailed meaning belongs in structured metadata
-- deterministic classifiers provide useful memory without LLM inference
+- [ ] call `classify_runtime_payload` from `build_hook_event_metadata` in `packages/atlas-agent-events/src/metadata.rs`
+- [ ] add `classification` to hook metadata only when classification returns `Some`
+- [ ] keep `SessionEventType` and priority selection unchanged
+- [ ] keep classification deterministic so identical raw input produces the identical enriched payload and event hash
+- [ ] clamp `matched_fields` to `MAX_CLASSIFIER_MATCHED_FIELDS` and deduplicate field names
+- [ ] add tests proving panic, compiler error, test failure, test success, permission denial, timeout, no-match, and repeated-input dedupe under `dedup_window_secs`
 
-#### Patch X4 — Artifact routing before session insertion
+#### Patch X3 — Resume grouping and wake-up surfacing
 
-- [ ] run all raw stdout/stderr/tool-result blobs through existing content-store routing before session insertion
-- [ ] define routing thresholds through the central budget policy:
-  - [ ] `small_output_bytes`
-  - [ ] `preview_output_bytes`
-  - [ ] `large_output_bytes`
-  - [ ] `max_runtime_artifact_bytes`
-- [ ] keep session event payloads bounded:
-  - [ ] small output may be stored inline only when safe and redacted
-  - [ ] medium output stores preview plus `source_id`
-  - [ ] large output stores pointer only
-- [ ] use `ContentStore::route_output` / saved-context artifact routing instead of a new artifact path
-- [ ] index routed artifacts with metadata:
-  - [ ] `session_id`
-  - [ ] `source_type`
+- [ ] add `payload_classification(payload: &Value) -> Option<&Value>` in `packages/atlas-session/src/store/resume.rs` that reads `hook_metadata.classification` and top-level `classification`
+- [ ] extend resume `unresolved_errors` entries with `classification.kind`, `classification.severity`, and `classification.rule_id` in `packages/atlas-session/src/store/resume.rs`
+- [ ] extend resume `recent_commands` entries with optional classification metadata
+- [ ] add `recent_build_test_summaries` to the resume snapshot with `kind`, `command`, `status`, `classification`, and `at`, capped at 5 entries
+- [ ] add `recent_runtime_failures` to `WakePack` in `packages/atlas-agent-events/src/wake_pack.rs`, sourced from resume `unresolved_errors` filtered to `severity = error`
+- [ ] cap `recent_runtime_failures` with the existing wake-pack budget item limit
+- [ ] keep snapshots deterministic by sorting failures by `at` then rule id and deduplicating identical entries
+- [ ] add `recent_build_test_summaries` to the trim list in `trim_snapshot_to_limit`
+- [ ] add tests for classified errors, build/test summaries, caps, deterministic ordering, and byte-identical output when no classification exists
+- [ ] update the MCP `wake_up` output schema and regenerate `MCP_TOOLS.md`
+- [ ] update `wiki/session-memory-fallback.md` and `wiki/memory-architecture.md` for the new metadata and wake-up field
+- [ ] update CLI and MCP snapshots for `resume_session` and `wake_up`
 
-#### Patch X5 — Graph linking without storing runtime data in graph DB
+#### Deferred and rejected work
 
-- [ ] link enriched events to graph facts by stable identifiers, not raw node IDs alone
-- [ ] store links in session/content side tables, not `worldtree.db`
-- [ ] define link records:
-  - [ ] `event_id`
-  - [ ] `session_id`
-  - [ ] `repo_root`
-  - [ ] `qualified_name`
-  - [ ] `canonical_file_path`
-  - [ ] optional `node_id`
-  - [ ] optional `file_id`
-  - [ ] `link_kind`
-  - [ ] `confidence`
-  - [ ] `graph_last_indexed_at`
-- [ ] prefer canonical identifiers:
-  - [ ] canonical repo path
-  - [ ] qualified name
-  - [ ] kind
-  - [ ] line span when available
-- [ ] treat `node_id` and `file_id` as cache hints only because graph rebuilds can change row IDs
-- [ ] make graph linking best-effort:
-  - [ ] events with no graph target remain valid runtime memory
-  - [ ] ambiguous symbols store candidate list and ambiguity metadata
-  - [ ] stale graph state records `safe_to_answer=false` for link-derived claims when needed
-- [ ] add tests for exact symbol, file path, ambiguous symbol, stale graph, and graph-missing cases
+- [ ] do not add an `event_links` table or event-to-graph graph linking
+- [ ] do not add context-engine `include_runtime_events` or runtime-event retrieval
+- [ ] do not add a new `atlas-extractor` crate
+- [ ] do not re-plumb `ContentStore::route_output` thresholds through config in this patch
+- [ ] do not parse stacktraces into symbols; classification never creates graph links
 
-Why:
-- runtime memory should be graph-aware without mutating graph facts
-- stable identifiers survive rebuilds better than SQLite row IDs
+#### Patch completion criteria
 
-#### Patch X6 — Readiness, identity, and budget integration
-
-- [ ] run graph linking only through canonical graph readiness state
-- [ ] define behavior by execution state:
-  - [ ] `fresh` -> resolve and link normally
-  - [ ] `stale` -> link with freshness warning and stale metadata
-  - [ ] `partial` -> link only when completeness requirements are met
-  - [ ] `corrupt` -> skip graph linking and store runtime event without graph links
-- [ ] require canonical path identity before any event/file/artifact key hashing
-- [ ] apply central budget policy to:
-  - [ ] classifier input bytes
-  - [ ] number of symbols extracted
-  - [ ] number of file paths extracted
-  - [ ] number of graph lookup candidates
-  - [ ] number of links stored
-  - [ ] artifact preview bytes
-- [ ] emit enrichment budget metadata:
-  - [ ] `budget_hit`
-  - [ ] `partial`
-  - [ ] `safe_to_answer`
-  - [ ] omitted symbol/file/link counts
-- [ ] add tests for stale/partial/corrupt graph behavior and budget truncation
-
-Why:
-- runtime enrichment must follow the same safety rules as graph-backed tools
-- extraction can otherwise become another unbounded path
-
-#### Patch X7 — Context-engine integration
-
-- [ ] extend context engine to include enriched runtime events only when requested or relevant
-- [ ] add request controls:
-  - [ ] `include_runtime_events`
-  - [ ] `runtime_event_limit`
-  - [ ] `runtime_artifact_limit`
-  - [ ] `runtime_since`
-  - [ ] `runtime_session_id`
-- [ ] retrieve runtime memory by:
-  - [ ] linked symbol
-  - [ ] canonical file path
-  - [ ] session id
-  - [ ] classification kind
-  - [ ] artifact source id
-- [ ] merge runtime memory under graph/content companion policy
-- [ ] expose source kind:
-  - [ ] `runtime_event`
-  - [ ] `runtime_artifact`
-  - [ ] `saved_context`
-- [ ] include selection reason and ranking evidence:
-  - [ ] same symbol
-  - [ ] same file
-  - [ ] recent error
-  - [ ] same session
-  - [ ] direct artifact reference
-- [ ] keep runtime context bounded and preview-only by default
-- [ ] add tests for context with graph-only, saved-context-only, runtime-event-only, and mixed graph/runtime inputs
-
-Why:
-- runtime memory is useful only when it participates in context selection
-- it must not bypass existing context budgets or ranking rules
-
-#### Patch X8 — CLI, MCP, and hook integration
-
-- [ ] integrate enrichment with existing CLI adapter event flow
-- [ ] integrate enrichment with MCP tool handler boundaries
-- [ ] keep MCP session event persistence best-effort and non-blocking
-- [ ] avoid duplicating `save_context_artifact`; reuse existing tool and content routing
-- [ ] update hook integration roadmap so host hooks emit enriched inputs through service APIs
-- [ ] ensure generated hooks never write SQLite directly
-- [ ] add command/tool metadata for:
-  - [ ] command start
-  - [ ] command finish
-  - [ ] tool result
-  - [ ] permission decision
-  - [ ] compaction boundary
-  - [ ] session end
-  - [ ] error/failure
-- [ ] add integration tests for CLI, MCP, and bridge-file fallback event enrichment
-
-Why:
-- runtime memory should come from existing adapters and hooks
-- host-specific capture gaps must reduce enrichment quality, not break commands
-
-#### Patch X9 — Resume snapshot enrichment
-
-- [ ] include enriched runtime signals in resume snapshots:
-  - [ ] recent errors
-  - [ ] recent failed commands
-  - [ ] recent successful build/test summaries
-  - [ ] linked symbols
-  - [ ] linked files
-  - [ ] artifact references
-  - [ ] active unresolved runtime issues
-- [ ] group by category and severity
-- [ ] include retrieval hints instead of raw artifact content
-- [ ] cap snapshot contribution by budget policy
-- [ ] make snapshot rendering deterministic
-- [ ] add snapshot tests for enriched errors, artifact references, and linked symbols
-
-Why:
-- resume should recover useful runtime state without replaying history
-- enriched events make snapshots more useful while staying compact
-
-#### Patch X completion criteria
-
-- [ ] runtime enrichment extends existing session/content/adapters architecture without replacing it
-- [ ] no runtime data is stored in graph DB
-- [ ] large runtime outputs route through content store before session insertion
-- [ ] redaction policy supports runtime-loaded external rule files with validation
-- [ ] event-to-graph links use stable identifiers and treat row IDs as optional cache hints
-- [ ] graph linking obeys readiness state and budget policy
-- [ ] context engine can merge runtime events/artifacts with graph and saved context under one bounded ranking policy
-- [ ] CLI, MCP, and hook flows feed enrichment best-effort
-- [ ] resume snapshots include compact enriched runtime signals
-- [ ] tests cover classification, artifact routing, graph linking, context integration, and resume enrichment
+- [ ] classification is deterministic, local, and stored only as metadata
+- [ ] `SessionEventType` values and repeated-input dedupe behavior are unchanged
+- [ ] no raw matched output text is persisted in classification
+- [ ] resume snapshot includes classified errors and build/test summaries within budget
+- [ ] wake-up includes bounded recent runtime failures
+- [ ] no runtime data is written to `worldtree.db`
+- [ ] no event-to-graph link table or context-engine runtime retrieval is added
 
 ---
-
 
 ### Code Reachability Guard Patch — All Languages
 
