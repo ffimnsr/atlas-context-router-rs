@@ -96,6 +96,100 @@ fn recall_memories_enforces_session_and_frontend_visibility() {
 }
 
 #[test]
+fn recall_memories_reaches_prior_sessions_within_visibility_boundaries() {
+    let (_dir, store) = open_store(16, 1024);
+    let now = "2026-01-01T00:00:00Z";
+
+    // Rows written by a prior session: one per scope.
+    seed_memory_full(
+        &store,
+        "project",
+        now,
+        "deploy project",
+        "deploy",
+        MemoryImportance::High,
+        MemoryScope::Project,
+        Some("prior-session"),
+        Some("codex"),
+        Some("artifact-project"),
+    );
+    seed_memory_full(
+        &store,
+        "global",
+        now,
+        "deploy global",
+        "deploy",
+        MemoryImportance::High,
+        MemoryScope::Global,
+        Some("prior-session"),
+        Some("codex"),
+        None,
+    );
+    seed_memory_full(
+        &store,
+        "frontend",
+        now,
+        "deploy frontend",
+        "deploy",
+        MemoryImportance::High,
+        MemoryScope::Frontend,
+        Some("prior-session"),
+        Some("codex"),
+        None,
+    );
+    seed_memory_full(
+        &store,
+        "session",
+        now,
+        "deploy session",
+        "deploy",
+        MemoryImportance::High,
+        MemoryScope::Session,
+        Some("prior-session"),
+        Some("codex"),
+        None,
+    );
+
+    let recall = |frontend: &str, session: &str| -> Vec<String> {
+        let mut ids = store
+            .recall_memories(
+                "/repo",
+                "deploy",
+                &MemoryListFilter::default(),
+                false,
+                &MemoryViewer {
+                    frontend: frontend.to_owned(),
+                    session_id: session.to_owned(),
+                },
+                10,
+            )
+            .unwrap()
+            .iter()
+            .map(|hit| hit.memory.id.clone())
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids
+    };
+
+    // New session of the same frontend sees prior project/global/frontend rows,
+    // but never the prior session-scoped row.
+    assert_eq!(
+        recall("codex", "new-session"),
+        vec!["frontend", "global", "project"],
+        "prior-session memories cross sessions only within visibility boundaries"
+    );
+
+    // Different frontend loses the frontend-scoped row too.
+    assert_eq!(recall("cli", "new-session"), vec!["global", "project"]);
+
+    // The originating session still sees its private row.
+    assert_eq!(
+        recall("codex", "prior-session"),
+        vec!["frontend", "global", "project", "session"]
+    );
+}
+
+#[test]
 fn recall_memories_shared_excludes_own_session_and_frontend_memories() {
     let (_dir, store) = open_store(16, 1024);
     for (id, scope) in [

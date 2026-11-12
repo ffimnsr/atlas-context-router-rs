@@ -73,16 +73,44 @@ fn seed_memory(
     importance: MemoryImportance,
     scope: MemoryScope,
 ) -> MemoryRecord {
+    let source_id = format!("src-{id}");
+    seed_memory_full(
+        store,
+        id,
+        now,
+        body,
+        topic,
+        importance,
+        scope,
+        (scope == MemoryScope::Session).then_some("s1"),
+        (scope == MemoryScope::Frontend).then_some("codex"),
+        Some(&source_id),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn seed_memory_full(
+    store: &SessionStore,
+    id: &str,
+    now: &str,
+    body: &str,
+    topic: &str,
+    importance: MemoryImportance,
+    scope: MemoryScope,
+    session_id: Option<&str>,
+    frontend: Option<&str>,
+    source_id: Option<&str>,
+) -> MemoryRecord {
     let input = NewMemory {
         repo_root: "/repo".to_owned(),
-        session_id: (scope == MemoryScope::Session).then(|| "s1".to_owned()),
-        frontend: (scope == MemoryScope::Frontend).then(|| "codex".to_owned()),
+        session_id: session_id.map(str::to_owned),
+        frontend: frontend.map(str::to_owned),
         scope,
         topic: topic.to_owned(),
         title: format!("title-{topic}"),
         body: body.to_owned(),
         importance,
-        source_id: Some(format!("src-{id}")),
+        source_id: source_id.map(str::to_owned),
         metadata: serde_json::json!({ "seed": id }),
     };
     super::memory::store_memory_at(&store.conn, &input, now, id).unwrap()

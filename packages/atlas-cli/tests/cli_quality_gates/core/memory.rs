@@ -329,6 +329,8 @@ fn memory_recall_ranks_exact_topic_first_and_enforces_visibility() {
     // Exact topic matches rank above broad body matches.
     assert_eq!(results[0]["memory"]["id"], json!(memory_id(&exact)));
     assert_eq!(results[0]["relevance_score"], json!(0));
+    assert_eq!(results[0]["ranking"]["topic_match"], json!("exact_topic"));
+    assert!(results[0]["recall_score"].as_f64().unwrap() > 0.0);
     assert_eq!(
         results[1]["memory"]["id"],
         json!(memory_id(&session_scoped))

@@ -105,6 +105,8 @@ pub fn run_memory(cli: &Cli) -> Result<()> {
                         serde_json::json!({
                             "memory": hit.memory,
                             "relevance_score": hit.relevance_score,
+                            "recall_score": hit.recall_score,
+                            "ranking": hit.ranking,
                         })
                     })
                     .collect::<Vec<_>>();

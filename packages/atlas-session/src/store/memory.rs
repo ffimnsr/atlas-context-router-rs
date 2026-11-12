@@ -16,8 +16,8 @@ use atlas_core::{AtlasError, Clock, Result, SystemClock, format_rfc3339};
 use super::types::{
     MemoryConsolidationGroup, MemoryConsolidationPlan, MemoryDecayPolicy, MemoryDecayReport,
     MemoryDeleteResult, MemoryHealthCategory, MemoryHealthFinding, MemoryHealthReport,
-    MemoryImportance, MemoryListFilter, MemoryPruneResult, MemoryRecord, MemorySearchHit,
-    MemoryViewer, NOISY_TOPIC_ENTRIES, NewMemory, OVERSIZED_BODY_CHARS,
+    MemoryImportance, MemoryListFilter, MemoryPruneResult, MemoryRecord, NOISY_TOPIC_ENTRIES,
+    NewMemory, OVERSIZED_BODY_CHARS,
 };
 use super::util::{hex_encode, to_from_sql_error};
 
@@ -248,16 +248,13 @@ pub(super) fn store_memory_at(
     })
 }
 
-// ── Recall and list ───────────────────────────────────────────────────────────
+// ── Filtering and list ────────────────────────────────────────────────────────
 
-fn escape_like(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_")
-}
-
-fn append_filter_clauses(sql: &mut String, params: &mut Vec<String>, filter: &MemoryListFilter) {
+pub(super) fn append_filter_clauses(
+    sql: &mut String,
+    params: &mut Vec<String>,
+    filter: &MemoryListFilter,
+) {
     if let Some(topic) = &filter.topic {
         sql.push_str(" AND topic = ? COLLATE NOCASE");
         params.push(topic.clone());
@@ -293,73 +290,6 @@ fn query_memories(
         .map_err(|e| AtlasError::Db(e.to_string()))?
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| AtlasError::Db(e.to_string()))
-}
-
-/// Lexical recall: exact topic matches rank above topic/title contains
-/// matches, which rank above body-only matches; ties break on importance,
-/// then recency. Visibility (ICM-A3) is enforced for the given viewer:
-/// `session`-scoped memories require the same session id, `frontend`-scoped
-/// memories require the same frontend. `shared_only` narrows results to
-/// `project` + `global` and bypasses viewer-based conditions.
-pub(super) fn recall_memories(
-    conn: &Connection,
-    repo_root: &str,
-    query: &str,
-    filter: &MemoryListFilter,
-    shared_only: bool,
-    viewer: &MemoryViewer,
-    limit: usize,
-) -> Result<Vec<MemorySearchHit>> {
-    let like = format!("%{}%", escape_like(query));
-    let mut sql = String::from(
-        "SELECT id, repo_root, session_id, frontend, scope, topic, title, body, importance,
-                created_at, updated_at, last_accessed_at, decay_score, source_id, metadata_json,
-                superseded_by,
-                CASE WHEN topic = ?2 THEN 0
-                     WHEN topic LIKE ?3 ESCAPE '\\' OR title LIKE ?3 ESCAPE '\\' THEN 1
-                     ELSE 2 END AS match_tier,
-                CASE importance WHEN 'critical' THEN 0 WHEN 'high' THEN 1
-                                WHEN 'normal' THEN 2 ELSE 3 END AS importance_rank,
-                CASE WHEN superseded_by IS NULL THEN 0 ELSE 1 END AS superseded_rank
-         FROM memories
-         WHERE repo_root = ?1
-           AND (topic LIKE ?3 ESCAPE '\\' OR title LIKE ?3 ESCAPE '\\'
-                OR body LIKE ?3 ESCAPE '\\')",
-    );
-    let mut params = vec![repo_root.to_owned(), query.to_owned(), like];
-    append_filter_clauses(&mut sql, &mut params, filter);
-    if shared_only {
-        sql.push_str(" AND scope IN ('project', 'global')");
-    } else {
-        sql.push_str(
-            " AND (scope IN ('project', 'global')
-                  OR (scope = 'session' AND session_id = ?)
-                  OR (scope = 'frontend' AND frontend = ?))",
-        );
-        params.push(viewer.session_id.clone());
-        params.push(viewer.frontend.clone());
-    }
-    sql.push_str(
-        " ORDER BY match_tier ASC, importance_rank ASC, superseded_rank ASC,
-                  updated_at DESC, created_at DESC
-         LIMIT ?",
-    );
-    params.push(limit.to_string());
-
-    let mut stmt = conn
-        .prepare(&sql)
-        .map_err(|e| AtlasError::Db(e.to_string()))?;
-    let param_refs = params.iter().map(String::as_str).collect::<Vec<_>>();
-    stmt.query_map(rusqlite::params_from_iter(param_refs), |row| {
-        let relevance_score: i32 = row.get(16)?;
-        Ok(MemorySearchHit {
-            memory: row_to_memory(row)?,
-            relevance_score,
-        })
-    })
-    .map_err(|e| AtlasError::Db(e.to_string()))?
-    .collect::<rusqlite::Result<Vec<_>>>()
-    .map_err(|e| AtlasError::Db(e.to_string()))
 }
 
 /// List memories for a repo, filtered and sorted by `updated_at DESC`.
@@ -432,7 +362,7 @@ fn parse_memory_timestamp(value: &str) -> Option<OffsetDateTime> {
 }
 
 /// Whole-day age of a memory row relative to `now`, anchored on `updated_at`.
-fn age_days(updated_at: &str, now: OffsetDateTime) -> f64 {
+pub(super) fn age_days(updated_at: &str, now: OffsetDateTime) -> f64 {
     let Some(ts) = parse_memory_timestamp(updated_at) else {
         return 0.0;
     };

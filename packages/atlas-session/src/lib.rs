@@ -16,8 +16,8 @@ pub use store::{
     GlobalWorkflowPattern, MAX_INLINE_EVENT_PAYLOAD_BYTES, MemoryConsolidationGroup,
     MemoryConsolidationPlan, MemoryDecayPolicy, MemoryDecayReport, MemoryDeleteResult,
     MemoryHealthCategory, MemoryHealthFinding, MemoryHealthReport, MemoryImportance,
-    MemoryListFilter, MemoryPruneResult, MemoryRecord, MemoryScope, MemorySearchHit,
-    MemorySupersessionLink, MemoryViewer, NOISY_TOPIC_ENTRIES, NewDurableTask, NewFeedback,
-    NewMemory, NewSessionEvent, OVERSIZED_BODY_CHARS, ResumeSnapshot, SessionEventRow,
+    MemoryListFilter, MemoryPruneResult, MemoryRecallRanking, MemoryRecord, MemoryScope,
+    MemorySearchHit, MemorySupersessionLink, MemoryViewer, NOISY_TOPIC_ENTRIES, NewDurableTask,
+    NewFeedback, NewMemory, NewSessionEvent, OVERSIZED_BODY_CHARS, ResumeSnapshot, SessionEventRow,
     SessionEventType, SessionMeta, SessionStats, SessionStore, SessionStoreConfig,
 };

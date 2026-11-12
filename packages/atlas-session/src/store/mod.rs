@@ -23,6 +23,7 @@ mod decision_memory;
 mod feedback;
 mod global_memory;
 mod memory;
+mod memory_recall;
 mod resume;
 #[cfg(test)]
 mod tests;
@@ -40,9 +41,9 @@ pub use self::types::{
     GlobalWorkflowPattern, MAX_INLINE_EVENT_PAYLOAD_BYTES, MemoryConsolidationGroup,
     MemoryConsolidationPlan, MemoryDecayPolicy, MemoryDecayReport, MemoryDeleteResult,
     MemoryHealthCategory, MemoryHealthFinding, MemoryHealthReport, MemoryImportance,
-    MemoryListFilter, MemoryPruneResult, MemoryRecord, MemoryScope, MemorySearchHit,
-    MemorySupersessionLink, MemoryViewer, NOISY_TOPIC_ENTRIES, NewDurableTask, NewFeedback,
-    NewMemory, NewSessionEvent, OVERSIZED_BODY_CHARS, ResumeSnapshot, SessionEventRow,
+    MemoryListFilter, MemoryPruneResult, MemoryRecallRanking, MemoryRecord, MemoryScope,
+    MemorySearchHit, MemorySupersessionLink, MemoryViewer, NOISY_TOPIC_ENTRIES, NewDurableTask,
+    NewFeedback, NewMemory, NewSessionEvent, OVERSIZED_BODY_CHARS, ResumeSnapshot, SessionEventRow,
     SessionEventType, SessionMeta, SessionStats, SessionStoreConfig,
 };
 
@@ -54,8 +55,9 @@ use self::feedback::{
 };
 use self::memory::{
     consolidation_plan, decay_reports, delete_memory, health_report, list_memories,
-    memory_schema_issues, prune_memories, recall_memories, stale_memories, store_memory,
+    memory_schema_issues, prune_memories, stale_memories, store_memory,
 };
+use self::memory_recall::recall_memories;
 use self::resume::build_resume_snapshot;
 use self::util::{
     canonical_json, enforce_event_limit, format_days_ago, format_now, format_seconds_ago,

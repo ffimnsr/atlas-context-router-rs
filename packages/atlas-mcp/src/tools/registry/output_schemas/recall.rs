@@ -131,9 +131,32 @@ pub(crate) fn memory_recall_output_schema() -> Value {
                     "additionalProperties": false,
                     "properties": {
                         "memory": { "$ref": "#/$defs/memory_record" },
-                        "relevance_score": { "type": "integer" }
+                        "relevance_score": { "type": "integer" },
+                        "recall_score": { "type": "number" },
+                        "ranking": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "topic_match": { "type": "string" },
+                                "topic_match_tier": { "type": "integer" },
+                                "importance_rank": { "type": "integer" },
+                                "scope_rank": { "type": "integer" },
+                                "source_backed": { "type": "boolean" },
+                                "superseded": { "type": "boolean" },
+                                "age_days": { "type": "integer" }
+                            },
+                            "required": [
+                                "topic_match",
+                                "topic_match_tier",
+                                "importance_rank",
+                                "scope_rank",
+                                "source_backed",
+                                "superseded",
+                                "age_days"
+                            ]
+                        }
                     },
-                    "required": ["memory", "relevance_score"]
+                    "required": ["memory", "relevance_score", "recall_score", "ranking"]
                 }
             },
             "retrieval_hints": {

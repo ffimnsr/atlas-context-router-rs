@@ -249,10 +249,10 @@ Implementation structure:
 
 ##### ICM-E1 — Cross-session recall quality
 
-- [ ] extend memory recall across prior repo sessions while preserving agent/frontend visibility boundaries
-- [ ] rank recall by topic match, importance, recency, scope visibility, and source-backed evidence
-- [ ] make system capable of recalling past sessions without mixing raw session history into future context
-- [ ] optimize context selection so recall surfaces the highest-signal memories first
+- [x] extend memory recall across prior repo sessions while preserving agent/frontend visibility boundaries
+- [x] rank recall by topic match, importance, recency, scope visibility, and source-backed evidence
+- [x] make system capable of recalling past sessions without mixing raw session history into future context
+- [x] optimize context selection so recall surfaces the highest-signal memories first
 
 ##### ICM-E2 — Optional semantic and vector recall
 

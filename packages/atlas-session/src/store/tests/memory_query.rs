@@ -238,6 +238,198 @@ fn recall_memories_applies_topic_and_importance_filters_and_escapes_like() {
 }
 
 #[test]
+fn recall_memories_ranks_by_importance_then_lexical_tier() {
+    let (_dir, store) = open_store(16, 1024);
+    for (id, importance) in [
+        ("low", MemoryImportance::Low),
+        ("critical", MemoryImportance::Critical),
+        ("normal", MemoryImportance::Normal),
+        ("high", MemoryImportance::High),
+    ] {
+        seed_memory(
+            &store,
+            id,
+            "2026-01-01T00:00:00Z",
+            "deploy body",
+            "notes",
+            importance,
+            MemoryScope::Project,
+        );
+    }
+    // Exact topic outranks every body-only tier regardless of importance.
+    seed_memory(
+        &store,
+        "exact-low",
+        "2026-01-01T00:00:00Z",
+        "unrelated body",
+        "deploy",
+        MemoryImportance::Low,
+        MemoryScope::Project,
+    );
+
+    let hits = store
+        .recall_memories(
+            "/repo",
+            "deploy",
+            &MemoryListFilter::default(),
+            false,
+            &cli_viewer(),
+            10,
+        )
+        .unwrap();
+    assert_eq!(
+        hits.iter()
+            .map(|hit| hit.memory.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["exact-low", "critical", "high", "normal", "low"],
+        "lexical tier stays dominant; importance orders the remaining hits"
+    );
+    assert_eq!(hits[0].ranking.topic_match, "exact_topic");
+    assert_eq!(hits[1].ranking.topic_match, "body");
+    assert_eq!(hits[1].ranking.importance_rank, 0);
+}
+
+#[test]
+fn recall_memories_ranks_scope_visibility_and_source_evidence() {
+    let (_dir, store) = open_store(16, 1024);
+    let now = "2026-01-01T00:00:00Z";
+    seed_memory_full(
+        &store,
+        "global",
+        now,
+        "target body",
+        "notes",
+        MemoryImportance::Normal,
+        MemoryScope::Global,
+        None,
+        None,
+        None,
+    );
+    seed_memory_full(
+        &store,
+        "sourced",
+        now,
+        "target body",
+        "notes",
+        MemoryImportance::Normal,
+        MemoryScope::Project,
+        None,
+        None,
+        Some("artifact-1"),
+    );
+    seed_memory_full(
+        &store,
+        "plain",
+        now,
+        "target body",
+        "notes",
+        MemoryImportance::Normal,
+        MemoryScope::Project,
+        None,
+        None,
+        None,
+    );
+    seed_memory_full(
+        &store,
+        "frontend",
+        now,
+        "target body",
+        "notes",
+        MemoryImportance::Normal,
+        MemoryScope::Frontend,
+        None,
+        Some("codex"),
+        None,
+    );
+    seed_memory_full(
+        &store,
+        "session",
+        now,
+        "target body",
+        "notes",
+        MemoryImportance::Normal,
+        MemoryScope::Session,
+        Some("s1"),
+        None,
+        None,
+    );
+
+    let hits = store
+        .recall_memories(
+            "/repo",
+            "target",
+            &MemoryListFilter::default(),
+            false,
+            &MemoryViewer {
+                frontend: "codex".to_owned(),
+                session_id: "s1".to_owned(),
+            },
+            10,
+        )
+        .unwrap();
+    let order = hits
+        .iter()
+        .map(|hit| hit.memory.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        vec!["global", "sourced", "plain", "frontend", "session"],
+        "global visibility, then source-backed evidence, then narrower scopes"
+    );
+    assert!(hits[1].recall_score > hits[2].recall_score);
+    assert!(hits[1].ranking.source_backed);
+    assert!(!hits[2].ranking.source_backed);
+}
+
+#[test]
+fn recall_memories_uses_recency_within_equal_evidence() {
+    let (_dir, store) = open_store(16, 1024);
+    seed_memory_full(
+        &store,
+        "older",
+        "2026-01-01T00:00:00Z",
+        "deploy body",
+        "notes",
+        MemoryImportance::Normal,
+        MemoryScope::Project,
+        None,
+        None,
+        None,
+    );
+    seed_memory_full(
+        &store,
+        "newer",
+        "2026-02-01T00:00:00Z",
+        "deploy body",
+        "notes",
+        MemoryImportance::Normal,
+        MemoryScope::Project,
+        None,
+        None,
+        None,
+    );
+
+    let hits = store
+        .recall_memories(
+            "/repo",
+            "deploy",
+            &MemoryListFilter::default(),
+            false,
+            &cli_viewer(),
+            10,
+        )
+        .unwrap();
+    assert_eq!(
+        hits.iter()
+            .map(|hit| hit.memory.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["newer", "older"]
+    );
+    assert!(hits[0].ranking.age_days < hits[1].ranking.age_days);
+    assert!(hits[0].recall_score > hits[1].recall_score);
+}
+
+#[test]
 fn list_memories_sorts_by_updated_at_desc_and_filters() {
     let (_dir, store) = open_store(16, 1024);
     seed_memory(

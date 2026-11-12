@@ -614,14 +614,42 @@ impl NewMemory {
     }
 }
 
-/// A recall hit pairing a memory record with its lexical match tier.
+/// A recall hit pairing a memory record with its lexical match tier and
+/// cross-session ranking evidence.
 ///
 /// Lower `relevance_score` ranks higher: `0` = exact topic match, `1` =
-/// topic/title contains match, `2` = body-only match.
+/// topic/title contains match, `2` = body-only match. `recall_score` is the
+/// higher-is-better composite score described by [`MemoryRecallRanking`]; the
+/// lexical tier always dominates so exact keyword evidence is never buried.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MemorySearchHit {
     pub memory: MemoryRecord,
     pub relevance_score: i32,
+    pub recall_score: f64,
+    pub ranking: MemoryRecallRanking,
+}
+
+/// Deterministic ranking evidence for one recall hit (ICM-E1).
+///
+/// Ranking is lexical-first: `topic_match_tier` dominates, then importance,
+/// broad scope visibility, source-backed evidence, and recency. Lower ranks
+/// are stronger for every `*_rank` field.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemoryRecallRanking {
+    /// Human-readable match tier: `exact_topic`, `topic_or_title`, or `body`.
+    pub topic_match: String,
+    /// Numeric match tier (0 = exact topic, 1 = topic/title, 2 = body).
+    pub topic_match_tier: u8,
+    /// Importance rank (0 = critical, 1 = high, 2 = normal, 3 = low).
+    pub importance_rank: u8,
+    /// Scope-visibility rank (0 = global, 1 = project, 2 = frontend, 3 = session).
+    pub scope_rank: u8,
+    /// Whether the memory carries a non-empty `source_id`.
+    pub source_backed: bool,
+    /// Whether consolidation superseded this memory.
+    pub superseded: bool,
+    /// Whole days since `updated_at` (0 when unknown or in the future).
+    pub age_days: u32,
 }
 
 /// Filters shared by memory recall and list surfaces.
