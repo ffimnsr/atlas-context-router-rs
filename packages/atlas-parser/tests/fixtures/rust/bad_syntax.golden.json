@@ -1,26 +1,29 @@
 {
-  "edges": [],
-  "hash": "fixture-hash",
+  "path": "fixtures/rust/bad_syntax.rs",
   "language": "rust",
+  "hash": "fixture-hash",
+  "size": 72,
   "nodes": [
     {
-      "extra_json": null,
-      "file_hash": "fixture-hash",
-      "file_path": "fixtures/rust/bad_syntax.rs",
       "id": 0,
-      "is_test": false,
       "kind": "file",
-      "language": "rust",
-      "line_end": 4,
-      "line_start": 1,
-      "modifiers": null,
       "name": "bad_syntax.rs",
-      "params": null,
-      "parent_name": null,
       "qualified_name": "fixtures/rust/bad_syntax.rs",
-      "return_type": null
+      "file_path": "fixtures/rust/bad_syntax.rs",
+      "line_start": 1,
+      "line_end": 4,
+      "language": "rust",
+      "parent_name": null,
+      "params": null,
+      "return_type": null,
+      "modifiers": null,
+      "is_test": false,
+      "file_hash": "fixture-hash",
+      "extra_json": {
+        "has_include_macro": false,
+        "has_macro_generated_modules": false
+      }
     }
   ],
-  "path": "fixtures/rust/bad_syntax.rs",
-  "size": 72
+  "edges": []
 }

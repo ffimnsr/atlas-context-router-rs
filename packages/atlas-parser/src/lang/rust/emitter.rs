@@ -228,6 +228,20 @@ impl<'s, 'o> RustDefinitionEmitter<'s, 'o> {
         let qn = format!("{}::module::{}", self.rel_path, suffix);
 
         let is_test_mod = self.current_in_test_mod() || has_cfg_test(item.node, self.source);
+        let inline = item.node.child_by_field_name("body").is_some();
+        let has_cfg = has_cfg_attr(item.node, self.source);
+        let path_attr_value = path_attr_value(item.node, self.source);
+        let has_path_attr = path_attr_value.is_some();
+        let module_file = if inline {
+            None
+        } else {
+            Some(resolve_module_file(
+                self.rel_path,
+                &parent_qn,
+                name,
+                path_attr_value.as_deref(),
+            ))
+        };
 
         self.nodes.push(Node {
             id: NodeId::UNSET,
@@ -244,7 +258,13 @@ impl<'s, 'o> RustDefinitionEmitter<'s, 'o> {
             modifiers: visibility_modifier(item.node, self.source),
             is_test: is_test_mod,
             file_hash: self.file_hash.to_owned(),
-            extra_json: serde_json::Value::Null,
+            extra_json: serde_json::json!({
+                "inline": inline,
+                "module_file": module_file,
+                "has_cfg": has_cfg,
+                "has_path_attr": has_path_attr,
+                "path_attr_value": path_attr_value,
+            }),
             repo_provenance: None,
         });
         self.edges.push(contains_edge(
@@ -463,6 +483,117 @@ fn has_cfg_test(node: TsNode<'_>, source: &[u8]) -> bool {
             Some((name, Some(arguments))) if name == "cfg" && arguments == "(test)"
         )
     })
+}
+
+fn has_cfg_attr(node: TsNode<'_>, source: &[u8]) -> bool {
+    preceding_attributes(node)
+        .into_iter()
+        .any(|attr| attribute_name(attr, source).as_deref() == Some("cfg"))
+}
+
+fn path_attr_value(node: TsNode<'_>, source: &[u8]) -> Option<String> {
+    for attr in preceding_attributes(node) {
+        if attribute_name(attr, source).as_deref() != Some("path") {
+            continue;
+        }
+        let text = node_text(attr, source);
+        let start = text.find('"')?;
+        let rest = &text[start + 1..];
+        let end = rest.find('"')?;
+        let value = &rest[..end];
+        if !value.is_empty() {
+            return Some(value.to_owned());
+        }
+    }
+    None
+}
+
+/// Extract the attribute name from raw `#[name(...)]` / `#[name = "..."]` text.
+fn attribute_name(node: TsNode<'_>, source: &[u8]) -> Option<String> {
+    let text = node_text(node, source).trim();
+    let inner = text
+        .strip_prefix("#[")
+        .or_else(|| text.strip_prefix("#!["))?;
+    let inner = inner.trim_start();
+    let name: String = inner
+        .chars()
+        .take_while(|ch| ch.is_alphanumeric() || *ch == '_' || *ch == ':')
+        .collect();
+    let name = name.rsplit("::").next().unwrap_or(name.as_str());
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
+/// Resolve an external `mod name;` declaration to a repo-relative module file.
+///
+/// Prefers `<base>/<name>.rs`; the reachability index falls back to
+/// `<base>/<name>/mod.rs` when the preferred file is absent from the store.
+fn resolve_module_file(
+    rel_path: &str,
+    parent_qn: &str,
+    name: &str,
+    path_attr: Option<&str>,
+) -> String {
+    if let Some(path_attr) = path_attr {
+        let parent_dir = rel_path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+        return normalize_repo_relative(&join_repo_relative(parent_dir, path_attr));
+    }
+
+    let base = module_base_dir(rel_path, parent_qn);
+    normalize_repo_relative(&join_repo_relative(&base, &format!("{name}.rs")))
+}
+
+fn module_base_dir(rel_path: &str, parent_qn: &str) -> String {
+    let file_name = rel_path.rsplit('/').next().unwrap_or(rel_path);
+    let parent_dir = rel_path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+    let is_root = matches!(file_name, "lib.rs" | "main.rs" | "mod.rs")
+        || rel_path.contains("/bin/")
+        || rel_path.starts_with("bin/")
+        || rel_path.contains("/tests/")
+        || rel_path.starts_with("tests/")
+        || rel_path.contains("/examples/")
+        || rel_path.starts_with("examples/")
+        || rel_path.contains("/benches/")
+        || rel_path.starts_with("benches/");
+
+    let mut base = if is_root {
+        parent_dir.to_owned()
+    } else {
+        rel_path.trim_end_matches(".rs").to_owned()
+    };
+
+    if let Some(tail) = parent_qn
+        .strip_prefix(rel_path)
+        .and_then(|rest| rest.strip_prefix("::module::"))
+    {
+        for segment in tail.split("::").filter(|segment| !segment.is_empty()) {
+            base = join_repo_relative(&base, segment);
+        }
+    }
+    base
+}
+
+fn join_repo_relative(base: &str, tail: &str) -> String {
+    if base.is_empty() {
+        tail.to_owned()
+    } else if tail.is_empty() {
+        base.to_owned()
+    } else {
+        format!("{base}/{tail}")
+    }
+}
+
+fn normalize_repo_relative(path: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    parts.join("/")
 }
 
 fn normalized_local_type_name(node: TsNode<'_>, source: &[u8]) -> Option<String> {

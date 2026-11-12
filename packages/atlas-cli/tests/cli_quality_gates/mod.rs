@@ -229,6 +229,26 @@ fn read_golden_json(name: &str) -> Value {
     serde_json::from_str(&fs::read_to_string(path).expect("golden file")).expect("golden json")
 }
 
+fn assert_or_update_golden_json(name: &str, value: &Value) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("golden")
+        .join(name);
+    if std::env::var_os("UPDATE_GOLDEN").is_some() {
+        fs::write(
+            &path,
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(value).expect("serialize golden")
+            ),
+        )
+        .expect("write golden");
+        return;
+    }
+    let golden = read_golden_json(name);
+    assert_eq!(value, &golden, "snapshot mismatch for {name}");
+}
+
 fn normalize_query_results(value: &mut Value) {
     if let Some(object) = value.as_object_mut() {
         object.remove("latency_ms");
@@ -472,8 +492,7 @@ fn assert_cli_json_snapshot(
     let mut data = read_json_data_output(command, output);
     scrub_repo_paths(&mut data, repo_root);
     normalize(&mut data);
-    let golden = read_golden_json(golden_name);
-    assert_eq!(data, golden, "snapshot mismatch for {golden_name}");
+    assert_or_update_golden_json(golden_name, &data);
 }
 
 fn assert_mcp_json_snapshot(
@@ -486,8 +505,7 @@ fn assert_mcp_json_snapshot(
     let mut data = read_json_tool_result(output, id);
     scrub_repo_paths(&mut data, repo_root);
     normalize(&mut data);
-    let golden = read_golden_json(golden_name);
-    assert_eq!(data, golden, "snapshot mismatch for {golden_name}");
+    assert_or_update_golden_json(golden_name, &data);
 }
 
 fn write_repo_file(repo_root: &Path, relative_path: &str, content: &str) {

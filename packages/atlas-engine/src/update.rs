@@ -120,6 +120,7 @@ pub struct UpdateSummary {
     pub warnings: Vec<String>,
     pub budget_counters: BuildUpdateBudgetCounters,
     pub budget: BudgetReport,
+    pub reachability: crate::reachability::ReachabilitySummary,
     pub elapsed_ms: u128,
 }
 
@@ -649,13 +650,21 @@ pub fn update_graph(
 
     let resolved_paths: Vec<String> = all_parsed.iter().map(|pf| pf.path.clone()).collect();
     let mut call_target_reconcile_failures = 0usize;
-    if !resolved_paths.is_empty()
-        && !opts.dry_run
-        && let Err(err) =
-            reconcile_call_targets(&mut store, repo_root, &source_repo_id, &resolved_paths)
-    {
-        call_target_reconcile_failures += 1;
-        tracing::warn!("late call-target resolution failed during update: {err:#}");
+    let mut reachability = crate::reachability::ReachabilitySummary::default();
+    if !resolved_paths.is_empty() && !opts.dry_run {
+        match reconcile_call_targets(&mut store, repo_root, &source_repo_id, &resolved_paths) {
+            Ok(reconcile) => {
+                tracing::debug!(
+                    touched_files = reconcile.touched_files,
+                    "call-target reconcile complete"
+                );
+                reachability = reconcile.reachability;
+            }
+            Err(err) => {
+                call_target_reconcile_failures += 1;
+                tracing::warn!("late call-target resolution failed during update: {err:#}");
+            }
+        }
     }
 
     let parsed_count = parsed_changed.len() + parsed_deps.len();
@@ -692,6 +701,7 @@ pub fn update_graph(
         warnings,
         budget_counters,
         budget: budget_report,
+        reachability,
         elapsed_ms: started.elapsed().as_millis(),
     };
 

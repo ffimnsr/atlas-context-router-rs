@@ -263,11 +263,7 @@ fn context_json_contract_stable_for_golden_snapshot() {
 
     normalize_context_result(&mut data);
 
-    let golden = read_golden_json("context_helper.json");
-    assert_eq!(
-        data, golden,
-        "context JSON output must match golden snapshot"
-    );
+    assert_or_update_golden_json("context_helper.json", &data);
 }
 
 #[test]

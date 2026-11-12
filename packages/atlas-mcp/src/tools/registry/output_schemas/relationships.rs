@@ -213,7 +213,20 @@ pub(crate) fn cross_file_links_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({
             "source_file": { "type": "string" },
-            "linked_files": { "type": "array", "items": { "type": "object" } },
+            "linked_files": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "file": { "type": "string" },
+                        "via_symbols": { "type": "array", "items": { "type": "string" } },
+                        "coupling_metric": { "type": "number" },
+                        "rank": { "type": "integer" },
+                        "confidence_tier": { "type": ["string", "null"] },
+                        "reachability": { "type": ["string", "null"] }
+                    }
+                }
+            },
             "coupling_metric": { "type": "object" },
             "summary": { "type": "object" },
             "warnings": { "type": "array", "items": { "type": "string" } },

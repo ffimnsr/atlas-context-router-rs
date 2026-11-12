@@ -15,6 +15,7 @@ mod insights;
 mod load;
 mod mcp;
 mod parsers;
+mod reachability;
 mod sanitization;
 mod search;
 mod template;
@@ -42,6 +43,9 @@ pub use mcp::{
     ValidatedMcpHttpAuthConfig,
 };
 pub use parsers::ParsersConfig;
+pub use reachability::{
+    DEFAULT_REACHABILITY_BUDGET_MS, DEFAULT_REACHABILITY_MAX_OWNERS, ReachabilityConfig,
+};
 pub use sanitization::SanitizationConfig;
 pub use search::{
     DEFAULT_EMBED_MAX_RETRIES, DEFAULT_EMBED_MODEL, DEFAULT_EMBED_RETRY_BACKOFF_MS,
@@ -71,6 +75,8 @@ pub struct Config {
     pub mcp: McpConfig,
     #[serde(default)]
     pub parsers: ParsersConfig,
+    #[serde(default)]
+    pub reachability: ReachabilityConfig,
     #[serde(default)]
     pub memory: MemoryConfig,
     #[serde(default)]

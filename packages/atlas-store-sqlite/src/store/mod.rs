@@ -16,6 +16,7 @@ mod search;
 mod taxonomy;
 
 pub use self::build_state::{BuildFinishStats, GraphBuildState, GraphBuildStatus};
+pub use self::context::{ConfidenceTierEdge, SemanticReferenceEdge};
 pub use self::directory_trie::{DirectoryTrie, TrieNode};
 pub use self::graph::{MAX_NODE_LIST_LIMIT, NodeListFilter, NodeListPage};
 pub use self::history::{

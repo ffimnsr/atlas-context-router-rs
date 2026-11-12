@@ -1240,9 +1240,14 @@ pub(crate) fn tool_usage_guidance(tool_name: &str) -> Vec<String> {
             "Use for symbol/name resolution before relationship tools or file reads.",
             "Pass short exact identifiers or qualified names; avoid natural-language-only phrases unless documented by query grammar.",
         ],
-        "symbol_neighbors" | "traverse_graph" | "cross_file_links" | "concept_clusters" => vec![
+        "symbol_neighbors" | "traverse_graph" | "concept_clusters" => vec![
             "Use after resolving exact symbols or files to inspect direct relationships and bounded dependency paths.",
             "Keep depth and limits small first; escalate only when direct callers/callees are insufficient.",
+        ],
+        "cross_file_links" => vec![
+            "Use after resolving an exact file to inspect cross-file coupling by shared symbol references.",
+            "Weak same_package fallback edges are hidden by default; set include_weak=true only when validating heuristic resolution.",
+            "Each linked file reports confidence_tier and reachability so weak evidence stays visible when requested.",
         ],
         "get_context" | "get_review_context" | "get_minimal_context" | "get_impact_radius" | "explain_change" | "detect_changes" => vec![
             "Use for review, impact, and bounded context assembly around changed files or concrete targets.",

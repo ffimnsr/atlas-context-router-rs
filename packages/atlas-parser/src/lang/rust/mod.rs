@@ -71,6 +71,18 @@ impl LangParser for RustParser {
             edges.append(&mut reference_edges);
         }
 
+        // File-level parse uncertainty that disables the Rust reachability guard
+        // for this file: `include!` and macro-expanded module declarations are
+        // not representable as module facts.
+        if let Some(file_node) = nodes.first_mut() {
+            let source_text = String::from_utf8_lossy(ctx.source);
+            file_node.extra_json = serde_json::json!({
+                "has_include_macro": source_text.contains("include!"),
+                "has_macro_generated_modules": source_text.contains("macro_rules!")
+                    && source_text.contains("mod "),
+            });
+        }
+
         let pf = ParsedFile {
             path: ctx.rel_path.to_owned(),
             language: Some("rust".to_owned()),

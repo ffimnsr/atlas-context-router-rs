@@ -7,18 +7,49 @@ use atlas_repo::RepoRegistry;
 use atlas_store_sqlite::Store;
 use camino::{Utf8Path, Utf8PathBuf};
 
+use crate::package_resolution::{
+    CallMeta, ImportBinding, SamePackageContext, cached_owner_id, call_meta, callable_candidates,
+    collect_import_bindings, node_repo_id, resolve_same_package_target, unique_node,
+};
+use crate::reachability::{
+    ReachabilityGuard, ReachabilityResult, ReachabilityStatus, ReachabilitySummary,
+};
+
+/// Result of one call-target reconcile run.
+pub struct ReconcileSummary {
+    /// Files whose edges changed and were rewritten.
+    pub touched_files: usize,
+    /// Reachability guard statistics for diagnostics.
+    pub reachability: ReachabilitySummary,
+}
+
 pub fn reconcile_call_targets(
     store: &mut Store,
     repo_root: &Utf8Path,
     source_repo_id: &str,
     file_paths: &[String],
-) -> Result<usize> {
+) -> Result<ReconcileSummary> {
     let mut touched_files = 0usize;
     let mut seen = HashSet::new();
     let mut candidate_cache: HashMap<(String, String), Vec<Node>> = HashMap::new();
     let mut owner_cache: HashMap<String, Option<String>> = HashMap::new();
     let config = load_resolver_config(repo_root);
     let allowed_repo_ids = allowed_repo_ids(repo_root, source_repo_id);
+
+    // Build the reachability guard once per run from persisted store state.
+    // Only owners of changed files are indexed, so incremental update skips
+    // owners with no changed files.
+    let mut guard = ReachabilityGuard::new(&config.reachability);
+    let owners: Vec<(String, String)> = file_paths
+        .iter()
+        .filter_map(|path| {
+            cached_owner_id(store, source_repo_id, path, &mut owner_cache)
+                .map(|owner_id| (language_for_path(path).to_owned(), owner_id))
+        })
+        .collect();
+    if let Err(error) = guard.prepare(store, source_repo_id, owners, &config.reachability) {
+        tracing::warn!(%error, "reachability guard preparation failed; weak edges stay unknown");
+    }
 
     for path in file_paths {
         if !seen.insert(path.clone()) {
@@ -42,6 +73,7 @@ pub fn reconcile_call_targets(
         let import_bindings = collect_import_bindings(&nodes);
         let mut edges: Vec<Edge> = store.edges_by_file_for_repo(source_repo_id, path)?;
         let mut changed = false;
+        let current_owner = cached_owner_id(store, source_repo_id, path, &mut owner_cache);
         let resolution_ctx = ResolutionContext {
             store,
             repo_root,
@@ -63,44 +95,73 @@ pub fn reconcile_call_targets(
                 continue;
             }
 
-            let resolved = if meta.receiver_text.is_some() {
-                resolve_import_target(
-                    &resolution_ctx,
-                    &meta,
-                    &import_bindings,
-                    &mut candidate_cache,
-                )
-                .or_else(|| {
-                    resolve_same_package_target(
-                        &resolution_ctx,
+            // Direct import-backed resolution never goes through the guard.
+            let import_resolved = resolve_import_target(
+                &resolution_ctx,
+                &meta,
+                &import_bindings,
+                &mut candidate_cache,
+            );
+
+            let resolved = match import_resolved {
+                Some(resolved) => Some((resolved.0, resolved.1, resolved.2, None)),
+                None => {
+                    let same_package = resolve_same_package_target(
+                        &SamePackageContext {
+                            store,
+                            language: &language,
+                            path,
+                            source_repo_id,
+                            allowed_repo_ids: &allowed_repo_ids,
+                        },
                         &meta,
                         &mut candidate_cache,
                         &mut owner_cache,
-                    )
-                })
-            } else {
-                resolve_import_target(
-                    &resolution_ctx,
-                    &meta,
-                    &import_bindings,
-                    &mut candidate_cache,
-                )
-                .or_else(|| {
-                    resolve_same_package_target(
-                        &resolution_ctx,
-                        &meta,
-                        &mut candidate_cache,
-                        &mut owner_cache,
-                    )
-                })
+                    );
+                    same_package.map(|(node, tier, confidence)| {
+                        let owner_id = current_owner.as_deref().unwrap_or("");
+                        let decision =
+                            guard.resolve_weak_edge(&language, owner_id, path, &node.file_path);
+                        let status = match &decision {
+                            ReachabilityResult::Reachable => Some(ReachabilityStatus::Verified),
+                            ReachabilityResult::Unknown { reason }
+                                if reason == "provider_absent" || reason == "provider_disabled" =>
+                            {
+                                Some(ReachabilityStatus::NotApplicable)
+                            }
+                            ReachabilityResult::Unknown { .. } => Some(ReachabilityStatus::Unknown),
+                            ReachabilityResult::Unreachable => None,
+                        };
+                        (node, tier, confidence, status)
+                    })
+                }
             };
 
-            let Some((target_node, tier, confidence)) = resolved else {
+            let Some((target_node, tier, confidence, reachability)) = resolved else {
                 mark_unresolved_cross_repo_edge(edge, &resolution_ctx, &import_bindings, &meta);
+                if edge.confidence_tier.as_deref() == Some("same_package") {
+                    reject_weak_edge(edge, &meta);
+                    guard.record_weak_edge_rejected();
+                    changed = true;
+                }
                 continue;
             };
+
+            if tier == "same_package" && reachability.is_none() {
+                // Guard returned Unreachable: reset the stale weak target.
+                reject_weak_edge(edge, &meta);
+                changed = true;
+                continue;
+            }
+
+            let desired_reachability = reachability.map(ReachabilityStatus::as_str);
+            let existing_reachability = edge
+                .extra_json
+                .get("reachability")
+                .and_then(|value| value.as_str());
             if edge.target_qn == target_node.qualified_name
                 && edge.confidence_tier.as_deref() == Some(tier)
+                && existing_reachability == desired_reachability
             {
                 continue;
             }
@@ -109,6 +170,7 @@ pub fn reconcile_call_targets(
             edge.confidence_tier = Some(tier.to_owned());
             edge.confidence = confidence;
             annotate_cross_repo_edge(edge, source_repo_id, &target_node, tier);
+            write_reachability(edge, reachability);
             changed = true;
         }
 
@@ -118,25 +180,45 @@ pub fn reconcile_call_targets(
         }
     }
 
-    Ok(touched_files)
+    Ok(ReconcileSummary {
+        touched_files,
+        reachability: guard.summary(),
+    })
+}
+
+fn language_for_path(path: &str) -> &'static str {
+    if path.ends_with(".rs") { "rust" } else { "" }
+}
+
+fn write_reachability(edge: &mut Edge, status: Option<ReachabilityStatus>) {
+    let mut extra = edge.extra_json.as_object().cloned().unwrap_or_default();
+    extra.remove("reachability");
+    match status {
+        Some(status) => {
+            extra.insert(
+                "reachability".to_owned(),
+                serde_json::Value::String(status.as_str().to_owned()),
+            );
+            extra.remove("unresolved");
+        }
+        None => {
+            extra.remove("reachability");
+        }
+    }
+    edge.extra_json = serde_json::Value::Object(extra);
+}
+
+fn reject_weak_edge(edge: &mut Edge, meta: &CallMeta) {
+    edge.target_qn = meta.callee_name.clone();
+    edge.confidence_tier = None;
+    edge.confidence = 0.0;
+    let mut extra = edge.extra_json.as_object().cloned().unwrap_or_default();
+    extra.remove("reachability");
+    extra.insert("unresolved".to_owned(), serde_json::Value::Bool(true));
+    edge.extra_json = serde_json::Value::Object(extra);
 }
 
 #[derive(Clone)]
-struct CallMeta {
-    callee_name: String,
-    receiver_text: Option<String>,
-    receiver_type: Option<String>,
-}
-
-#[derive(Clone)]
-struct ImportBinding {
-    source: String,
-    local: String,
-    imported: Option<String>,
-    kind: String,
-    relative_level: usize,
-}
-
 struct ResolutionContext<'a> {
     store: &'a Store,
     repo_root: &'a Utf8Path,
@@ -151,6 +233,7 @@ struct ResolutionContext<'a> {
 struct ResolverConfig {
     tsconfigs: Vec<TsConfigEntry>,
     go_module: Option<String>,
+    reachability: crate::config::ReachabilityConfig,
 }
 
 struct TsConfigEntry {
@@ -168,9 +251,13 @@ struct TsPathAlias {
 }
 
 fn load_resolver_config(repo_root: &Utf8Path) -> ResolverConfig {
+    let reachability = crate::Config::load(&crate::paths::atlas_dir(repo_root.as_str()))
+        .map(|config| config.reachability)
+        .unwrap_or_default();
     ResolverConfig {
         tsconfigs: load_tsconfigs(repo_root),
         go_module: load_go_module(repo_root),
+        reachability,
     }
 }
 
@@ -355,13 +442,6 @@ fn load_go_module(repo_root: &Utf8Path) -> Option<String> {
     })
 }
 
-fn node_repo_id(node: &Node) -> Option<&str> {
-    node.extra_json
-        .as_object()
-        .and_then(|extra| extra.get("repo_id"))
-        .and_then(|value| value.as_str())
-}
-
 fn allowed_repo_ids(repo_root: &Utf8Path, source_repo_id: &str) -> HashSet<String> {
     let mut allowed = HashSet::from([source_repo_id.to_owned()]);
     let Some(registry) = load_nearest_registry(repo_root) else {
@@ -464,156 +544,6 @@ fn mark_unresolved_cross_repo_edge(
         serde_json::json!(ctx.allowed_repo_ids),
     );
     edge.extra_json = serde_json::Value::Object(extra);
-}
-
-fn call_meta(edge: &Edge) -> Option<CallMeta> {
-    let extra = edge.extra_json.as_object()?;
-    let callee_name = extra.get("callee_name")?.as_str()?.to_owned();
-    let receiver_text = extra
-        .get("receiver_text")
-        .and_then(|value| value.as_str())
-        .map(str::to_owned)
-        .filter(|value| !value.is_empty());
-    let receiver_type = extra
-        .get("receiver_type")
-        .and_then(|value| value.as_str())
-        .map(str::to_owned)
-        .filter(|value| !value.is_empty());
-    Some(CallMeta {
-        callee_name,
-        receiver_text,
-        receiver_type,
-    })
-}
-
-fn collect_import_bindings(nodes: &[Node]) -> Vec<ImportBinding> {
-    let mut bindings = Vec::new();
-    for node in nodes {
-        if node.kind != NodeKind::Import {
-            continue;
-        }
-        let Some(extra) = node.extra_json.as_object() else {
-            continue;
-        };
-        let Some(source) = extra.get("source").and_then(|value| value.as_str()) else {
-            continue;
-        };
-        let Some(items) = extra.get("bindings").and_then(|value| value.as_array()) else {
-            continue;
-        };
-        for item in items {
-            let Some(item_obj) = item.as_object() else {
-                continue;
-            };
-            let Some(local) = item_obj.get("local").and_then(|value| value.as_str()) else {
-                continue;
-            };
-            let imported = item_obj
-                .get("imported")
-                .and_then(|value| value.as_str())
-                .map(str::to_owned);
-            let kind = item_obj
-                .get("kind")
-                .and_then(|value| value.as_str())
-                .unwrap_or("module")
-                .to_owned();
-            let relative_level = extra
-                .get("relative_level")
-                .and_then(|value| value.as_u64())
-                .unwrap_or(0) as usize;
-            bindings.push(ImportBinding {
-                source: source.to_owned(),
-                local: local.to_owned(),
-                imported,
-                kind,
-                relative_level,
-            });
-        }
-    }
-    bindings
-}
-
-fn resolve_same_package_target(
-    ctx: &ResolutionContext<'_>,
-    meta: &CallMeta,
-    candidate_cache: &mut HashMap<(String, String), Vec<Node>>,
-    owner_cache: &mut HashMap<String, Option<String>>,
-) -> Option<(Node, &'static str, f32)> {
-    let mut candidates = callable_candidates(
-        ctx.store,
-        ctx.language,
-        &meta.callee_name,
-        candidate_cache,
-        ctx.allowed_repo_ids,
-    )
-    .ok()?;
-    if let Some(receiver_hint) = meta
-        .receiver_type
-        .as_deref()
-        .or_else(|| meta.receiver_text.as_deref().and_then(receiver_type_hint))
-    {
-        let receiver_matches: Vec<Node> = candidates
-            .iter()
-            .filter(|node| matches_receiver_hint(node, receiver_hint))
-            .cloned()
-            .collect();
-        if !receiver_matches.is_empty() {
-            candidates = receiver_matches;
-        }
-    }
-    let current_owner = cached_owner_id(ctx.store, ctx.source_repo_id, ctx.path, owner_cache);
-
-    if let Some(current_owner) = current_owner {
-        let same_owner_matches: Vec<Node> = candidates
-            .iter()
-            .filter(|node| node.file_path != ctx.path)
-            .filter(|node| {
-                cached_owner_id(ctx.store, ctx.source_repo_id, &node.file_path, owner_cache)
-                    .as_deref()
-                    == Some(current_owner.as_str())
-            })
-            .cloned()
-            .collect();
-        if let Some(node) = unique_node(same_owner_matches.clone()) {
-            return Some((node, "same_package", 0.65));
-        }
-
-        let current_dir = Utf8Path::new(ctx.path)
-            .parent()
-            .unwrap_or_else(|| Utf8Path::new(""));
-        let same_dir_matches: Vec<Node> = same_owner_matches
-            .into_iter()
-            .filter(|node| same_dir(current_dir, &node.file_path))
-            .collect();
-        return unique_node(same_dir_matches).map(|node| (node, "same_package", 0.65));
-    }
-
-    let current_dir = Utf8Path::new(ctx.path)
-        .parent()
-        .unwrap_or_else(|| Utf8Path::new(""));
-    let matches: Vec<Node> = candidates
-        .into_iter()
-        .filter(|node| node.file_path != ctx.path)
-        .filter(|node| same_dir(current_dir, &node.file_path))
-        .collect();
-    unique_node(matches).map(|node| (node, "same_package", 0.65))
-}
-
-fn cached_owner_id(
-    store: &Store,
-    source_repo_id: &str,
-    path: &str,
-    owner_cache: &mut HashMap<String, Option<String>>,
-) -> Option<String> {
-    if let Some(owner_id) = owner_cache.get(path) {
-        return owner_id.clone();
-    }
-    let owner_id = store
-        .file_owner_id_for_repo(source_repo_id, path)
-        .ok()
-        .flatten();
-    owner_cache.insert(path.to_owned(), owner_id.clone());
-    owner_id
 }
 
 fn resolve_import_target(
@@ -1023,81 +953,6 @@ fn quoted_module_source(input: &str) -> Option<&str> {
     let rest = &input[start + 1..];
     let end = rest.find(quote)?;
     Some(&rest[..end])
-}
-
-fn callable_candidates(
-    store: &Store,
-    language: &str,
-    callee_name: &str,
-    candidate_cache: &mut HashMap<(String, String), Vec<Node>>,
-    allowed_repo_ids: &HashSet<String>,
-) -> Result<Vec<Node>> {
-    let key = (language.to_owned(), callee_name.to_owned());
-    if let Some(nodes) = candidate_cache.get(&key) {
-        return Ok(nodes.clone());
-    }
-    let nodes = store.callable_nodes_by_name(language, callee_name)?;
-    candidate_cache.insert(key, nodes.clone());
-    Ok(nodes
-        .into_iter()
-        .filter(|node| {
-            node_repo_id(node)
-                .map(|repo_id| allowed_repo_ids.contains(repo_id))
-                .unwrap_or(true)
-        })
-        .collect())
-}
-
-fn receiver_type_hint(receiver: &str) -> Option<&str> {
-    let receiver = receiver.trim();
-    if receiver.is_empty() {
-        return None;
-    }
-
-    let receiver = receiver
-        .split('<')
-        .next()
-        .unwrap_or(receiver)
-        .trim_matches('&')
-        .trim();
-
-    receiver
-        .rsplit("::")
-        .next()
-        .map(str::trim)
-        .filter(|segment| !segment.is_empty())
-}
-
-fn matches_receiver_hint(node: &Node, receiver_hint: &str) -> bool {
-    method_receiver_name(node).is_some_and(|candidate| candidate == receiver_hint)
-}
-
-fn method_receiver_name(node: &Node) -> Option<&str> {
-    node.parent_name
-        .as_deref()
-        .and_then(|parent| parent.contains("::impl::").then_some(parent))
-        .and_then(|parent| parent.rsplit("::impl::").next())
-        .and_then(|tail| tail.rsplit("::").next())
-        .or_else(|| {
-            let (_, tail) = node.qualified_name.split_once("::method::")?;
-            tail.rsplit_once("::")
-                .map(|(receiver, _)| receiver)
-                .or_else(|| tail.rsplit_once('.').map(|(receiver, _)| receiver))
-        })
-}
-
-fn same_dir(current_dir: &Utf8Path, candidate_path: &str) -> bool {
-    Utf8Path::new(candidate_path)
-        .parent()
-        .map(|parent| parent == current_dir)
-        .unwrap_or(false)
-}
-
-fn unique_node(mut nodes: Vec<Node>) -> Option<Node> {
-    if nodes.len() != 1 {
-        return None;
-    }
-    nodes.pop()
 }
 
 fn normalize_relative_path(path: Utf8PathBuf) -> Utf8PathBuf {

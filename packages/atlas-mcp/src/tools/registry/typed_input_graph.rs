@@ -180,6 +180,10 @@ pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
                     "Repo-relative file path to analyse (e.g. 'src/auth.rs').",
                 ),
                 ("properties/limit", "Maximum links to return (default 20)."),
+                (
+                    "properties/include_weak",
+                    "Include weak same_package fallback edges (default false).",
+                ),
                 ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
             ],
         )),

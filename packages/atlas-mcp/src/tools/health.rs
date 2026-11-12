@@ -790,7 +790,39 @@ pub(super) fn tool_doctor(
         })
     };
 
-    let payload = json!({
+    let reachability_measurement = if db_exists {
+        use atlas_repo::stable_repo_id;
+        atlas_store_sqlite::Store::open(db_path)
+            .ok()
+            .and_then(|store| {
+                let source_repo_id = stable_repo_id(Utf8Path::new(repo_root));
+                atlas_engine::measure_same_package_edges(
+                    &store,
+                    &source_repo_id,
+                    atlas_engine::DEFAULT_MEASUREMENT_SAMPLE_LIMIT,
+                )
+                .ok()
+            })
+    } else {
+        None
+    };
+
+    let reachability_summary = if db_exists {
+        use atlas_repo::stable_repo_id;
+        atlas_store_sqlite::Store::open(db_path)
+            .ok()
+            .and_then(|store| {
+                let source_repo_id = stable_repo_id(Utf8Path::new(repo_root));
+                let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root))
+                    .map(|config| config.reachability)
+                    .unwrap_or_default();
+                atlas_engine::diagnose_reachability(&store, &source_repo_id, &config).ok()
+            })
+    } else {
+        None
+    };
+
+    let mut payload = json!({
         "overall_status": overall_status,
         "health_class": readiness.health_class.map(|class| class.as_str()),
         "recovery_mode": "block_only",
@@ -809,6 +841,14 @@ pub(super) fn tool_doctor(
         },
         "warnings": warnings,
     });
+
+    if let Some(measurement) = reachability_measurement {
+        payload["reachability_measurement"] =
+            serde_json::to_value(measurement).unwrap_or(serde_json::Value::Null);
+    }
+    if let Some(summary) = reachability_summary {
+        payload["reachability"] = serde_json::to_value(summary).unwrap_or(serde_json::Value::Null);
+    }
 
     let envelope = ToolSuccessEnvelope::new("doctor", payload);
     normalized_tool_result_value(&envelope, output_format)
@@ -834,6 +874,9 @@ pub(super) fn tool_db_check(
     let issues = store.integrity_check().context("integrity check failed")?;
     let orphans = structural_orphans(&store, limit);
     let dangling = structural_dangling_edges(&store, limit);
+    let source_repo_id = atlas_repo::stable_repo_id(Utf8Path::new(repo_root));
+    let invalid_reachability = store.invalid_reachability_edges(&source_repo_id, limit)?;
+    let reachability_provenance_ok = invalid_reachability.is_empty();
 
     // ICM-A1 + ICM-C1: validate the continuity-side memory and feedback
     // schemas through db check. A missing session DB is not a schema violation
@@ -911,11 +954,14 @@ pub(super) fn tool_db_check(
         && noncanonical_path_rows.is_empty()
         && orphan_nodes.is_empty()
         && dangling_edges.is_empty()
+        && reachability_provenance_ok
         && session_db_ok
         && memory_schema_ok
         && feedback_schema_ok;
     let failure_category = if !issues.is_empty() || !orphans.is_empty() || !dangling.is_empty() {
         integrity_issue_code(&issues, !orphans.is_empty() || !dangling.is_empty())
+    } else if !reachability_provenance_ok {
+        "logical_inconsistency"
     } else if !memory_schema_ok || !feedback_schema_ok {
         "schema_mismatch"
     } else {
@@ -964,6 +1010,17 @@ pub(super) fn tool_db_check(
         "orphan_nodes": orphan_nodes,
         "dangling_edges": dangling_edges,
         "noncanonical_path_rows": noncanonical_path_rows,
+        "reachability_provenance": {
+            "ok": reachability_provenance_ok,
+            "invalid_count": invalid_reachability.len(),
+            "invalid_edges": invalid_reachability
+                .iter()
+                .map(|(id, value)| json!({
+                    "edge_id": id,
+                    "reachability": value,
+                }))
+                .collect::<Vec<_>>(),
+        },
         "session_db": {
             "path": session_db_path,
             "exists": session_db_exists,

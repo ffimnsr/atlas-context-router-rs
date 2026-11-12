@@ -250,6 +250,7 @@ pub fn run_build(cli: &Cli) -> Result<()> {
                     "warnings": summary.warnings,
                     "budget": summary.budget,
                     "budget_counters": summary.budget_counters,
+                    "reachability": summary.reachability,
                     "elapsed_ms": summary.elapsed_ms,
                     "nodes_per_sec": if summary.elapsed_ms > 0 {
                         (summary.nodes_inserted as f64 / summary.elapsed_ms as f64 * 1000.0).round() as u64
@@ -471,6 +472,7 @@ fn run_registered_builds(
                     "bytes_skipped": summary.budget_counters.bytes_skipped,
                     "budget_stop_reason": summary.budget_counters.budget_stop_reason,
                     "warnings": summary.warnings,
+                    "reachability": summary.reachability,
                 }));
             }
             Err(error) => {

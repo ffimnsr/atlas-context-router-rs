@@ -590,3 +590,112 @@ fn rust_definition_query_extracts_method_call_receiver_and_name() {
             })
     }));
 }
+
+fn parse_at(rel_path: &str, src: &str) -> ParsedFile {
+    let p = RustParser;
+    let (pf, _) = p.parse(&ParseContext {
+        rel_path,
+        file_hash: "deadbeef",
+        source: src.as_bytes(),
+        old_tree: None,
+    });
+    pf
+}
+
+#[test]
+fn records_external_module_facts() {
+    let pf = parse_at("src/lib.rs", "mod foo;\n");
+    let module = pf
+        .nodes
+        .iter()
+        .find(|n| n.kind == NodeKind::Module)
+        .expect("module node");
+    assert_eq!(module.extra_json["inline"], serde_json::json!(false));
+    assert_eq!(
+        module.extra_json["module_file"],
+        serde_json::json!("src/foo.rs")
+    );
+    assert_eq!(module.extra_json["has_cfg"], serde_json::json!(false));
+    assert_eq!(module.extra_json["has_path_attr"], serde_json::json!(false));
+}
+
+#[test]
+fn records_module_file_for_non_root_file() {
+    let pf = parse_at("src/a.rs", "mod foo;\n");
+    let module = pf
+        .nodes
+        .iter()
+        .find(|n| n.kind == NodeKind::Module)
+        .expect("module node");
+    assert_eq!(
+        module.extra_json["module_file"],
+        serde_json::json!("src/a/foo.rs")
+    );
+}
+
+#[test]
+fn records_module_file_for_nested_inline_module() {
+    let pf = parse_at("src/lib.rs", "mod outer { mod inner; }\n");
+    let module = pf
+        .nodes
+        .iter()
+        .find(|n| n.kind == NodeKind::Module && n.name == "inner")
+        .expect("inner module node");
+    assert_eq!(
+        module.extra_json["module_file"],
+        serde_json::json!("src/outer/inner.rs")
+    );
+}
+
+#[test]
+fn records_inline_module_facts() {
+    let pf = parse_at("src/lib.rs", "mod foo { fn bar() {} }\n");
+    let module = pf
+        .nodes
+        .iter()
+        .find(|n| n.kind == NodeKind::Module)
+        .expect("module node");
+    assert_eq!(module.extra_json["inline"], serde_json::json!(true));
+    assert_eq!(module.extra_json["module_file"], serde_json::Value::Null);
+}
+
+#[test]
+fn records_path_attr_and_cfg_facts() {
+    let pf = parse_at(
+        "src/lib.rs",
+        "#[cfg(unix)]\n#[path = \"custom/location.rs\"]\nmod foo;\n",
+    );
+    let module = pf
+        .nodes
+        .iter()
+        .find(|n| n.kind == NodeKind::Module)
+        .expect("module node");
+    assert_eq!(module.extra_json["has_cfg"], serde_json::json!(true));
+    assert_eq!(module.extra_json["has_path_attr"], serde_json::json!(true));
+    assert_eq!(
+        module.extra_json["path_attr_value"],
+        serde_json::json!("custom/location.rs")
+    );
+    assert_eq!(
+        module.extra_json["module_file"],
+        serde_json::json!("src/custom/location.rs")
+    );
+}
+
+#[test]
+fn records_file_level_parse_uncertainty_facts() {
+    let pf = parse_at("src/lib.rs", "include!(\"generated.rs\");\n");
+    let file = pf
+        .nodes
+        .iter()
+        .find(|n| n.kind == NodeKind::File)
+        .expect("file node");
+    assert_eq!(
+        file.extra_json["has_include_macro"],
+        serde_json::json!(true)
+    );
+    assert_eq!(
+        file.extra_json["has_macro_generated_modules"],
+        serde_json::json!(false)
+    );
+}

@@ -8,9 +8,10 @@ pub mod migrations;
 pub mod store;
 
 pub use store::{
-    BuildFinishStats, DEFAULT_TRIEHI_MIN_CHUNKS, DirectoryTrie, GraphBuildState, GraphBuildStatus,
-    GraphRecoveryMode, GraphStoreRecovery, GraphStoreRecoveryError, HistoricalEdge, HistoricalNode,
-    HistoryStatusSummary, MAX_NODE_LIST_LIMIT, NodeListFilter, NodeListPage, Store, StoredCommit,
+    BuildFinishStats, ConfidenceTierEdge, DEFAULT_TRIEHI_MIN_CHUNKS, DirectoryTrie,
+    GraphBuildState, GraphBuildStatus, GraphRecoveryMode, GraphStoreRecovery,
+    GraphStoreRecoveryError, HistoricalEdge, HistoricalNode, HistoryStatusSummary,
+    MAX_NODE_LIST_LIMIT, NodeListFilter, NodeListPage, SemanticReferenceEdge, Store, StoredCommit,
     StoredEdgeHistory, StoredNodeHistory, StoredSnapshot, StoredSnapshotFile,
     StoredSnapshotMembershipBlob, TrieNode, VectorScope,
 };

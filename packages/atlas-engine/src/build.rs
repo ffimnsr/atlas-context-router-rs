@@ -68,6 +68,7 @@ pub struct BuildSummary {
     pub warnings: Vec<String>,
     pub budget_counters: BuildUpdateBudgetCounters,
     pub budget: BudgetReport,
+    pub reachability: crate::reachability::ReachabilitySummary,
     pub elapsed_ms: u128,
 }
 
@@ -205,6 +206,7 @@ pub fn build_graph(
     let mut total_edges = 0usize;
     let mut chunk_upsert_failures = 0usize;
     let mut call_target_reconcile_failures = 0usize;
+    let mut reachability = crate::reachability::ReachabilitySummary::default();
     let mut resolved_paths: Vec<String> = Vec::new();
     let mut attempted_files = 0usize;
     let mut budget_blocked = false;
@@ -325,13 +327,20 @@ pub fn build_graph(
         .context("cannot refresh package/workspace nodes")?;
     }
 
-    if !resolved_paths.is_empty()
-        && !opts.dry_run
-        && let Err(err) =
-            reconcile_call_targets(&mut store, repo_root, &source_repo_id, &resolved_paths)
-    {
-        call_target_reconcile_failures += 1;
-        tracing::warn!("late call-target resolution failed during build: {err:#}");
+    if !resolved_paths.is_empty() && !opts.dry_run {
+        match reconcile_call_targets(&mut store, repo_root, &source_repo_id, &resolved_paths) {
+            Ok(reconcile) => {
+                tracing::debug!(
+                    touched_files = reconcile.touched_files,
+                    "call-target reconcile complete"
+                );
+                reachability = reconcile.reachability;
+            }
+            Err(err) => {
+                call_target_reconcile_failures += 1;
+                tracing::warn!("late call-target resolution failed during build: {err:#}");
+            }
+        }
     }
 
     let (budget_counters, budget_report) = budget.finish();
@@ -366,6 +375,7 @@ pub fn build_graph(
         warnings,
         budget_counters,
         budget: budget_report,
+        reachability,
         elapsed_ms: started.elapsed().as_millis(),
     };
 

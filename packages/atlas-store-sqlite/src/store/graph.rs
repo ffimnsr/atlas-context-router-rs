@@ -147,6 +147,78 @@ impl Store {
         Ok(rows)
     }
 
+    /// File records owned by one package owner, ordered by canonical path.
+    pub fn files_for_owner_for_repo(
+        &self,
+        source_repo_id: &str,
+        owner_id: &str,
+    ) -> Result<Vec<FileRecord>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT path, language, hash, size, indexed_at,
+                        owner_id, owner_kind, owner_root, owner_manifest_path, owner_name
+                 FROM files
+                 WHERE source_repo_id = ?1 AND owner_id = ?2
+                 ORDER BY path",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![source_repo_id, owner_id], |row| {
+                Ok(FileRecord {
+                    path: row.get(0)?,
+                    language: row.get(1)?,
+                    hash: row.get(2)?,
+                    size: row.get(3)?,
+                    indexed_at: row.get(4)?,
+                    owner_id: row.get(5)?,
+                    owner_kind: row.get(6)?,
+                    owner_root: row.get(7)?,
+                    owner_manifest_path: row.get(8)?,
+                    owner_name: row.get(9)?,
+                    repo_provenance: None,
+                })
+            })
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Module and file nodes for one package owner, ordered deterministically.
+    ///
+    /// Reachability index construction reads persisted module facts from these
+    /// rows so incremental update never depends on in-memory parse output.
+    pub fn module_and_file_nodes_for_owner_for_repo(
+        &self,
+        source_repo_id: &str,
+        owner_id: &str,
+    ) -> Result<Vec<Node>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path,
+                        n.line_start, n.line_end, n.language, n.parent_name,
+                        n.params, n.return_type, n.modifiers, n.is_test,
+                        n.file_hash, n.extra_json
+                 FROM nodes n
+                 JOIN files f ON f.source_repo_id = n.source_repo_id
+                             AND f.path = n.file_path
+                 WHERE n.source_repo_id = ?1 AND f.owner_id = ?2
+                   AND n.kind IN ('module', 'file')
+                 ORDER BY n.file_path, n.line_start, n.qualified_name",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![source_repo_id, owner_id], row_to_node)
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
     /// All file records in the graph, ordered by canonical repo-relative path.
     ///
     /// Used by docs generation and other whole-graph consumers that need the

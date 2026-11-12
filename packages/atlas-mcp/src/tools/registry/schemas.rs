@@ -349,6 +349,7 @@ pub(crate) struct SymbolNeighborsArgsSchema {
 pub(crate) struct CrossFileLinksArgsSchema {
     file: String,
     limit: Option<u64>,
+    include_weak: Option<bool>,
     output_format: Option<String>,
 }
 

@@ -3,8 +3,41 @@ use rusqlite::params;
 
 use super::{
     Store,
-    helpers::{parse_repo_provenance, row_to_node},
+    helpers::{canonicalize_repo_path, parse_repo_provenance, row_to_node},
 };
+
+/// One semantic edge referencing a symbol defined in a specific file.
+///
+/// Carries the evidence columns needed by consumers to distinguish strong
+/// (import/parser-proven) references from weak same-package fallbacks.
+#[derive(Debug, Clone)]
+pub struct SemanticReferenceEdge {
+    /// File that sources the reference.
+    pub source_file: String,
+    /// Qualified name of the referenced symbol.
+    pub target_qn: String,
+    /// Edge kind (`calls`, `imports`, `references`, ...).
+    pub edge_kind: String,
+    /// Resolution confidence tier, when recorded.
+    pub confidence_tier: Option<String>,
+    /// Raw edge extra metadata (e.g. persisted reachability provenance).
+    pub extra_json: serde_json::Value,
+}
+
+/// One sampled edge used by reachability measurement.
+#[derive(Debug, Clone)]
+pub struct ConfidenceTierEdge {
+    /// File that sources the edge.
+    pub source_file: String,
+    /// Qualified name of the edge target.
+    pub target_qn: String,
+    /// File that defines the target symbol, when resolvable.
+    pub target_file: Option<String>,
+    /// Edge kind.
+    pub edge_kind: String,
+    /// Raw edge extra metadata.
+    pub extra_json: serde_json::Value,
+}
 
 /// Direction of a [`Store::directed_edges`] lookup.
 #[derive(Clone, Copy)]
@@ -316,32 +349,211 @@ impl Store {
     // Semantic retrieval helpers (Phase CM9)
     // -------------------------------------------------------------------------
 
-    /// Edges from other files pointing at symbols defined in `file_path`.
+    /// Semantic edges from other files pointing at symbols defined in
+    /// `file_path`, including provenance columns used to classify weak edges.
     ///
-    /// Returns `(referencing_file_path, target_qualified_name)` pairs.
     /// Bounded by `max_edges` to avoid overwhelming the caller; group in Rust.
-    pub fn files_referencing_symbols_in(
+    pub fn semantic_reference_edges(
         &self,
         file_path: &str,
         max_edges: usize,
-    ) -> Result<Vec<(String, String)>> {
+    ) -> Result<Vec<SemanticReferenceEdge>> {
+        let file_path = canonicalize_repo_path(file_path)?;
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT ns.file_path, e.target_qualified
+                "SELECT ns.file_path, e.target_qualified, e.kind,
+                        e.confidence_tier, e.extra_json
                  FROM   edges e
                  JOIN   nodes nt ON e.target_qualified = nt.qualified_name
+                              AND  nt.source_repo_id = e.source_repo_id
                               AND  nt.file_path = ?1
                  JOIN   nodes ns ON e.source_qualified = ns.qualified_name
+                              AND  ns.source_repo_id = e.source_repo_id
                  WHERE  ns.file_path != ?1
                  ORDER  BY ns.file_path, e.target_qualified
                  LIMIT  ?2",
             )
             .map_err(db_err)?;
         let rows = stmt
-            .query_map(params![file_path, max_edges as i64], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            .query_map(params![file_path.as_str(), max_edges as i64], |row| {
+                Ok(SemanticReferenceEdge {
+                    source_file: row.get::<_, String>(0)?,
+                    target_qn: row.get::<_, String>(1)?,
+                    edge_kind: row.get::<_, String>(2)?,
+                    confidence_tier: row.get::<_, Option<String>>(3)?,
+                    extra_json: row
+                        .get::<_, Option<String>>(4)?
+                        .and_then(|raw| serde_json::from_str(&raw).ok())
+                        .unwrap_or(serde_json::Value::Null),
+                })
+            })
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Edges from other files pointing at symbols defined in `file_path`.
+    ///
+    /// Thin wrapper over [`Store::semantic_reference_edges`] for callers that
+    /// only need `(referencing_file_path, target_qualified_name)` pairs.
+    pub fn files_referencing_symbols_in(
+        &self,
+        file_path: &str,
+        max_edges: usize,
+    ) -> Result<Vec<(String, String)>> {
+        Ok(self
+            .semantic_reference_edges(file_path, max_edges)?
+            .into_iter()
+            .map(|edge| (edge.source_file, edge.target_qn))
+            .collect())
+    }
+
+    /// Sample edges carrying a specific confidence tier for one repo.
+    ///
+    /// Used by reachability measurement to inspect weak (`same_package`)
+    /// resolution without materializing the whole edge table.
+    pub fn edges_with_confidence_tier(
+        &self,
+        source_repo_id: &str,
+        tier: &str,
+        limit: usize,
+    ) -> Result<Vec<ConfidenceTierEdge>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT e.file_path, e.target_qualified, nt.file_path,
+                        e.kind, e.extra_json
+                 FROM   edges e
+                 LEFT JOIN nodes nt ON e.target_qualified = nt.qualified_name
+                                   AND nt.source_repo_id = e.source_repo_id
+                 WHERE  e.source_repo_id = ?1
+                   AND  e.confidence_tier = ?2
+                 ORDER  BY e.file_path, e.target_qualified, e.kind
+                 LIMIT  ?3",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![source_repo_id, tier, limit as i64], |row| {
+                Ok(ConfidenceTierEdge {
+                    source_file: row.get::<_, String>(0)?,
+                    target_qn: row.get::<_, String>(1)?,
+                    target_file: row.get::<_, Option<String>>(2)?,
+                    edge_kind: row.get::<_, String>(3)?,
+                    extra_json: row
+                        .get::<_, Option<String>>(4)?
+                        .and_then(|raw| serde_json::from_str(&raw).ok())
+                        .unwrap_or(serde_json::Value::Null),
+                })
+            })
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Count edges carrying a specific confidence tier for one repo.
+    pub fn count_edges_with_confidence_tier(
+        &self,
+        source_repo_id: &str,
+        tier: &str,
+    ) -> Result<usize> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM edges
+                 WHERE source_repo_id = ?1 AND confidence_tier = ?2",
+                params![source_repo_id, tier],
+                |row| row.get(0),
+            )
+            .map_err(db_err)?;
+        Ok(count.max(0) as usize)
+    }
+
+    /// Count persisted edges carrying one reachability provenance label.
+    pub fn count_edges_with_reachability(
+        &self,
+        source_repo_id: &str,
+        status: &str,
+    ) -> Result<usize> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM edges
+                 WHERE source_repo_id = ?1
+                   AND json_extract(COALESCE(extra_json, 'null'), '$.reachability') = ?2",
+                params![source_repo_id, status],
+                |row| row.get(0),
+            )
+            .map_err(db_err)?;
+        Ok(count.max(0) as usize)
+    }
+
+    /// Count persisted weak edges cleared as unresolved after guard rejection.
+    pub fn count_unresolved_weak_edges(&self, source_repo_id: &str) -> Result<usize> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM edges
+                 WHERE source_repo_id = ?1
+                   AND confidence_tier IS NULL
+                   AND json_extract(COALESCE(extra_json, 'null'), '$.unresolved') = 1",
+                params![source_repo_id],
+                |row| row.get(0),
+            )
+            .map_err(db_err)?;
+        Ok(count.max(0) as usize)
+    }
+
+    /// Distinct package owner ids recorded for one repo.
+    pub fn owner_ids_for_repo(&self, source_repo_id: &str) -> Result<Vec<String>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT DISTINCT owner_id FROM files
+                 WHERE source_repo_id = ?1 AND owner_id IS NOT NULL
+                 ORDER BY owner_id",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map([source_repo_id], |row| row.get::<_, String>(0))
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Persisted edges whose `extra_json.reachability` value is not a known
+    /// status label. Bounded by `limit` for diagnostics output.
+    pub fn invalid_reachability_edges(
+        &self,
+        source_repo_id: &str,
+        limit: usize,
+    ) -> Result<Vec<(i64, String)>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, json_extract(COALESCE(extra_json, 'null'), '$.reachability')
+                 FROM edges
+                 WHERE source_repo_id = ?1
+                   AND json_extract(COALESCE(extra_json, 'null'), '$.reachability') IS NOT NULL
+                   AND json_extract(COALESCE(extra_json, 'null'), '$.reachability')
+                       NOT IN ('verified', 'unreachable', 'unknown', 'not_applicable')
+                 ORDER BY id
+                 LIMIT ?2",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![source_repo_id, limit as i64], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
             })
             .map_err(db_err)?
             .filter_map(|r| r.ok())

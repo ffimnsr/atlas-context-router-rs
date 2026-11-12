@@ -972,6 +972,7 @@ pub(super) fn tool_cross_file_links(
         .map_err(|error| anyhow::anyhow!("invalid file path: {error}"))?
         .canonical;
     let requested_limit = u64_arg(args, "limit").unwrap_or(20) as usize;
+    let include_weak = bool_arg(args, "include_weak").unwrap_or(false);
     let limit = budgets.resolve_limit(
         policy.review_context_extraction.files,
         "review_context_extraction.max_files",
@@ -979,7 +980,8 @@ pub(super) fn tool_cross_file_links(
     );
 
     let store = open_store(db_path)?;
-    let links = sem::cross_file_links(&store, &file, limit).context("cross_file_links failed")?;
+    let links = sem::cross_file_links_with_options(&store, &file, limit, include_weak)
+        .context("cross_file_links failed")?;
 
     let linked_files: Vec<_> = links
         .into_iter()
@@ -991,6 +993,8 @@ pub(super) fn tool_cross_file_links(
                 "via_symbols": l.via_symbols,
                 "coupling_metric": coupling_metric,
                 "rank": idx + 1,
+                "confidence_tier": l.confidence_tier,
+                "reachability": l.reachability,
             })
         })
         .collect();

@@ -139,7 +139,8 @@
         "extra_json": {
           "callee_text": "helper",
           "callee_name": "helper",
-          "receiver_text": null
+          "receiver_text": null,
+          "reachability": "unknown"
         },
         "repo_provenance": {
           "repo_id": "<repo_id>",
@@ -282,6 +283,11 @@
     "sufficiency_score": 1.0,
     "rounds_used": 0
   },
+  "repo_provenance": {
+    "repo_id": "<repo_id>",
+    "repo_fingerprint": "<repo_fingerprint>",
+    "repo_root": "<repo_root>"
+  },
   "budget_status": "within_budget",
   "budget_hit": false,
   "budget_name": "review_context_extraction.max_nodes",
@@ -292,10 +298,5 @@
   "agent_scope": {
     "agent_id": null,
     "merge_agent_partitions": false
-  },
-  "repo_provenance": {
-    "repo_id": "<repo_id>",
-    "repo_fingerprint": "<repo_fingerprint>",
-    "repo_root": "<repo_root>"
   }
 }

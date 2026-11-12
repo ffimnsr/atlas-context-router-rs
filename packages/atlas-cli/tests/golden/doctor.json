@@ -1,6 +1,10 @@
 {
   "ok": false,
   "error_code": "checks_failed",
+  "recovery_mode": "block_only",
+  "quarantine_path": null,
+  "rebuild_result": "blocked",
+  "failure_reason": null,
   "message": "One or more health checks failed.",
   "suggestions": [
     "inspect the checks array for details"
@@ -11,11 +15,7 @@
     "repo_root": "<repo_root>"
   },
   "execution_state": "fresh",
-  "failure_reason": null,
   "health_class": "healthy",
-  "quarantine_path": null,
-  "rebuild_result": "blocked",
-  "recovery_mode": "block_only",
   "checks": [
     {
       "check": "repo_root",
@@ -101,5 +101,24 @@
       "detail": "ok",
       "issue_code": null
     }
-  ]
+  ],
+  "reachability_measurement": {
+    "total_same_package_edges": 1,
+    "sampled_edges": 1,
+    "cross_crate_root_edges": 1,
+    "orphan_candidate_edges": 0,
+    "unknown_edges": 0,
+    "measurement_source": "edges.confidence_tier",
+    "sample_limit": 5000
+  },
+  "reachability": {
+    "enabled": true,
+    "owners_indexed": 0,
+    "owners_skipped": 0,
+    "unknown_reasons": {},
+    "unresolved_mods": 0,
+    "weak_edges_accepted": 1,
+    "weak_edges_rejected": 0,
+    "budget_exhausted": false
+  }
 }

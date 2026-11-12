@@ -413,6 +413,11 @@ fn repo_provenance_json(repo_root: &str) -> serde_json::Value {
     })
 }
 
+struct DoctorReachability<'a> {
+    measurement: Option<&'a atlas_engine::ReachabilityMeasurement>,
+    summary: Option<&'a atlas_engine::ReachabilitySummary>,
+}
+
 fn print_doctor_report(
     cli: &Cli,
     repo_root: &str,
@@ -420,6 +425,7 @@ fn print_doctor_report(
     all_ok: bool,
     execution_state: Option<GraphExecutionState>,
     health_class: Option<&str>,
+    reachability: DoctorReachability<'_>,
 ) -> Result<()> {
     if cli.json {
         let items: Vec<serde_json::Value> = checks
@@ -434,23 +440,37 @@ fn print_doctor_report(
             })
             .collect();
         let error_code = if all_ok { "none" } else { "checks_failed" };
-        print_json(
-            "doctor",
-            serde_json::json!({
-                "ok": all_ok,
-                "error_code": error_code,
-                "recovery_mode": "block_only",
-                "quarantine_path": serde_json::Value::Null,
-                "rebuild_result": if all_ok { "not_needed" } else { "blocked" },
-                "failure_reason": serde_json::Value::Null,
-                "message": graph_health_error_message(error_code),
-                "suggestions": graph_health_error_suggestions(error_code),
-                "repo_provenance": repo_provenance_json(repo_root),
-                "execution_state": execution_state.map(|s| s.as_str()),
-                "health_class": health_class,
-                "checks": items,
-            }),
-        )?;
+        let mut payload = serde_json::json!({
+            "ok": all_ok,
+            "error_code": error_code,
+            "recovery_mode": "block_only",
+            "quarantine_path": serde_json::Value::Null,
+            "rebuild_result": if all_ok { "not_needed" } else { "blocked" },
+            "failure_reason": serde_json::Value::Null,
+            "message": graph_health_error_message(error_code),
+            "suggestions": graph_health_error_suggestions(error_code),
+            "repo_provenance": repo_provenance_json(repo_root),
+            "execution_state": execution_state.map(|s| s.as_str()),
+            "health_class": health_class,
+            "checks": items,
+        });
+        if let Some(measurement) = reachability.measurement
+            && let Some(object) = payload.as_object_mut()
+        {
+            object.insert(
+                "reachability_measurement".to_owned(),
+                serde_json::to_value(measurement).unwrap_or(serde_json::Value::Null),
+            );
+        }
+        if let Some(summary) = reachability.summary
+            && let Some(object) = payload.as_object_mut()
+        {
+            object.insert(
+                "reachability".to_owned(),
+                serde_json::to_value(summary).unwrap_or(serde_json::Value::Null),
+            );
+        }
+        print_json("doctor", payload)?;
     } else {
         for c in checks {
             let status = if c.ok { "PASS" } else { "FAIL" };
@@ -708,7 +728,18 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
         }
         Err(e) => {
             checks.push(CheckResult::fail("repo_root", e.to_string(), None));
-            return print_doctor_report(cli, ".", &checks, false, None, None);
+            return print_doctor_report(
+                cli,
+                ".",
+                &checks,
+                false,
+                None,
+                None,
+                DoctorReachability {
+                    measurement: None,
+                    summary: None,
+                },
+            );
         }
     };
 
@@ -1100,6 +1131,30 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
     } else {
         derive_graph_readiness_open_failed(&repo, &db_path_str, "db not found")
     };
+    let reachability_measurement = if db_exists {
+        Store::open(&db_path_str).ok().and_then(|store| {
+            let source_repo_id = stable_repo_id(Utf8Path::new(&repo));
+            atlas_engine::measure_same_package_edges(
+                &store,
+                &source_repo_id,
+                atlas_engine::DEFAULT_MEASUREMENT_SAMPLE_LIMIT,
+            )
+            .ok()
+        })
+    } else {
+        None
+    };
+    let reachability_summary = if db_exists {
+        Store::open(&db_path_str).ok().and_then(|store| {
+            let source_repo_id = stable_repo_id(Utf8Path::new(&repo));
+            let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))
+                .map(|config| config.reachability)
+                .unwrap_or_default();
+            atlas_engine::diagnose_reachability(&store, &source_repo_id, &config).ok()
+        })
+    } else {
+        None
+    };
     print_doctor_report(
         cli,
         &repo,
@@ -1107,6 +1162,10 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
         all_ok,
         Some(readiness.execution_state),
         readiness.health_class.map(|class| class.as_str()),
+        DoctorReachability {
+            measurement: reachability_measurement.as_ref(),
+            summary: reachability_summary.as_ref(),
+        },
     )?;
     if !all_ok {
         std::process::exit(1);
@@ -1134,6 +1193,11 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
             "integrity_issues": serde_json::Value::Null,
             "orphan_node_count": 0,
             "dangling_edge_count": 0,
+            "reachability_provenance": {
+                "ok": serde_json::Value::Null,
+                "invalid_count": 0,
+                "invalid_edges": [],
+            },
             "session_db": {
                 "path": atlas_engine::paths::session_db_path(&db_path),
                 "exists": std::path::Path::new(&atlas_engine::paths::session_db_path(&db_path)).exists(),
@@ -1177,6 +1241,9 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
     const ORPHAN_LIMIT: usize = 100;
     let orphans = structural_orphans(&store, ORPHAN_LIMIT);
     let dangling = structural_dangling_edges(&store, ORPHAN_LIMIT);
+    let source_repo_id = stable_repo_id(Utf8Path::new(&repo));
+    let invalid_reachability = store.invalid_reachability_edges(&source_repo_id, ORPHAN_LIMIT)?;
+    let reachability_provenance_ok = invalid_reachability.is_empty();
 
     // ICM-A1 + ICM-C1: validate the continuity-side memory and feedback
     // schemas through db check. A missing session DB is not a schema violation
@@ -1258,6 +1325,7 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
     let ok = issues.is_empty()
         && orphans.is_empty()
         && dangling.is_empty()
+        && reachability_provenance_ok
         && session_db_ok
         && memory_schema_ok
         && feedback_schema_ok
@@ -1265,6 +1333,8 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
         && experience_schema_ok;
     let error_code = if !issues.is_empty() || !orphans.is_empty() || !dangling.is_empty() {
         integrity_issue_code(&issues, !orphans.is_empty() || !dangling.is_empty())
+    } else if !reachability_provenance_ok {
+        "logical_inconsistency"
     } else if !memory_schema_ok
         || !feedback_schema_ok
         || !overview_schema_ok
@@ -1298,6 +1368,17 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
             "integrity_issues": issues,
             "orphan_node_count": orphans.len(),
             "dangling_edge_count": dangling.len(),
+            "reachability_provenance": {
+                "ok": reachability_provenance_ok,
+                "invalid_count": invalid_reachability.len(),
+                "invalid_edges": invalid_reachability
+                    .iter()
+                    .map(|(id, value)| serde_json::json!({
+                        "edge_id": id,
+                        "reachability": value,
+                    }))
+                    .collect::<Vec<_>>(),
+            },
             "session_db": {
                 "path": session_db_path,
                 "exists": session_db_exists,
@@ -1374,6 +1455,15 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
             eprintln!("Overview schema FAILED: {session_db_path}");
             for issue in &overview_schema_issues {
                 eprintln!("  {issue}");
+            }
+        }
+        if !reachability_provenance_ok {
+            eprintln!(
+                "Reachability provenance FAILED: {} invalid edge value(s)",
+                invalid_reachability.len()
+            );
+            for (edge_id, value) in invalid_reachability.iter().take(10) {
+                eprintln!("  edge {edge_id}: reachability={value}");
             }
         }
         std::process::exit(1);

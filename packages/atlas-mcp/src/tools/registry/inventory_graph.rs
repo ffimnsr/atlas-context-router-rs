@@ -116,12 +116,13 @@ pub(super) fn tools() -> Vec<Value> {
         }),
         json!({
                 "name": "cross_file_links",
-                "description": "Find files that reference symbols defined in the given file. Returns semantic links ordered by coupling strength (number of shared symbol references).",
+                "description": "Find files that reference symbols defined in the given file. Returns semantic links ordered by coupling strength (number of shared symbol references). Weak same_package fallback edges are excluded by default; set include_weak to true to restore them.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "file":  { "type": "string",  "description": "Repo-relative file path to analyse (e.g. 'src/auth.rs')." },
                         "limit": { "type": "integer", "description": "Maximum links to return (default 20)." },
+                        "include_weak": { "type": "boolean", "description": "Include weak same_package fallback edges (default false)." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": ["file"]

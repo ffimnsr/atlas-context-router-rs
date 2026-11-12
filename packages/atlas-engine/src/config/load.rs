@@ -47,6 +47,7 @@ impl Config {
         config.memory.validate()?;
         config.memory_embedding_backend()?;
         config.overview.validate()?;
+        config.reachability.validate()?;
         Ok(config)
     }
 

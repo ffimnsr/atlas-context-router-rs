@@ -24,6 +24,33 @@
         "suggestions": { "type": "array", "items": { "type": "string" } },
         "repo_provenance": { "$ref": "#/$defs/repo_provenance" },
         "execution_state": { "type": "string" },
+        "reachability_measurement": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "total_same_package_edges": { "type": "integer" },
+            "sampled_edges": { "type": "integer" },
+            "cross_crate_root_edges": { "type": "integer" },
+            "orphan_candidate_edges": { "type": "integer" },
+            "unknown_edges": { "type": "integer" },
+            "measurement_source": { "type": "string" },
+            "sample_limit": { "type": "integer" }
+          }
+        },
+        "reachability": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "owners_indexed": { "type": "integer" },
+            "owners_skipped": { "type": "integer" },
+            "unknown_reasons": { "type": "object", "additionalProperties": { "type": "integer" } },
+            "unresolved_mods": { "type": "integer" },
+            "weak_edges_accepted": { "type": "integer" },
+            "weak_edges_rejected": { "type": "integer" },
+            "budget_exhausted": { "type": "boolean" }
+          }
+        },
         "checks": {
           "type": "array",
           "items": {

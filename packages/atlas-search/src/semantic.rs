@@ -5,7 +5,7 @@
 //! relationships to find conceptually related artifacts that keyword search
 //! alone would miss.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use atlas_core::{Node, Result, ScoredNode, SearchQuery};
 use atlas_store_sqlite::Store;
@@ -216,6 +216,20 @@ pub struct SemanticLink {
     pub via_symbols: Vec<String>,
     /// Reference count (higher = stronger coupling).
     pub strength: f64,
+    /// Uniform resolution confidence tier across contributing edges.
+    ///
+    /// `None` when the link mixes tiers or the contributing edges carry no
+    /// tier.
+    pub confidence_tier: Option<String>,
+    /// Uniform persisted reachability provenance across contributing edges.
+    pub reachability: Option<String>,
+}
+
+/// Per-edge evidence retained while grouping links by referencing file.
+struct LinkEvidence {
+    target_qn: String,
+    confidence_tier: Option<String>,
+    reachability: Option<String>,
 }
 
 /// Find files that reference symbols defined in `file_path`.
@@ -223,31 +237,89 @@ pub struct SemanticLink {
 /// Returns up to `limit` [`SemanticLink`]s ordered by strength (reference
 /// count) descending.  An internal edge budget of `max_edges` (default 500)
 /// prevents runaway queries on densely-connected files.
+///
+/// Weak `same_package` fallback edges are excluded by default; use
+/// [`cross_file_links_with_options`] with `include_weak = true` to restore
+/// them.
 pub fn cross_file_links(store: &Store, file_path: &str, limit: usize) -> Result<Vec<SemanticLink>> {
+    cross_file_links_with_options(store, file_path, limit, false)
+}
+
+/// Find files that reference symbols defined in `file_path`, with control over
+/// weak `same_package` fallback edges.
+///
+/// Edges whose `confidence_tier` is `same_package` are filtered individually
+/// before grouping unless `include_weak` is true. Every other tier is always
+/// retained.
+pub fn cross_file_links_with_options(
+    store: &Store,
+    file_path: &str,
+    limit: usize,
+    include_weak: bool,
+) -> Result<Vec<SemanticLink>> {
     const EDGE_BUDGET: usize = 500;
 
-    let pairs = store.files_referencing_symbols_in(file_path, EDGE_BUDGET)?;
+    let edges = store.semantic_reference_edges(file_path, EDGE_BUDGET)?;
 
-    // Group by referencing file.
-    let mut file_map: HashMap<String, Vec<String>> = HashMap::new();
-    for (referencing_file, symbol_qn) in pairs {
+    // Group by referencing file, retaining per-edge provenance.
+    let mut file_map: HashMap<String, Vec<LinkEvidence>> = HashMap::new();
+    for edge in edges {
+        if !include_weak && edge.confidence_tier.as_deref() == Some("same_package") {
+            continue;
+        }
+        let reachability = edge
+            .extra_json
+            .get("reachability")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
         file_map
-            .entry(referencing_file)
+            .entry(edge.source_file)
             .or_default()
-            .push(symbol_qn);
+            .push(LinkEvidence {
+                target_qn: edge.target_qn,
+                confidence_tier: edge.confidence_tier,
+                reachability,
+            });
     }
 
     let mut links: Vec<SemanticLink> = file_map
         .into_iter()
-        .map(|(to_file, mut symbols)| {
+        .map(|(to_file, entries)| {
+            let mut symbols: Vec<String> = entries
+                .iter()
+                .map(|entry| entry.target_qn.clone())
+                .collect();
             symbols.sort();
             symbols.dedup();
             let strength = symbols.len() as f64;
+
+            let tiers: BTreeSet<Option<String>> = entries
+                .iter()
+                .map(|entry| entry.confidence_tier.clone())
+                .collect();
+            let confidence_tier = if tiers.len() == 1 {
+                tiers.into_iter().next().flatten()
+            } else {
+                None
+            };
+
+            let reachability: BTreeSet<Option<String>> = entries
+                .iter()
+                .map(|entry| entry.reachability.clone())
+                .collect();
+            let reachability = if reachability.len() == 1 {
+                reachability.into_iter().next().flatten()
+            } else {
+                None
+            };
+
             SemanticLink {
                 from_file: file_path.to_string(),
                 to_file,
                 via_symbols: symbols,
                 strength,
+                confidence_tier,
+                reachability,
             }
         })
         .collect();
@@ -468,6 +540,181 @@ mod tests {
         let store = Store::open(db.to_str().unwrap()).unwrap();
         let links = cross_file_links(&store, "src/lib.rs", 10).unwrap();
         assert!(links.is_empty());
+    }
+
+    const TEST_REPO_ID: &str = "cross-file-links-repo";
+
+    fn test_node(file_path: &str, qualified_name: &str) -> Node {
+        Node {
+            id: atlas_core::NodeId::UNSET,
+            kind: atlas_core::NodeKind::Function,
+            name: qualified_name
+                .rsplit("::")
+                .next()
+                .unwrap_or("fn")
+                .to_owned(),
+            qualified_name: qualified_name.to_owned(),
+            file_path: file_path.to_owned(),
+            line_start: 1,
+            line_end: 2,
+            language: "rust".to_owned(),
+            parent_name: None,
+            params: Some("()".to_owned()),
+            return_type: Some("()".to_owned()),
+            modifiers: None,
+            is_test: false,
+            file_hash: format!("hash-{file_path}"),
+            extra_json: serde_json::Value::Null,
+            repo_provenance: None,
+        }
+    }
+
+    fn test_edge(
+        file_path: &str,
+        source_qn: &str,
+        target_qn: &str,
+        tier: &str,
+        reachability: &str,
+    ) -> atlas_core::Edge {
+        atlas_core::Edge {
+            id: 0,
+            kind: atlas_core::EdgeKind::Calls,
+            source_qn: source_qn.to_owned(),
+            target_qn: target_qn.to_owned(),
+            file_path: file_path.to_owned(),
+            line: Some(1),
+            confidence: 0.65,
+            confidence_tier: Some(tier.to_owned()),
+            extra_json: serde_json::json!({ "reachability": reachability }),
+            repo_provenance: None,
+        }
+    }
+
+    fn seed_cross_file_links_store() -> Store {
+        let mut store = Store::open(":memory:").unwrap();
+        store.migrate().unwrap();
+
+        let target = "src/lib.rs::fn::shared";
+        store
+            .replace_file_graph_for_repo(
+                TEST_REPO_ID,
+                "src/lib.rs",
+                "hash-lib",
+                Some("rust"),
+                None,
+                &[test_node("src/lib.rs", target)],
+                &[],
+            )
+            .unwrap();
+
+        let strong_qn = "src/strong.rs::fn::strong_caller";
+        store
+            .replace_file_graph_for_repo(
+                TEST_REPO_ID,
+                "src/strong.rs",
+                "hash-strong",
+                Some("rust"),
+                None,
+                &[test_node("src/strong.rs", strong_qn)],
+                &[test_edge(
+                    "src/strong.rs",
+                    strong_qn,
+                    target,
+                    "imports",
+                    "verified",
+                )],
+            )
+            .unwrap();
+
+        let weak_qn = "src/weak.rs::fn::weak_caller";
+        store
+            .replace_file_graph_for_repo(
+                TEST_REPO_ID,
+                "src/weak.rs",
+                "hash-weak",
+                Some("rust"),
+                None,
+                &[test_node("src/weak.rs", weak_qn)],
+                &[test_edge(
+                    "src/weak.rs",
+                    weak_qn,
+                    target,
+                    "same_package",
+                    "unknown",
+                )],
+            )
+            .unwrap();
+        store
+    }
+
+    #[test]
+    fn cross_file_links_excludes_weak_edges_by_default() {
+        let store = seed_cross_file_links_store();
+
+        let links = cross_file_links(&store, "src/lib.rs", 10).unwrap();
+        assert_eq!(links.len(), 1, "weak edge must be filtered: {links:?}");
+        assert_eq!(links[0].to_file, "src/strong.rs");
+        assert_eq!(links[0].confidence_tier.as_deref(), Some("imports"));
+        assert_eq!(links[0].reachability.as_deref(), Some("verified"));
+    }
+
+    #[test]
+    fn cross_file_links_include_weak_restores_previous_output() {
+        let store = seed_cross_file_links_store();
+
+        let links = cross_file_links_with_options(&store, "src/lib.rs", 10, true).unwrap();
+        assert_eq!(
+            links.len(),
+            2,
+            "include_weak must keep weak edges: {links:?}"
+        );
+
+        let weak = links
+            .iter()
+            .find(|link| link.to_file == "src/weak.rs")
+            .expect("weak link present");
+        assert_eq!(weak.confidence_tier.as_deref(), Some("same_package"));
+        assert_eq!(weak.reachability.as_deref(), Some("unknown"));
+    }
+
+    #[test]
+    fn cross_file_links_mixed_tiers_report_no_uniform_provenance() {
+        let mut store = Store::open(":memory:").unwrap();
+        store.migrate().unwrap();
+
+        let target = "src/lib.rs::fn::shared";
+        store
+            .replace_file_graph_for_repo(
+                TEST_REPO_ID,
+                "src/lib.rs",
+                "hash-lib",
+                Some("rust"),
+                None,
+                &[test_node("src/lib.rs", target)],
+                &[],
+            )
+            .unwrap();
+
+        let caller = "src/mixed.rs::fn::caller";
+        store
+            .replace_file_graph_for_repo(
+                TEST_REPO_ID,
+                "src/mixed.rs",
+                "hash-mixed",
+                Some("rust"),
+                None,
+                &[test_node("src/mixed.rs", caller)],
+                &[
+                    test_edge("src/mixed.rs", caller, target, "imports", "verified"),
+                    test_edge("src/mixed.rs", caller, target, "same_package", "unknown"),
+                ],
+            )
+            .unwrap();
+
+        let links = cross_file_links_with_options(&store, "src/lib.rs", 10, true).unwrap();
+        assert_eq!(links.len(), 1, "same file groups into one link");
+        assert_eq!(links[0].confidence_tier, None);
+        assert_eq!(links[0].reachability, None);
     }
 
     #[test]

@@ -315,6 +315,7 @@ fn execute_graph_operation(
                 warnings: summary.warnings,
                 budget_counters: summary.budget_counters,
                 budget: summary.budget,
+                reachability: summary.reachability,
                 elapsed_ms: summary.elapsed_ms,
             })
         } else {

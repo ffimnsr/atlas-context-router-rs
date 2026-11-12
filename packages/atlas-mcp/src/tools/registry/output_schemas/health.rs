@@ -467,6 +467,31 @@ pub(crate) fn doctor_output_schema() -> Value {
             "quarantine_path": { "type": ["string", "null"] },
             "rebuild_result": { "type": "string" },
             "failure_reason": { "type": ["string", "null"] },
+            "reachability_measurement": {
+                "type": ["object", "null"],
+                "properties": {
+                    "total_same_package_edges": { "type": "integer" },
+                    "sampled_edges": { "type": "integer" },
+                    "cross_crate_root_edges": { "type": "integer" },
+                    "orphan_candidate_edges": { "type": "integer" },
+                    "unknown_edges": { "type": "integer" },
+                    "measurement_source": { "type": "string" },
+                    "sample_limit": { "type": "integer" }
+                }
+            },
+            "reachability": {
+                "type": ["object", "null"],
+                "properties": {
+                    "enabled": { "type": "boolean" },
+                    "owners_indexed": { "type": "integer" },
+                    "owners_skipped": { "type": "integer" },
+                    "unknown_reasons": { "type": "object", "additionalProperties": { "type": "integer" } },
+                    "unresolved_mods": { "type": "integer" },
+                    "weak_edges_accepted": { "type": "integer" },
+                    "weak_edges_rejected": { "type": "integer" },
+                    "budget_exhausted": { "type": "boolean" }
+                }
+            },
             "checks": { "type": "array", "items": { "$ref": "#/$defs/doctor_check" } },
             "summary": {
                 "type": "object",
@@ -526,6 +551,25 @@ pub(crate) fn db_check_output_schema() -> Value {
             "orphan_nodes": { "type": "array", "items": { "$ref": "#/$defs/orphan_node" } },
             "dangling_edges": { "type": "array", "items": { "$ref": "#/$defs/dangling_edge_diagnostic" } },
             "noncanonical_path_rows": { "type": "array", "items": { "type": "string" } },
+            "reachability_provenance": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "ok": { "type": "boolean" },
+                    "invalid_count": { "type": "integer" },
+                    "invalid_edges": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "edge_id": { "type": "integer" },
+                                "reachability": { "type": "string" }
+                            }
+                        }
+                    }
+                },
+                "required": ["ok", "invalid_count", "invalid_edges"]
+            },
             "session_db": {
                 "type": "object",
                 "additionalProperties": false,
@@ -588,6 +632,7 @@ pub(crate) fn db_check_output_schema() -> Value {
             "orphan_nodes",
             "dangling_edges",
             "noncanonical_path_rows",
+            "reachability_provenance",
             "session_db",
             "summary",
             "atlas_provenance",
