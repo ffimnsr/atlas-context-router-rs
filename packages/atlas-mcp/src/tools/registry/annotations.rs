@@ -12,6 +12,7 @@ pub(crate) fn is_state_changing_tool(name: &str) -> bool {
         "build_graph"
             | "update_graph"
             | "postprocess_graph"
+            | "embed_chunks"
             | "compact_session"
             | "record_session_event"
             | "wake_up"
@@ -53,7 +54,7 @@ pub(crate) fn tool_annotations(name: &str) -> ToolDescriptorAnnotations {
 
 pub(crate) fn tool_category(name: &str) -> &'static str {
     match name {
-        "build_graph" | "update_graph" | "postprocess_graph" => "maintenance",
+        "build_graph" | "update_graph" | "postprocess_graph" | "embed_chunks" => "maintenance",
         "compact_session"
         | "purge_saved_context"
         | "resume_session"

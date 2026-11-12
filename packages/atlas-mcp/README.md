@@ -18,6 +18,7 @@ MCP server exposing Atlas graph, impact, and review tools over stdio. Implements
 - `detect_changes` — git diff to changed-file list
 - `build_graph` — full graph build
 - `update_graph` — incremental graph update from explicit `change_source`
+- `embed_chunks` — generate/persist vectors for retrieval chunks (Ollama auto-pull)
 - `explain_change` — advanced risk analysis and test gaps
 - `status` — health check and graph stats
 - `doctor` — deep repo and DB diagnostics

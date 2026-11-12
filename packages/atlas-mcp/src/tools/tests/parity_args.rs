@@ -33,6 +33,7 @@ pub(super) fn parity_args(tool_name: &str, source_id: &str, repo_root: &str) -> 
             json!({ "change_source": { "kind": "working_tree" }, "output_format": "json" })
         }
         "build_graph" => json!({ "output_format": "json" }),
+        "embed_chunks" => json!({ "dry_run": true, "output_format": "json" }),
         "update_graph" => {
             json!({ "change_source": { "kind": "files", "files": ["src/service.rs"] }, "output_format": "json" })
         }

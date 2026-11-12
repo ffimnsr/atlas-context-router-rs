@@ -30,8 +30,9 @@ use super::analysis::{
     tool_find_similar_functions, tool_infer_modules, tool_label_components,
 };
 use super::context_ops::{
-    tool_build_graph, tool_detect_changes, tool_explain_change, tool_get_context,
-    tool_get_impact_radius, tool_get_minimal_context, tool_get_review_context, tool_update_graph,
+    tool_build_graph, tool_detect_changes, tool_embed_chunks, tool_explain_change,
+    tool_get_context, tool_get_impact_radius, tool_get_minimal_context, tool_get_review_context,
+    tool_update_graph,
 };
 use super::graph::{
     tool_batch_query_graph, tool_concept_clusters, tool_cross_file_links, tool_explain_query,
@@ -423,6 +424,7 @@ pub(crate) fn is_known_tool_name(name: &str) -> bool {
         | "build_graph"
         | "update_graph"
         | "postprocess_graph"
+        | "embed_chunks"
         | "traverse_graph"
         | "get_minimal_context"
         | "explain_change"
@@ -614,6 +616,7 @@ fn call_inner(
         "detect_changes" => tool_detect_changes(args, repo_root, db_path, output_format),
         "build_graph" => tool_build_graph(args, repo_root, db_path, output_format),
         "update_graph" => tool_update_graph(args, repo_root, db_path, output_format),
+        "embed_chunks" => tool_embed_chunks(args, repo_root, db_path, output_format),
         "postprocess_graph" => tool_postprocess_graph(args, repo_root, db_path, output_format),
         "traverse_graph" => tool_traverse_graph(args, repo_root, db_path, output_format),
         "get_minimal_context" => tool_get_minimal_context(args, repo_root, db_path, output_format),

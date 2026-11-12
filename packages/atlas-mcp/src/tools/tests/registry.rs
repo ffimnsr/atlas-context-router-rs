@@ -27,6 +27,7 @@ const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "debug_graph",
     "detect_changes",
     "doctor",
+    "embed_chunks",
     "experience_inspect",
     "explain_change",
     "explain_query",

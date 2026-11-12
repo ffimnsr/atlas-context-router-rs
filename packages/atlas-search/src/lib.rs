@@ -29,7 +29,6 @@ mod search;
 mod tokenize;
 
 use fuzzy::*;
-use hybrid::*;
 use scoring::*;
 use tokenize::*;
 

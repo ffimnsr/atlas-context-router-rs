@@ -763,6 +763,7 @@ fn write_tools_are_not_marked_read_only() {
         "build_graph",
         "update_graph",
         "postprocess_graph",
+        "embed_chunks",
         "compact_session",
         "record_session_event",
         "wake_up",

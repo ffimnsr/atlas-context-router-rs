@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use atlas_contentstore::ContentStore;
 use atlas_core::{BudgetManager, GraphToolRequirement, RankingEvidence, SearchQuery};
 use atlas_repo::{RepoRegistry, find_repo_root, phase1_multi_repo_supported};
 use atlas_search as search;
@@ -129,9 +128,10 @@ pub fn run_query(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
     let db_path = db_path(cli, &repo);
     let embed_cfg = load_embedding_config(&repo)?;
-    let triehi_min_chunks = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))
-        .map(|config| config.retrieval.triehi_min_chunks)
-        .unwrap_or(atlas_engine::config::DEFAULT_TRIEHI_MIN_CHUNKS);
+    let config =
+        atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo)).unwrap_or_default();
+    let triehi_min_chunks = config.retrieval.triehi_min_chunks;
+    let hybrid_default = config.search.hybrid_enabled;
 
     let store = match Store::open(&db_path) {
         Ok(s) => s,
@@ -293,7 +293,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
         graph_expand: expand,
         graph_max_hops: expand_hops,
         fuzzy_match: fuzzy,
-        hybrid,
+        hybrid: hybrid || hybrid_default,
         regex_pattern,
         repo_ids: selected_repo_ids.clone(),
         triehi_min_chunks: Some(triehi_min_chunks),
@@ -401,72 +401,29 @@ pub fn run_embed(cli: &Cli) -> Result<()> {
     };
 
     let repo = resolve_repo(cli)?;
-    let embed_cfg = load_embedding_config(&repo)?.context(
-        "search.embedding.url not set in .atlas/config.toml — cannot generate embeddings",
-    )?;
     let db_path = db_path(cli, &repo);
-    let store =
-        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+    let report = atlas_engine::embed_pending_chunks(
+        &repo,
+        &db_path,
+        atlas_engine::EmbedChunkOptions {
+            limit,
+            dry_run: false,
+        },
+    )?;
 
-    // Open the content store and warm the dimension cache so we can enforce
-    // the embedding dimension registry (Patch R3).
-    let content_db_path = atlas_engine::paths::content_db_path(&db_path);
-    let mut content_store = ContentStore::open(&content_db_path)
-        .with_context(|| format!("cannot open content store at {content_db_path}"))?;
-    content_store
-        .warm_dimension_cache()
-        .context("failed to warm embedding dimension cache")?;
-
-    let provider_name =
-        atlas_contentstore::store::registry::provider_name_from_url(&embed_cfg.base_url);
-    let model_name = embed_cfg.model.clone();
-
-    let chunks = store
-        .chunks_missing_embeddings(limit)
-        .context("failed to read chunks")?;
-
-    if chunks.is_empty() {
+    if report.pending_chunks == 0 {
         println!("All chunks already have embeddings.");
         return Ok(());
     }
 
-    let total = chunks.len();
-    let mut done = 0usize;
-    let mut errors = 0usize;
-    let mut dimension_checked = false;
-
-    for (id, qn, text) in chunks {
-        match atlas_search::embed::embed_text_blocking(&embed_cfg, &text) {
-            Ok(vec) => {
-                let dim = vec.len() as u32;
-                // Check / freeze dimension on the first successful embedding.
-                if !dimension_checked {
-                    if let Err(e) =
-                        content_store.check_embedding_dimension(provider_name, &model_name, dim)
-                    {
-                        anyhow::bail!(
-                            "Aborting embed run: {e}\n\
-                             Run `atlas embed` again after rebuilding embeddings from scratch, \
-                             or switch back to the original provider/model."
-                        );
-                    }
-                    dimension_checked = true;
-                }
-                if let Err(err) = store.set_chunk_embedding(id, &vec) {
-                    tracing::warn!("store embedding failed for {qn}: {err:#}");
-                    errors += 1;
-                } else {
-                    done += 1;
-                }
-            }
-            Err(err) => {
-                tracing::warn!("embed failed for {qn}: {err:#}");
-                errors += 1;
-            }
-        }
+    if report.model_pulled {
+        println!("Downloaded embedding model {}.", report.model);
     }
 
-    println!("Embedded {done}/{total} chunks ({errors} errors).");
+    println!(
+        "Embedded {}/{} chunks ({} errors).",
+        report.embedded_chunks, report.pending_chunks, report.failed_chunks
+    );
     Ok(())
 }
 
@@ -501,6 +458,9 @@ pub fn run_explain_query(cli: &Cli) -> Result<()> {
             .unwrap_or(raw)
     });
     let embed_cfg = load_embedding_config(&repo)?;
+    let hybrid_default = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))
+        .map(|config| config.search.hybrid_enabled)
+        .unwrap_or(false);
 
     let store = match Store::open(&db_path) {
         Err(e) => {
@@ -533,6 +493,7 @@ pub fn run_explain_query(cli: &Cli) -> Result<()> {
         language: language.clone(),
         subpath: subpath.clone(),
         limit,
+        hybrid: hybrid_default,
         ..Default::default()
     };
 

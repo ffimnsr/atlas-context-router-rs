@@ -68,6 +68,32 @@ pub(crate) fn list_graph_stats_output_schema() -> Value {
     )
 }
 
+pub(crate) fn embed_chunks_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "provider": { "type": "string" },
+            "model": { "type": "string" },
+            "pending_chunks": { "type": "integer" },
+            "embedded_chunks": { "type": "integer" },
+            "failed_chunks": { "type": "integer" },
+            "dimension": { "type": ["integer", "null"] },
+            "model_pulled": { "type": "boolean" },
+            "dry_run": { "type": "boolean" }
+        }),
+        &[
+            "provider",
+            "model",
+            "pending_chunks",
+            "embedded_chunks",
+            "failed_chunks",
+            "dimension",
+            "model_pulled",
+            "dry_run",
+        ],
+        None,
+    )
+}
+
 pub(crate) fn get_metrics_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({

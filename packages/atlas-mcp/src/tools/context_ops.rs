@@ -54,6 +54,7 @@ fn string_list_arg(args: Option<&Value>, key: &str) -> Option<Vec<String>> {
 
 mod build;
 mod changes;
+mod embed;
 mod explain;
 mod get_context;
 mod impact;
@@ -65,6 +66,7 @@ mod types;
 
 pub(super) use build::{tool_build_graph, tool_update_graph};
 pub(super) use changes::tool_detect_changes;
+pub(super) use embed::tool_embed_chunks;
 pub(super) use explain::tool_explain_change;
 pub(super) use get_context::tool_get_context;
 pub(super) use impact::tool_get_impact_radius;

@@ -419,6 +419,17 @@ pub(crate) struct ChangeSourceWithoutFilesArgsSchema {
 #[allow(dead_code)]
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct EmbedChunksArgsSchema {
+    /// Maximum number of chunks to embed in this run (default 1000).
+    limit: Option<u64>,
+    /// Count pending chunks without calling the provider or writing vectors.
+    dry_run: Option<bool>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct BuildGraphArgsSchema {
     output_format: Option<String>,
 }

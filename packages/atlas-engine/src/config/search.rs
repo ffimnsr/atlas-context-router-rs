@@ -3,7 +3,12 @@
 use atlas_core::BudgetPolicy;
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_EMBED_MODEL: &str = "nomic-embed-text";
+/// Fastest CPU-friendly default embedding model.
+///
+/// `all-minilm` is the Ollama build of `sentence-transformers/all-MiniLM-L6-v2`:
+/// ~23M parameters, 384 dimensions, and low latency on CPU-only hosts. Users
+/// can override it with `[search.embedding] model = "..."`.
+pub const DEFAULT_EMBED_MODEL: &str = "all-minilm";
 pub const DEFAULT_EMBED_TIMEOUT_SECS: u64 = 30;
 pub const DEFAULT_EMBED_MAX_RETRIES: u32 = 3;
 pub const DEFAULT_EMBED_RETRY_BACKOFF_MS: u64 = 500;

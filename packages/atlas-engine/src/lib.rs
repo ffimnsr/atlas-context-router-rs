@@ -4,6 +4,7 @@ mod annotate;
 mod build_budget;
 mod call_resolution;
 pub mod config;
+mod embedding;
 pub mod lang_policy;
 mod owner_graph;
 pub mod paths;
@@ -21,6 +22,9 @@ pub mod watch;
 
 pub use build::{BuildOptions, BuildSummary};
 pub use config::{BuildRunBudget, Config, ConfigTemplateProfile, EmbeddingBackendConfig};
+pub use embedding::{
+    DEFAULT_EMBED_CHUNK_LIMIT, EmbedChunkOptions, EmbedChunkReport, embed_pending_chunks,
+};
 pub use lang_policy::{Feature, LangEntry, LanguagePolicy, Maturity};
 pub use postprocess::{
     POSTPROCESS_STAGE_ARCHITECTURE_METRICS, POSTPROCESS_STAGE_COMMUNITIES, POSTPROCESS_STAGE_FLOWS,

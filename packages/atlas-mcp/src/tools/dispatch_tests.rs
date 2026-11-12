@@ -256,6 +256,7 @@ fn schema_test_args(name: &str, saved_source_id: &str, repo_root: &str) -> serde
             json!({"change_source": {"kind": "working_tree"}, "output_format": "json"})
         }
         "build_graph" => json!({"output_format": "json"}),
+        "embed_chunks" => json!({"dry_run": true, "output_format": "json"}),
         "update_graph" => {
             json!({"change_source": {"kind": "files", "files": ["src/lib.rs"]}, "output_format": "json"})
         }

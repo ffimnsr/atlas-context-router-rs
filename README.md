@@ -767,6 +767,7 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `detect_changes` | Git diff → changed-file list with node counts |
 | `build_graph` | Full repository graph scan |
 | `update_graph` | Incremental graph update from explicit change source |
+| `embed_chunks` | Generate and persist vectors for un-embedded retrieval chunks |
 | `postprocess_graph` | Refresh derived graph analytics after build/update without reparsing |
 | `traverse_graph` | Bi-directional graph traversal from a qualified name |
 | `get_minimal_context` | Auto-detect changes and return compact impact bundle |

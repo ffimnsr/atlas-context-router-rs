@@ -8,10 +8,13 @@
 //!
 //! Configure via `.atlas/config.toml` `[search.embedding]` fields:
 //! - `url`              — base URL, e.g. `http://localhost:11434` (required for hybrid)
-//! - `model`            — model name, e.g. `nomic-embed-text` (default)
+//! - `model`            — model name, e.g. `all-minilm` (default, CPU-friendly)
 //! - `timeout_secs`     — per-request timeout in seconds (default 30)
 //! - `max_retries`      — max retry attempts on transient errors (default 3)
 //! - `retry_backoff_ms` — initial backoff between retries in ms, doubles each attempt (default 500)
+//!
+//! [`ensure_model_available`] pulls a missing model from Ollama-style servers
+//! before embedding. OpenAI-compatible servers have no pull API.
 
 use std::time::Duration;
 
@@ -41,7 +44,7 @@ use serde::Deserialize;
 pub struct EmbeddingConfig {
     /// Base URL of the embedding server, e.g. `http://localhost:11434`.
     pub base_url: String,
-    /// Embedding model name, e.g. `nomic-embed-text`.
+    /// Embedding model name, e.g. `all-minilm`.
     pub model: String,
     /// Per-request HTTP timeout in seconds.
     pub timeout_secs: u64,
@@ -172,6 +175,100 @@ pub async fn embed_text(config: &EmbeddingConfig, text: &str) -> Result<Vec<f32>
 }
 
 // ---------------------------------------------------------------------------
+// Model availability (Ollama pull)
+// ---------------------------------------------------------------------------
+
+/// Timeout for model download requests.
+///
+/// Downloads can exceed the per-request embedding timeout, so pulls use a
+/// dedicated longer budget instead of `timeout_secs`.
+pub const MODEL_PULL_TIMEOUT_SECS: u64 = 900;
+
+/// Ensure the configured model exists, downloading it when the backend is an
+/// Ollama-style server.
+///
+/// Returns `true` when a pull was performed. OpenAI-compatible servers
+/// (base URL containing `/v1`) have no pull API; the operator provisions the
+/// model, so this returns `false` without probing.
+pub async fn ensure_model_available(config: &EmbeddingConfig) -> Result<bool, EmbedError> {
+    if config.base_url.contains("/v1") {
+        return Ok(false);
+    }
+
+    let base = config.base_url.trim_end_matches('/');
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(MODEL_PULL_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| EmbedError::Http(e.to_string()))?;
+
+    // Fast path: the model is already present.
+    if let Ok(response) = client.get(format!("{base}/api/tags")).send().await
+        && response.status().is_success()
+        && let Ok(tags) = response.json::<OllamaTagsResp>().await
+        && tags
+            .models
+            .iter()
+            .any(|model| model_name_matches(&model.name, &config.model))
+    {
+        return Ok(false);
+    }
+
+    let response = client
+        .post(format!("{base}/api/pull"))
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "model": config.model,
+            "stream": false,
+        }))
+        .send()
+        .await
+        .map_err(|e| {
+            EmbedError::Http(format!(
+                "model pull request failed for {}: {e}",
+                config.model
+            ))
+        })?;
+
+    if response.status() == reqwest::StatusCode::NOT_FOUND
+        || response.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED
+    {
+        // Ollama-compatible servers may implement embeddings without pull.
+        return Ok(false);
+    }
+
+    if !response.status().is_success() {
+        return Err(EmbedError::Http(format!(
+            "model pull returned status {} for {}",
+            response.status(),
+            config.model
+        )));
+    }
+
+    // Drain the body so the download completes before embedding starts.
+    let _ = response.text().await;
+    Ok(true)
+}
+
+/// Blocking wrapper around [`ensure_model_available`].
+pub fn ensure_model_available_blocking(config: &EmbeddingConfig) -> Result<bool, EmbedError> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => handle.block_on(ensure_model_available(config)),
+        Err(_) => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| EmbedError::Runtime(e.to_string()))?
+            .block_on(ensure_model_available(config)),
+    }
+}
+
+fn model_name_matches(candidate: &str, expected: &str) -> bool {
+    fn strip_latest(name: &str) -> &str {
+        name.strip_suffix(":latest").unwrap_or(name)
+    }
+    strip_latest(candidate) == strip_latest(expected)
+}
+
+// ---------------------------------------------------------------------------
 // Sync bridge
 // ---------------------------------------------------------------------------
 
@@ -200,6 +297,16 @@ pub fn embed_text_blocking(config: &EmbeddingConfig, text: &str) -> Result<Vec<f
 #[derive(Deserialize)]
 struct OllamaResp {
     embeddings: Vec<Vec<f32>>,
+}
+
+#[derive(Deserialize)]
+struct OllamaTagsResp {
+    models: Vec<OllamaModel>,
+}
+
+#[derive(Deserialize)]
+struct OllamaModel {
+    name: String,
 }
 
 #[derive(Deserialize)]
@@ -236,6 +343,14 @@ mod tests {
             500,
         );
         assert_eq!(cfg.endpoint_url(), "http://localhost:11434/v1/embeddings");
+    }
+
+    #[test]
+    fn model_name_matches_latest_tag() {
+        assert!(model_name_matches("all-minilm", "all-minilm:latest"));
+        assert!(model_name_matches("all-minilm:latest", "all-minilm"));
+        assert!(model_name_matches("all-minilm", "all-minilm"));
+        assert!(!model_name_matches("all-minilm:v1", "all-minilm"));
     }
 
     #[test]

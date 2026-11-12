@@ -59,6 +59,7 @@ pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
         | "build_graph"
         | "update_graph"
         | "postprocess_graph"
+        | "embed_chunks"
         | "status"
         | "doctor"
         | "db_check"

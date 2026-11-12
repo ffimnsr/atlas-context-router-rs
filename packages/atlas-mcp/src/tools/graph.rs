@@ -13,6 +13,7 @@ use crate::tool_result::{
     normalized_tool_result_value, tool_execution_error_value,
 };
 
+use super::config_defaults::hybrid_enabled_default;
 use super::shared::{
     bool_arg, error_code_docs, error_message, error_suggestions, inject_budget_metadata,
     inject_deprecated_input_fields, load_budget_policy, load_embedding_config,
@@ -328,7 +329,7 @@ pub(super) fn tool_query_graph(
         })
         .unwrap_or_default();
     let fuzzy = bool_arg(args, "fuzzy").unwrap_or(false);
-    let hybrid = bool_arg(args, "hybrid").unwrap_or(false);
+    let hybrid = bool_arg(args, "hybrid").unwrap_or_else(|| hybrid_enabled_default(repo_root));
     let include_files = bool_arg(args, "include_files").unwrap_or(false);
     let repo_scope = match resolve_repo_scope_selection("query_graph", args, repo_root) {
         Ok(scope) => scope,
@@ -504,6 +505,7 @@ pub(super) fn tool_batch_query_graph(
     let store = open_store(db_path)?;
     let embed_cfg = load_embedding_config(repo_root)?;
     let policy = load_budget_policy(repo_root)?;
+    let hybrid_default = hybrid_enabled_default(repo_root);
 
     #[derive(Serialize)]
     struct BatchResultNode {
@@ -540,7 +542,7 @@ pub(super) fn tool_batch_query_graph(
         let regex = normalized_optional_query_regex(raw_regex);
         let subpath = str_arg(q_args, "subpath")?.map(str::to_owned);
         let fuzzy = bool_arg(q_args, "fuzzy").unwrap_or(false);
-        let hybrid = bool_arg(q_args, "hybrid").unwrap_or(false);
+        let hybrid = bool_arg(q_args, "hybrid").unwrap_or(hybrid_default);
         let include_files = bool_arg(q_args, "include_files").unwrap_or(false);
 
         let mut budgets = BudgetManager::new();
@@ -1142,7 +1144,7 @@ pub(super) fn tool_explain_query(
             .unwrap_or(raw)
     });
     let fuzzy = bool_arg(args, "fuzzy").unwrap_or(false);
-    let hybrid = bool_arg(args, "hybrid").unwrap_or(false);
+    let hybrid = bool_arg(args, "hybrid").unwrap_or_else(|| hybrid_enabled_default(repo_root));
     let include_files = bool_arg(args, "include_files").unwrap_or(false);
 
     if let Err(payload) = validate_query_graph_inputs(

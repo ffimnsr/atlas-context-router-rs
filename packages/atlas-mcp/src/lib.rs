@@ -20,6 +20,7 @@
 //! | `detect_changes`          | Git diff → changed-file list with per-file node counts   |
 //! | `build_graph`             | Full graph build                                         |
 //! | `update_graph`            | Incremental graph update                                 |
+//! | `embed_chunks`            | Generate/persist vectors for un-embedded chunks          |
 //! | `postprocess_graph`       | Explicit derived-analytics refresh after build/update    |
 //! | `traverse_graph`          | Reachability walk from qualified name                    |
 //! | `get_minimal_context`     | Compact auto-detected review context                     |

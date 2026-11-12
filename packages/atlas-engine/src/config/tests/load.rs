@@ -253,8 +253,9 @@ fn memory_embedding_defaults_and_validation() {
     let config = Config::load(dir.path()).expect("load config");
     assert!(!config.memory.embedding.enabled, "embeddings stay opt-in");
     assert!(config.memory.embedding.provider.is_none());
-    assert_eq!(config.memory.embedding.model, "nomic-embed-text");
-    assert_eq!(config.memory.embedding.dimension, 768);
+    assert_eq!(config.memory.embedding.model, "all-minilm");
+    assert_eq!(config.memory.embedding.dimension, 384);
+    assert_eq!(config.search.embedding.model, "all-minilm");
     assert_eq!(config.memory.search.hybrid_weight_fts, 0.7);
     assert_eq!(config.memory.search.hybrid_weight_vector, 0.3);
     assert!(

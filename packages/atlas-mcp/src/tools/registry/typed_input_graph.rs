@@ -77,6 +77,17 @@ pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
             ),
             ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
         ])),
+        "embed_chunks" => Some(typed_schema_with_descriptions::<EmbedChunksArgsSchema>(&[
+            (
+                "properties/limit",
+                "Maximum number of chunks to embed in this run (default 1000).",
+            ),
+            (
+                "properties/dry_run",
+                "Count pending chunks without calling the embedding provider or writing vectors (default false).",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
         "batch_query_graph" => Some(typed_schema_with_descriptions::<BatchQueryGraphArgsSchema>(
             &[
                 (

@@ -65,11 +65,14 @@ pub fn reciprocal_rank_fusion(
     results
 }
 
-/// Run FTS + vector retrieval and merge with RRF.
-pub(super) fn search_hybrid(
+/// Run FTS + vector retrieval and merge with RRF using a precomputed query vector.
+///
+/// Embedding the query is the caller's responsibility so an unreachable backend
+/// can fall back to lexical search without losing store-level errors.
+pub(super) fn search_hybrid_with_vector(
     store: &Store,
     query: &SearchQuery,
-    embed_cfg: &embed::EmbeddingConfig,
+    query_vec: &[f32],
 ) -> Result<Vec<ScoredNode>> {
     // FTS branch — fetch top_k_fts candidates then apply ranking boosts.
     let fts_q = SearchQuery {
@@ -96,10 +99,8 @@ pub(super) fn search_hybrid(
         &changed_set,
     );
 
-    // Vector branch — embed query and fetch top_k_vector candidates scoped by
-    // the same directory/repo/kind filters as the FTS branch.
-    let query_vec = embed::embed_text_blocking(embed_cfg, &query.text)
-        .map_err(|e| atlas_core::AtlasError::Other(e.to_string()))?;
+    // Vector branch — fetch top_k_vector candidates scoped by the same
+    // directory/repo/kind filters as the FTS branch.
     let scope = atlas_store_sqlite::VectorScope {
         subpath_prefix: query.subpath.clone(),
         exact_dir: query.exact_dir.clone(),
@@ -112,7 +113,7 @@ pub(super) fn search_hybrid(
             .unwrap_or(atlas_store_sqlite::DEFAULT_TRIEHI_MIN_CHUNKS),
     };
     let vector_results = maybe_exclude_file_nodes(
-        store.nodes_by_vector_similarity(&query_vec, &scope, query.top_k_vector)?,
+        store.nodes_by_vector_similarity(query_vec, &scope, query.top_k_vector)?,
         query.include_files,
         query.top_k_vector,
     );

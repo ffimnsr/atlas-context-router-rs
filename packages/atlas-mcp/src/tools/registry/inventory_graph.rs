@@ -10,6 +10,19 @@ use serde_json::{Value, json};
 pub(super) fn tools() -> Vec<Value> {
     vec![
         json!({
+                "name": "embed_chunks",
+                "description": "Generate and persist embeddings for retrieval chunks that do not have a vector yet. Requires `[search.embedding] url` in `.atlas/config.toml`; the default model is the CPU-friendly `all-minilm`. Ollama-style backends auto-download a missing model before embedding; OpenAI-compatible backends require the model to be provisioned already. Set dry_run=true to count pending chunks without calling the provider. After vectors exist, query_graph with hybrid=true (or `[search] hybrid_enabled = true`) fuses lexical and vector results with Reciprocal Rank Fusion.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "limit": { "type": "integer", "description": "Maximum number of chunks to embed in this run (default 1000)." },
+                        "dry_run": { "type": "boolean", "description": "Count pending chunks without calling the embedding provider or writing vectors (default false)." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+        }),
+        json!({
                 "name": "query_graph",
                 "description": "Full-text search the code graph by symbol name, qualified name, or supported intent phrase. Supported `text` grammar: plain identifier (`compute`), exact qualified name (`src/service.rs::fn::compute`), `who calls <symbol>`, `what breaks <symbol>`, and `tests for <symbol>`. Returns stable object `structuredContent` with `query`, `matches`, `summary`, `truncated`, and `warnings`; set include_files=true when file-level hits are also useful. It does not return caller/callee usage edges. Empty `regex` is treated like omitted; truly empty `text`+`regex` requests return a self-correcting retry example instead of a bare validation failure. Natural-language-only descriptions without a concrete identifier are rejected with retry guidance. Follow up with symbol_neighbors, traverse_graph, or get_context when you need relationships.",
                 "inputSchema": {

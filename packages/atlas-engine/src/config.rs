@@ -375,11 +375,12 @@ impl Default for MemoryEmbeddingConfig {
 }
 
 fn default_memory_embedding_model() -> String {
-    "nomic-embed-text".to_owned()
+    DEFAULT_EMBED_MODEL.to_owned()
 }
 
 fn default_memory_embedding_dimension() -> usize {
-    768
+    // Matches `all-minilm` (all-MiniLM-L6-v2), the default CPU-friendly model.
+    384
 }
 
 /// Supported `memory.embedding.provider` values.

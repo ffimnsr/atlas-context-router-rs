@@ -12,8 +12,8 @@ use super::*;
 ///
 /// When `query.hybrid` is `true` **and** an embedding backend config is
 /// provided, the hybrid path is taken: FTS and vector results are merged via
-/// Reciprocal Rank Fusion. Falls back silently to FTS-only when no embedding
-/// backend is configured.
+/// Reciprocal Rank Fusion. Falls back to FTS-only when no embedding backend is
+/// configured or the backend cannot produce a query vector.
 pub fn search(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNode>> {
     search_with_embedding(store, query, None)
 }
@@ -26,9 +26,20 @@ pub fn search_with_embedding(
     // ---- hybrid path -------------------------------------------------------
     if query.hybrid {
         if let Some(embed_cfg) = embed_cfg {
-            return search_hybrid(store, query, embed_cfg);
+            match embed::embed_text_blocking(embed_cfg, &query.text) {
+                Ok(query_vec) => {
+                    return hybrid::search_hybrid_with_vector(store, query, &query_vec);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        "embedding backend unavailable; falling back to FTS-only search"
+                    );
+                }
+            }
+        } else {
+            debug!("hybrid=true but search.embedding.url not set; falling back to FTS");
         }
-        debug!("hybrid=true but search.embedding.url not set; falling back to FTS");
     }
 
     // ---- FTS path ----------------------------------------------------------
