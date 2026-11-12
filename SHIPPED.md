@@ -58,6 +58,15 @@ For active backlog, see ISSUES.md.
 - Reasoning engine is implemented with removal impact analysis, dead-code detection, refactor safety scoring, dependency-removal checks, rename blast radius, and change-risk classification.
 - Refactor engine is implemented with deterministic plan/apply flows for rename, dead-code removal, and import cleanup, including dry-run output and validation.
 
+## Context Payload Telemetry and Metadata Slimming
+
+- `ContextTelemetry` is implemented in `packages/atlas-core/src/model/context.rs` as optional `ContextResult::telemetry`, covering requested and emitted nodes, edges, files, saved sources, content assets, overviews, bytes, and tokens plus `budget_hit`, `budget_name`, `duration_ms`, and `outcome` (`ok`, `empty`, `ambiguous`, `budget_exhausted`, `error`) classified at the `ContextEngine::build` boundary.
+- Telemetry is opt-in through `ContextRequest::include_telemetry` (default `false`), `--telemetry` on `atlas context` and `atlas review-context`, and `include_telemetry` on MCP `get_context` and `get_review_context`; absent telemetry is skipped so default output stays byte-identical.
+- Metrics families `context_builds` (labeled by intent and outcome), `context_duration_ms`, `context_payload_bytes`, and `context_payload_tokens` are implemented, and the context bench emits telemetry JSON for a fixed corpus covering symbol, file, review, change-set, oversized-context, and provenance-sensitive requests.
+- Uniform repo provenance is hoisted to `ContextResult::repo_provenance`, while per-item provenance is preserved when the result spans multiple repos or provenance differs across items.
+- `ContextRequest::include_ranking_evidence` (default `false`) omits `context_ranking_evidence` from nodes, content assets, and saved-context sources while keeping `selection_reason`, `relevance_score`, graph identity fields, and `source_id`; `--include-ranking-evidence` and the matching MCP option enable it.
+- Payload slimming reaches the `>= 15%` token-reduction threshold at unchanged recall and unchanged required-evidence retention through provenance hoisting and opt-in ranking evidence.
+
 ## Insights Engine
 
 - Deterministic insights engine is implemented with shared report primitives (`InsightSummary`, `InsightFinding`, `InsightEvidence`), stable severity values, deterministic sort order, and reuse of existing ranking/truncation and freshness/provenance metadata contracts; no LLM dependency and no writes to SQLite.
@@ -131,6 +140,15 @@ For active backlog, see ISSUES.md.
 - Hookless-host continuity is documented in `wiki/session-memory-fallback.md` (recall, capture triggers, artifact labels, compaction, do-not-store rules) with a native-hooks-vs-MCP-fallback compatibility matrix (`surface`, `works_with`, `automatic`, `token_cost`, `best_for`) also mirrored in README; Claude/Codex hook docs state that native hooks and the MCP fallback share one event service.
 - Event-name parity is enforced by tests: installed instruction blocks, MCP registry descriptions, and wiki docs may only reference event names supported by `record_session_event` / native hooks (`atlas_mcp::supported_event_names` / `is_supported_event_name`).
 
+## Runtime Event Classification and Resume Grouping
+
+- Deterministic runtime classification is implemented in `packages/atlas-agent-events/src/classification.rs` with `RuntimeClassification { kind, severity, rule_id, matched_fields }`, kinds `panic`, `exception`, `stacktrace`, `compiler_error`, `test_failure`, `test_success`, `build_success`, `deprecation_warning`, `dead_code_warning`, `permission_denied`, `command_timeout`, `graph_not_ready`, and `retrieval_failure`, and severities `error`, `warning`, and `info`.
+- `classify_runtime_payload` scans bounded payload text (`stderr`, `stdout`, `output`, `error`, `message`, `result`, `extra`) up to `MAX_CLASSIFIER_INPUT_BYTES` (16 KiB), applies status and error-text rules before output-pattern rules, reuses existing hook status, command, and tool extractors, returns `None` when no rule matches, and records only rule ids plus matched field names through `MAX_CLASSIFIER_MATCHED_FIELDS`, never raw matched text.
+- Classification is attached to hook metadata by `build_hook_event_metadata` only when it returns `Some`, leaving `SessionEventType` and priority selection unchanged; classification stays deterministic so identical raw input produces an identical enriched payload and event hash.
+- Resume snapshots extend `unresolved_errors` and `recent_commands` with classification metadata and add `recent_build_test_summaries` (`kind`, `command`, `status`, `classification`, `at`) capped at five entries and included in `trim_snapshot_to_limit`.
+- `WakePack` adds `recent_runtime_failures` sourced from resume errors with `severity = error`, capped by the existing wake-pack item limit and ordered deterministically by time then rule id with duplicate entries removed.
+- MCP `wake_up` output schema, `MCP_TOOLS.md`, session-memory wiki docs, and CLI/MCP snapshots are updated for the new classification metadata and wake-up field.
+
 ## Cross-Cutting Infrastructure
 
 - Shared ranking and trimming primitives are implemented across query, context, review, impact, and analysis surfaces.
@@ -186,6 +204,17 @@ For active backlog, see ISSUES.md.
 - Query-backed extraction is implemented for C, C++, C#, Java, Scala, JavaScript, TypeScript, Python, Ruby, PHP, Bash, HTML, and CSS with Atlas-owned `.scm` files under `packages/atlas-parser/queries/`, shared `@atlas.*` capture names, and parser code still owning qualified names, parent scopes, edge kinds, confidence tiers, and language heuristics.
 - Shared query helper coverage includes capture lookup by exact name, optional and required captures with clear failures, byte-range sorting for deterministic output, and source-order preservation for overlapping matches.
 - JSON, TOML, and Markdown remain intentionally manual with documented reasons (recursive object/key path ownership, stable table/key-path semantics, and heading/slug/fence/malformed-input safeguards), while every migrated parser keeps public APIs, `ParsedFile`, `NodeKind`, edge behavior, and existing golden outputs unchanged.
+
+## Reachability Measurement and Rust Reachability Guard
+
+- `cross_file_links` exposes `SemanticReferenceEdge { source_file, target_qn, edge_kind, confidence_tier, extra_json }` through `Store::semantic_reference_edges`, keeps `files_referencing_symbols_in` as a thin wrapper, and adds `confidence_tier` and `reachability` to `SemanticLink`.
+- Weak-edge filtering is implemented with `cross_file_links_with_options(..., include_weak)`: `confidence_tier = 'same_package'` edges are hidden by default, every other tier is kept, and MCP `cross_file_links` exposes `include_weak` (default `false`) with schema fields for tier and reachability.
+- `atlas doctor --json` and MCP `doctor` report `reachability_measurement` with `total_same_package_edges`, `sampled_edges`, `cross_crate_root_edges`, `orphan_candidate_edges`, `unknown_edges`, `measurement_source`, and `sample_limit`, backed by `packages/atlas-engine/src/reachability_measure.rs` and Cargo layout path-kind classification (`lib`, `main`, `example`, `test`, `bench`, `other`), with a bench and a fixture reproducing a wrong `same_package` edge.
+- Rust module reachability is implemented in `packages/atlas-engine/src/reachability.rs` with `ReachabilityStatus` (`verified`, `unreachable`, `unknown`, `not_applicable`), `ReachabilityResult`, `CrateRootKind`, `CrateRoot`, and `RustReachabilityIndex` built from persisted module and file nodes through `from_store`; shared resolution helpers moved to `package_resolution.rs` without behavior changes.
+- Rust parser module facts are stored in `Node.extra_json` (`inline`, `module_file`, `has_cfg`, `has_path_attr`, `path_attr_value`) with parser tests for `mod foo;`, `foo/mod.rs`, inline modules, `#[path]`, and `#[cfg]`; indexes become incomplete for missing facts, `#[cfg]`, `#[path]`, out-of-owner or missing files, and `include!` or macro-generated declarations.
+- `ReachabilityGuard` is keyed by `(language, owner_id)` and built once per `reconcile_call_targets` run from the store, applied only to `same_package` fallback candidates after receiver-hint filtering: reachable edges are retained, unreachable edges are suppressed and reset to the original callee name with cleared confidence tier and `unresolved = true`, and unknown edges keep existing fallback behavior; accepted edges carry `reachability = verified | unknown` and non-Rust or provider-absent resolution carries `not_applicable`.
+- `[reachability]` config is implemented with `enabled` (default `true`), `budget_ms` (default `250`), and `max_owners_per_run` (default `64`), positive-value validation, unchanged-owner skipping, budget-exhausted indexes reported as `Unknown`, and build/update/doctor summaries covering owners indexed and skipped, unknown reasons, unresolved mods, and accepted or rejected weak edges.
+- `atlas db_check` validates persisted `extra_json.reachability` values only, `packages/atlas-engine/src/call_resolution.rs` stays below 1,000 LOC, and non-Rust languages remain `not_applicable` or `unknown`; provider scope, completeness, and diagnostics are documented in `wiki/reachability.md`.
 
 ## SQLite Store Concurrency Contract
 
@@ -459,7 +488,6 @@ For active backlog, see ISSUES.md.
 
 ## Still Open
 
-- Context payload telemetry and metadata slimming remain in ISSUES.md (retrieval follow-up patch).
-- Runtime event classification and resume grouping, reachability measurement and Rust guard, shared parser query migration remainder (Go and final validation pass), minimal-context escalation metadata, and measured SQLite read pooling remain in ISSUES.md.
+- Shared parser query migration remainder (Go migration and final validation pass) and minimal-context escalation metadata remain in ISSUES.md.
 - Remaining Additional Backlog items (parser-cache CI gate, LSP shim) remain in ISSUES.md.
 
