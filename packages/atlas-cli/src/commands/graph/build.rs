@@ -10,6 +10,7 @@ use atlas_store_sqlite::{BuildFinishStats, GraphRecoveryMode, GraphStoreRecovery
 use camino::Utf8Path;
 
 use super::super::{db_path, print_json, resolve_repo};
+use super::update::{auto_embed_enabled, auto_embed_report, print_embed_report};
 use super::{MultiRepoBudgetAggregate, print_summary_value};
 
 pub(super) const MAX_MULTI_REPO_SELECTION: usize = 32;
@@ -95,9 +96,10 @@ pub fn run_build(cli: &Cli) -> Result<()> {
 
         let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
         let build_budget = config.build_run_budget()?;
+        let auto_embed = !dry_run && auto_embed_enabled(&config);
 
         if all_repos || selected_repo_id.is_some() {
-            return run_registered_builds(
+            run_registered_builds(
                 cli,
                 Utf8Path::new(&repo),
                 &db_path,
@@ -106,7 +108,18 @@ pub fn run_build(cli: &Cli) -> Result<()> {
                 dry_run,
                 selected_repo_id.as_deref(),
                 all_repos,
-            );
+            )?;
+            if auto_embed && let Some(report) = auto_embed_report(&repo, &db_path) {
+                if cli.json {
+                    eprintln!(
+                        "Embedded {}/{} chunks ({} errors).",
+                        report.embedded_chunks, report.pending_chunks, report.failed_chunks
+                    );
+                } else {
+                    print_embed_report(&report);
+                }
+            }
+            return Ok(());
         }
 
         let source_repo_id = stable_repo_id(repo_root_path.as_path());
@@ -228,6 +241,12 @@ pub fn run_build(cli: &Cli) -> Result<()> {
             }
         };
 
+        let embedding = if auto_embed {
+            auto_embed_report(&repo, &db_path)
+        } else {
+            None
+        };
+
         if cli.json {
             let mut payload = serde_json::json!({
                     "ok": true,
@@ -260,6 +279,9 @@ pub fn run_build(cli: &Cli) -> Result<()> {
             // carry wall-clock durations and are only reported for real runs.
             if !dry_run {
                 payload["metrics"] = serde_json::to_value(atlas_metrics::snapshot())?;
+            }
+            if let Some(report) = &embedding {
+                payload["embedding"] = serde_json::to_value(report)?;
             }
             print_json("build", payload)?;
         } else {
@@ -310,6 +332,9 @@ pub fn run_build(cli: &Cli) -> Result<()> {
             }
             for warning in &summary.warnings {
                 print_summary_value("Warning", warning);
+            }
+            if let Some(report) = &embedding {
+                print_embed_report(report);
             }
         }
 

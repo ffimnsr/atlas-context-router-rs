@@ -102,6 +102,102 @@ fn update_state_for_summary(
     }
 }
 
+/// Embed every pending chunk after a successful update.
+///
+/// Runs in bounded batches so a large backlog does not load every chunk text
+/// into memory at once. Stops when the backlog is drained or a batch makes no
+/// progress (all remaining chunks failed).
+fn embed_after_update(repo_root: &str, db_path: &str) -> Result<atlas_engine::EmbedChunkReport> {
+    let mut combined = atlas_engine::EmbedChunkReport {
+        provider: String::new(),
+        model: String::new(),
+        pending_chunks: 0,
+        embedded_chunks: 0,
+        failed_chunks: 0,
+        dimension: None,
+        model_pulled: false,
+        dry_run: false,
+    };
+
+    loop {
+        let report = atlas_engine::embed_pending_chunks(
+            repo_root,
+            db_path,
+            atlas_engine::EmbedChunkOptions {
+                limit: atlas_engine::DEFAULT_EMBED_CHUNK_LIMIT,
+                dry_run: false,
+            },
+        )
+        .context("graph update succeeded, but embedding pending chunks failed")?;
+
+        if combined.provider.is_empty() {
+            combined.provider = report.provider.clone();
+            combined.model = report.model.clone();
+        }
+        combined.pending_chunks += report.pending_chunks;
+        combined.embedded_chunks += report.embedded_chunks;
+        combined.failed_chunks += report.failed_chunks;
+        combined.model_pulled |= report.model_pulled;
+        if report.dimension.is_some() {
+            combined.dimension = report.dimension;
+        }
+
+        // Stop when drained, when the batch was partial, or when a chunk failed
+        // after the client's own retries so failures are not counted twice.
+        let processed = report.embedded_chunks + report.failed_chunks;
+        if report.pending_chunks < atlas_engine::DEFAULT_EMBED_CHUNK_LIMIT
+            || processed == 0
+            || report.failed_chunks > 0
+        {
+            break;
+        }
+    }
+
+    Ok(combined)
+}
+
+/// Embedding is automatic when `[search.embedding] url` is configured.
+///
+/// A missing backend keeps build/update purely lexical. An invalid backend
+/// config warns and disables the pass instead of failing the graph update,
+/// because embeddings are optional retrieval data.
+pub(super) fn auto_embed_enabled(config: &atlas_engine::Config) -> bool {
+    match config.embedding_backend() {
+        Ok(backend) => backend.is_some(),
+        Err(error) => {
+            eprintln!("warning: invalid embedding backend config; skipping auto-embed: {error:#}");
+            false
+        }
+    }
+}
+
+pub(super) fn auto_embed_report(
+    repo_root: &str,
+    db_path: &str,
+) -> Option<atlas_engine::EmbedChunkReport> {
+    match embed_after_update(repo_root, db_path) {
+        Ok(report) => Some(report),
+        Err(error) => {
+            eprintln!("warning: embeddings were not updated: {error:#}");
+            None
+        }
+    }
+}
+
+pub(super) fn print_embed_report(report: &atlas_engine::EmbedChunkReport) {
+    if report.model_pulled {
+        println!("Downloaded embedding model {}.", report.model);
+    }
+    if report.pending_chunks == 0 {
+        println!("All chunks already have embeddings.");
+        return;
+    }
+    println!(
+        "Embedded {}/{} chunks ({} errors).",
+        report.embedded_chunks, report.pending_chunks, report.failed_chunks
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_registered_updates(
     cli: &Cli,
@@ -387,9 +483,10 @@ pub fn run_update(cli: &Cli) -> Result<()> {
 
         let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
         let build_budget = config.build_run_budget()?;
+        let auto_embed = !dry_run && auto_embed_enabled(&config);
 
         if all_repos || affected_repos || selected_repo_id.is_some() {
-            return run_registered_updates(
+            run_registered_updates(
                 cli,
                 Utf8Path::new(&repo),
                 &db_path,
@@ -399,7 +496,20 @@ pub fn run_update(cli: &Cli) -> Result<()> {
                 selected_repo_id.as_deref(),
                 all_repos,
                 affected_repos,
-            );
+            )?;
+            // Registered updates write into one shared content store, so one
+            // embedding pass covers every repo that changed.
+            if auto_embed && let Some(report) = auto_embed_report(&repo, &db_path) {
+                if cli.json {
+                    eprintln!(
+                        "Embedded {}/{} chunks ({} errors).",
+                        report.embedded_chunks, report.pending_chunks, report.failed_chunks
+                    );
+                } else {
+                    print_embed_report(&report);
+                }
+            }
+            return Ok(());
         }
 
         let explicit_files: Vec<String> = match &cli.command {
@@ -596,6 +706,12 @@ pub fn run_update(cli: &Cli) -> Result<()> {
             );
         }
 
+        let embedding = if auto_embed {
+            auto_embed_report(&repo, &db_path)
+        } else {
+            None
+        };
+
         if cli.json {
             let mut payload = serde_json::json!({
                     "ok": true,
@@ -628,6 +744,9 @@ pub fn run_update(cli: &Cli) -> Result<()> {
             // carry wall-clock durations and are only reported for real runs.
             if !dry_run {
                 payload["metrics"] = serde_json::to_value(atlas_metrics::snapshot())?;
+            }
+            if let Some(report) = &embedding {
+                payload["embedding"] = serde_json::to_value(report)?;
             }
             print_json("update", payload)?;
         } else {
@@ -683,6 +802,9 @@ pub fn run_update(cli: &Cli) -> Result<()> {
             for warning in &summary.warnings {
                 print_summary_value("Warning", warning);
             }
+            if let Some(report) = &embedding {
+                print_embed_report(report);
+            }
         }
 
         Ok(())
@@ -692,4 +814,23 @@ pub fn run_update(cli: &Cli) -> Result<()> {
         a.after_command("update", result.is_ok());
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::auto_embed_enabled;
+    use atlas_engine::Config;
+
+    #[test]
+    fn auto_embed_is_disabled_without_configured_backend() {
+        assert!(!auto_embed_enabled(&Config::default()));
+    }
+
+    #[test]
+    fn auto_embed_is_enabled_when_embedding_url_is_configured() {
+        let mut config = Config::default();
+        config.search.embedding.url = Some("http://127.0.0.1:11434".to_owned());
+
+        assert!(auto_embed_enabled(&config));
+    }
 }
