@@ -41,6 +41,7 @@ For terms that are easy to misread in this document:
 
 - Part IV. Remaining context continuity roadmap: ICM-inspired memory follow-on roadmap (ICM-B through ICM-H)
 - Part V. Remaining focused follow-up patches: Retrieval Follow-Up Patch remainder, Runtime Event Enrichment and Graph Linking Patch, Rust Reachability Guard Patch, Shared Parser Query Migration Patch, Context Escalation Contract Patch, Dynamic Agent Policy and Hook Enforcement Patch, Graph Store Corruption Recovery Patch, SQLite Connection Concurrency Policy Patch remainder
+- Part XII. RAG adaptation roadmap from `docs/PLAN-RAG.md`: VikingMem memory operators and recall (VM1–VM3), VikingRAG + TrieHI hierarchy, scope, escalation, and experience edges (VR1–VR4), and RAG evaluation gates (VQ1)
 
 ## Cross-Cutting Track Map
 
@@ -49,6 +50,7 @@ For terms that are easy to misread in this document:
 - Graph safety and workflow: Context Escalation Contract Patch, Graph Store Corruption Recovery Patch, SQLite Connection Concurrency Policy Patch remainder
 - Rust parser correctness: Rust Reachability Guard Patch, Shared Parser Query Migration Patch
 - Agent policy and enforcement: Dynamic Agent Policy and Hook Enforcement Patch
+- RAG adaptation and retrieval scoping: Part XII (VM1–VM3, VR1–VR4, VQ1), sourced from `docs/PLAN-RAG.md`
 
 ---
 
@@ -1643,3 +1645,452 @@ Implementation anchors:
 ## Part XI — Tokenizer-Backed Context Budget Accounting
 
 Tokenizer-backed context budget accounting is shipped. See SHIPPED.md for details.
+
+---
+
+## Part XII — RAG Adaptation Roadmap (VikingMem, VikingRAG, TrieHI)
+
+Source of truth: `docs/PLAN-RAG.md`. These items are the actionable breakdown of that plan; change the plan document first when a track changes scope.
+
+Workstream A (VikingMem, `packages/atlas-session`): VM1 typed event–entity operator algebra, VM2 non-destructive consolidation + EUA patching + `TIME_COMPRESS`, VM3 two-path quota-based recall.
+
+Workstream B (VikingRAG + TrieHI, `packages/atlas-session`, `packages/atlas-contentstore`, `packages/atlas-store-sqlite`, `packages/atlas-search`, `packages/atlas-review`, `packages/atlas-mcp`): VR1 L0/L1/L2 hierarchy + `atlas://` URIs, VR2 directory-semantic query + vector scope pre-filtering, VR3 evidence-gap escalation, VR4 experience edges.
+
+Measurement: VQ1 evaluation and token-efficiency gates.
+
+Core Design Rules:
+
+- keep the three-database boundary: `worldtree.db` for static graph facts, `context.db` for chunked artifacts, `session.db` for events, memories, memoir, overviews, and experience edges; never add a fourth database
+- keep the non-LLM default: operators, EUA patching, deterministic `TIME_COMPRESS`, DSQ scope filters, and evidence sufficiency checks run locally with no required LLM or embedding provider
+- never drop merged or contradictory evidence: consolidation and `TIME_COMPRESS` preserve distinct facts from all inputs and keep `memory_supersessions` provenance
+- bind overviews and experience shortcuts to `commit_sha` plus canonical file hashes; stale links never surface as fresh structural evidence
+- canonicalize every path-derived scope, cache, or identity key through `atlas_repo::CanonicalRepoPath`
+- sync every new flag, filter, enum value, and JSON field across CLI, MCP wrappers, and `MCP_TOOLS.md`
+- respect the 1K LOC rule: add new modules instead of growing `packages/atlas-session/src/store/memory.rs`, `packages/atlas-session/src/store/memoir.rs`, `packages/atlas-session/src/store/types.rs`, and `packages/atlas-mcp/src/resources.rs`
+- implement only from the published algorithm descriptions; never copy AGPL-3.0 OpenViking code
+
+Rules apply to every checklist item in this part.
+
+### Workstream A — VikingMem Memory Engine
+
+#### VM1 — Typed Event–Entity Operator Algebra
+
+Rules:
+
+- execute every operator deterministically with zero LLM or embedding calls
+- apply one operator per transaction and append to `op_history_json`
+- reject overflow, NaN/infinite averages, and unknown enum variants instead of clamping silently
+- keep `memories` as the only memory entity table; do not add a parallel state store
+- do not implement operators inside `memory.rs` (already near the 1K LOC threshold); use `memory_ops.rs`
+
+Implementation structure:
+
+##### VM1.1 — Migration `013_memory_ops_and_fts.sql`
+
+- [ ] add `packages/atlas-session/src/migrations/013_memory_ops_and_fts.sql`
+- [ ] add `memories.op_history_json TEXT NOT NULL DEFAULT '[]'`
+- [ ] add `memories.numeric_value REAL` for numeric operator state
+- [ ] add `memories_fts` FTS5 virtual table over `topic`, `title`, and `body` using `content='memories'` and `content_rowid='rowid'`
+- [ ] add `memories_ai`, `memories_ad`, and `memories_au` triggers so FTS stays synchronized on insert, update, and delete
+- [ ] backfill `memories_fts` for existing rows with `INSERT INTO memories_fts(memories_fts) VALUES('rebuild')`
+- [ ] register the migration in `packages/atlas-session/src/migrations.rs` and bump `LATEST_VERSION`
+- [ ] extend `atlas db check` with missing-FTS-row, orphan-FTS-row, and malformed-`op_history_json` checks
+- [ ] add a migration test applying `013` to a `012` database and asserting columns, FTS backfill, and trigger behavior
+
+##### VM1.2 — `MemoryOp` operator enum
+
+- [ ] add `packages/atlas-session/src/store/memory_ops.rs` and register it in `packages/atlas-session/src/store/mod.rs`
+- [ ] define `pub enum MemoryOp` with exact variants `Set { field, value }`, `Sum { field, delta }`, `Count { field }`, `Max { field, value }`, `Avg { field, sample }`, `AppendUnique { field, item, max_items }`, `EuaPatch { search, replace, max_edit_distance }`, and `TimeCompress { window_label }`
+- [ ] derive `Serialize`/`Deserialize` with `#[serde(tag = "op", rename_all = "snake_case")]` so history entries are stable JSON
+- [ ] define `OpOutcome` with `changed_fields`, `numeric_value`, and `history_entry`
+- [ ] add `apply_memory_op(entity: &mut MemoryEntity, op: &MemoryOp, now: &str) -> Result<OpOutcome>` with no database access
+- [ ] implement `Set` as top-level overwrite for `topic`, `title`, `body`, `importance`, `scope`, `source_id`, and `metadata.<key>`
+- [ ] implement `Sum` with `i64::checked_add`, persisting the result to `numeric_value` and `metadata.<field>`
+- [ ] implement `Count` as `metadata.<field> + 1` plus `last_seen = now`
+- [ ] implement `Max` for numeric values and RFC 3339 timestamps, keeping the larger value
+- [ ] implement `Avg` as `(old_avg * sample_count + sample) / (sample_count + 1)` with `sample_count` stored beside the field
+- [ ] implement `AppendUnique` with exact-value dedupe, `max_items` cap, and rejection of `max_items = 0`
+- [ ] append one bounded history entry `{op, at, fields}` to `op_history_json`, keeping the newest 32 entries
+- [ ] reject operators on rows with `superseded_by` set using a typed error
+- [ ] delegate `EuaPatch` to `memory_patch.rs` and `TimeCompress` to `memory_consolidate.rs` instead of handling them here
+- [ ] add unit tests per operator for happy path, dedupe, overflow, average, max, and history cap
+
+##### VM1.3 — Store wiring and typed event mapping
+
+- [ ] add `SessionStore::apply_memory_op(memory_id, &MemoryOp) -> Result<OpOutcome>` that loads the row, applies the operator, and writes `body`, `metadata_json`, `numeric_value`, `op_history_json`, and `updated_at` in one transaction
+- [ ] route `Patch X` enriched `COMMAND_FAIL` and `ERROR` events through `Count` plus `AppendUnique(error_signature)` instead of ad-hoc SQL in `global_memory.rs`
+- [ ] route `feedback_record` confidence penalties through `Count` plus `Set(confidence_penalty)`
+- [ ] route `global_symbol_access` and `global_file_access` updates through `Sum` plus `Max(last_accessed)`
+- [ ] implement the event-to-entity mapping exactly as `docs/PLAN-RAG.md` §4.1 defines it
+- [ ] add read-only `atlas memory ops <memory_id> --json` printing `op_history_json` entries and `numeric_value`
+- [ ] add MCP `memory_ops` with the same request fields, defaults, and JSON shape as the CLI command
+- [ ] add parity tests proving CLI and MCP `memory ops` output match and unknown memory ids fail with the same error code
+
+##### VM1 completion criteria
+
+- [ ] operators never call an LLM, embedding provider, or network
+- [ ] operator application is atomic per memory row and never leaves half-written `op_history_json`
+- [ ] `atlas db check` reports FTS drift and malformed operator history
+- [ ] `atlas memory ops <id> --json` matches MCP `memory_ops` output
+- [ ] no operator is implemented inside `memory.rs`
+
+#### VM2 — Non-Destructive Consolidation, EUA Patching, and `TIME_COMPRESS`
+
+Rules:
+
+- preserve every distinct fact from merged rows; never hide text from `members[1..]`
+- keep consolidation and patching fully deterministic with no LLM merge and no network call
+- keep `--dry-run` strictly read-only
+- never delete or rewrite superseded bodies; always record `memory_supersessions`
+- keep `DECISION` and `USER_INTENT` events and `critical` memories out of compression and deletion paths
+
+Implementation structure:
+
+##### VM2.1 — Deterministic structured consolidation
+
+- [ ] add `packages/atlas-session/src/store/memory_consolidate.rs`
+- [ ] add `synthesize_consolidated_body(members: &[MemoryRecord]) -> ConsolidatedBody` sorting members by `created_at ASC`
+- [ ] split bodies into normalized sentence and bullet units on newline, `". "`, `"! "`, `"? "`, and `"。"`
+- [ ] dedupe by normalized key (lowercase, whitespace-collapsed, trailing punctuation stripped) while keeping the first chronological original text
+- [ ] preserve distinct facts up to `OVERSIZED_BODY_CHARS`; on overflow store the full synthesized body in `context.db` and reference it by `source_id`
+- [ ] collect `merged_source_ids` from every member into the consolidated `metadata_json`
+- [ ] set consolidated `importance` to the highest member importance, `topic` from the group key, and `title` from the first member
+- [ ] update `consolidation_plan()` in `memory.rs` to call the synthesizer and return `body`, `metadata_json`, and `merged_source_ids` in dry-run output
+- [ ] apply mode writes one consolidated row, `memory_supersessions` rows with `reason = 'consolidated'`, and `superseded_by` markers
+- [ ] add tests for overlapping plus unique sentences, chronological order, dedupe, overflow routing, and dry-run no-mutation
+
+##### VM2.2 — EUA patch parser and applier
+
+- [ ] add `packages/atlas-session/src/store/memory_patch.rs`
+- [ ] parse `<<<< SEARCH` / `====` / `>>>> REPLACE` blocks and support multiple blocks per patch in document order
+- [ ] reject unbalanced or nested markers with typed error code `memory_patch_invalid`
+- [ ] apply exact substring replacement first and require a unique match, otherwise fail with `memory_patch_ambiguous`
+- [ ] fall back to bounded Levenshtein when no exact match exists, scanning candidate windows of `search.chars().count()` across the body
+- [ ] default `max_edit_distance` to `max(1, ceil(0.15 * search.chars().count()))` when the caller omits it
+- [ ] reject `max_edit_distance` above `0.5 * search.chars().count()`
+- [ ] record each patch as one `MemoryOp::EuaPatch` history entry containing `search_hash`, `replace_len`, `edit_distance`, and `matched_exact`
+- [ ] add `atlas memory store --patch-id <memory_id> --patch-file <path>` and `--patch-text <text>`
+- [ ] add matching `memory_store` MCP fields `patch_id`, `patch_file`, and `patch_text` with identical validation
+- [ ] reject patching superseded memories and patches that would produce an empty body
+- [ ] add tests for exact patch, fuzzy patch at 0.10 distance, rejection above threshold, ambiguous match, invalid markers, and superseded-row rejection
+
+##### VM2.3 — `TIME_COMPRESS` before curation deletion
+
+- [ ] add `compress_event_group(...)` to `curation.rs` aggregating evicted rows per topic, file, and command into a `SESSION_SUMMARY` metadata record with `total_reads`, `command_runs`, `failure_count`, `first_seen`, `last_seen`, and `source_ids`
+- [ ] emit the summary as a `SESSION_SUMMARY` event before any `DELETE FROM session_events`
+- [ ] keep `DECISION` and `USER_INTENT` events out of compressed groups
+- [ ] keep `critical` memories and their supersession chains out of time-compression deletion
+- [ ] call `MemoryOp::TimeCompress` from `compact_session_events()` so topic timelines keep a deterministic rollup
+- [ ] perform compression and deletion in one transaction and roll back when the summary write fails
+- [ ] add tests for counts, ordering, protected events, rollback, and idempotent second compaction
+
+##### VM2 completion criteria
+
+- [ ] consolidated body contains every distinct sentence from all merged members
+- [ ] fuzzy patching applies at or below threshold and fails above it
+- [ ] no `DELETE FROM session_events` runs without a prior summary write
+- [ ] `DECISION`, `USER_INTENT`, and `critical` rows are protected
+- [ ] consolidation dry-run leaves storage unchanged
+
+#### VM3 — Two-Path Quota-Based Memory Recall
+
+Rules:
+
+- keep lexical recall the default; hybrid vector recall stays optional and disabled by default
+- rank each path independently; never pool raw scores across paths
+- preserve `global`, `project`, `session`, and `frontend` visibility boundaries
+- never surface superseded rows by default
+- keep the `memoir` path read-only and never auto-create concepts during recall
+
+Implementation structure:
+
+##### VM3.1 — FTS5 and freshness scoring
+
+- [ ] add config `memory.recall.freshness_window_days` (default `1`), `memory.recall.weight_time` (default `0.25`), and `memory.recall.weight_business` (default `0.15`)
+- [ ] validate freshness window as non-negative and weights in `0..=1` with `weight_time + weight_business < 1`
+- [ ] replace the `LIKE '%query%'` predicate in `memory_recall.rs` with `memories_fts MATCH` using the existing FTS query escaping helper
+- [ ] tokenize multi-word queries and match all tokens first, then OR fallback when the AND form returns zero rows
+- [ ] keep the exact-topic `LEXICAL_TIER_WEIGHT` tier above FTS hits
+- [ ] compute `S_origin` from normalized BM25 plus importance, scope, and source-backed weights
+- [ ] compute `S_time = 1.0` inside the freshness window and `1 / (1 + age_days / 30)` after it
+- [ ] compute `S_busi` from importance (`critical = 1.0`, `high = 0.75`, `normal = 0.5`, `low = 0.25`)
+- [ ] compute `(1 - weight_time - weight_business) * S_origin + weight_time * S_time + weight_business * S_busi` and clamp to `0..=1`
+- [ ] include `origin_score`, `time_score`, `importance_score`, and `recall_path` in JSON recall output
+- [ ] add tests for non-adjacent multi-token matching, freshness boundary, and score clamping
+
+##### VM3.2 — Auxiliary memoir path and quota merge
+
+- [ ] add `packages/atlas-session/src/store/memory_recall_aux.rs`
+- [ ] add config `memory.recall.primary_quota_ratio` (default `0.75`) and `memory.recall.aux_max_hops` (default `2`, max `2`)
+- [ ] match query tokens against `memoir_concepts.name` and `memoir_concepts.description` case-insensitively
+- [ ] traverse `memoir_relations` from 1 to `aux_max_hops` using the bounded BFS already used by `memoir::inspect`
+- [ ] map concept `source_id` to `memories.source_id` and keep rows not already returned by the primary path
+- [ ] rank auxiliary candidates independently with depth and relation-type penalties
+- [ ] apply `Q_primary = ceil(primary_quota_ratio * limit)` and `Q_aux = limit - Q_primary`; let auxiliary fill leftover capacity when primary underfills
+- [ ] merge primary rows first, then auxiliary rows, tagging `recall_path = "primary"` or `"auxiliary"`
+- [ ] exclude superseded rows and rows outside caller visibility scopes from both paths
+- [ ] add tests for non-adjacent multi-token queries, quota split at `limit = 4` and `limit = 10`, no duplicate ids across paths, empty-memoir behavior, and visibility enforcement
+
+##### VM3 completion criteria
+
+- [ ] `atlas memory recall "postgres connection pool"` matches memories whose tokens are non-adjacent
+- [ ] recall JSON explains both path scores per hit
+- [ ] `limit = 10` returns at most 8 primary and 2 auxiliary rows before underfill
+- [ ] recall never returns another frontend's private memories
+- [ ] recall works with no embedding provider configured
+
+### Workstream B — VikingRAG + TrieHI Retrieval Layer
+
+#### VR1 — Unified L0/L1/L2 Hierarchy and `atlas://` URIs
+
+Rules:
+
+- build directly on `overview_records`; do not add a parallel L0/L1/L2 table
+- never store overview bodies in `worldtree.db`
+- never render `stale` or `orphaned` overviews as fresh
+- keep URIs prefix-preserving and canonical; reject traversal and absolute paths
+- keep each rendered level within its documented char budget
+
+Implementation structure:
+
+##### VR1.1 — Level model
+
+- [ ] add `packages/atlas-session/src/store/overview/levels.rs`
+- [ ] define `OverviewLevel` with exact values `l0`, `l1`, and `l2`, plus serde lowercase and `FromStr`
+- [ ] add `render_level(record: &OverviewRecord, level: OverviewLevel) -> OverviewLevelView`
+- [ ] make L0 return `title` and `summary` only
+- [ ] make L1 return L0 plus `description_preview`, `responsibilities`, `flow`, `inputs`, `outputs`, `invariants`, and `gotchas`
+- [ ] make L2 return L1 plus `source_id`, `canonical_file_path`, `line_start`, `line_end`, and a `read_file_excerpt` hint
+- [ ] include `freshness` in every level view so `stale` and `orphaned` stay explicit
+- [ ] add `OVERVIEW_L0_MAX_CHARS`, `OVERVIEW_L1_MAX_CHARS`, and `OVERVIEW_L2_MAX_CHARS` and truncate with `truncated: true`
+- [ ] add tests per level and per freshness state
+
+##### VR1.2 — `atlas://` URI namespace and scoped primitives
+
+- [ ] split `packages/atlas-mcp/src/resources.rs` into `packages/atlas-mcp/src/resources/mod.rs`, `packages/atlas-mcp/src/resources/docs.rs`, and `packages/atlas-mcp/src/resources/registry.rs` before adding URI handling, keeping the existing public API and behavior identical
+- [ ] add `packages/atlas-mcp/src/resources/uris.rs`
+- [ ] parse and format `atlas://repo/{repo_id}/tree/{dir}`, `atlas://repo/{repo_id}/file/{path}`, `atlas://repo/{repo_id}/symbol/{qualified_name}`, `atlas://memories/topic/{topic}`, `atlas://memories/id/{memory_id}`, `atlas://memoir/{graph}/{concept}`, and `atlas://artifacts/{source_id}/{chunk_index}`
+- [ ] percent-encode path segments and reject `..`, absolute paths, empty segments, and encoded traversal
+- [ ] canonicalize repo paths through `atlas_repo::CanonicalRepoPath` before lookup
+- [ ] accept `?level=l0|l1|l2` only on `tree`, `file`, and `symbol` URIs and reject it elsewhere
+- [ ] expose every URI form in `resources/templates/list` with the same defaults as the handlers
+- [ ] implement `Read` for every URI with defaults `tree` -> L1, `file` -> L1, `symbol` -> L1, and `artifacts` -> L2
+- [ ] implement `List` as immediate children only for `tree` URIs, returning child directories, files, and L0 abstracts
+- [ ] implement `Grep` by delegating to `search_content` with the URI subtree as `subpath`
+- [ ] implement `Search` by delegating to `query_graph`, `overview_search`, or `memory_recall` with the URI subtree as scope
+- [ ] add tests for format/parse round trip, traversal rejection, level defaults, unknown repo ids, and unknown URIs
+
+##### VR1.3 — CLI and context parity
+
+- [ ] add `atlas uri read <uri>` with `--level` and `--json`
+- [ ] add `atlas uri list <uri>` with `--json`
+- [ ] add `--level` to `atlas overview show` and `atlas overview search`
+- [ ] add the same `level` field to MCP `overview_show` and `overview_search` with identical defaults
+- [ ] add `SelectionReason::OverviewLevel` and attach `uri`, `level`, and `freshness` to overview context entries
+- [ ] update `wiki/overview-memory.md`, `MCP_TOOLS.md`, and `docs/PLAN-RAG.md` §5.1–5.2 for URI forms and level semantics
+- [ ] add CLI/MCP parity tests for URI read and list output shape
+- [ ] add a check that every shipped `atlas://` URI appears in `resources/templates/list`
+
+##### VR1 completion criteria
+
+- [ ] L0 read bytes are less than or equal to L1 read bytes, which are less than or equal to L2 read bytes for the same subject
+- [ ] `stale` and `orphaned` overviews are always explicit in output
+- [ ] traversal and absolute-path URIs are rejected
+- [ ] CLI and MCP return the same shapes for the same URI
+- [ ] no overview body is written to `worldtree.db`
+
+#### VR2 — Directory-Semantic Query and Vector Scope Pre-Filtering
+
+Rules:
+
+- resolve DSQ scope into SQL predicates before FTS, BM25, or cosine scoring
+- canonicalize every scope path through `atlas_repo::CanonicalRepoPath`
+- keep recursive prefix semantics identical across graph and content stores
+- never silently cap results; expose `limit` and truncation
+- keep Stage 1 SQLite DSQ the default; only add `roaring` for Stage 2
+
+Implementation structure:
+
+##### VR2.1 — Content store directory hierarchy
+
+- [ ] add `packages/atlas-contentstore/src/migrations/010_directory_hierarchy.sql`
+- [ ] add `sources.parent_dir TEXT` and `sources.relative_path TEXT`
+- [ ] backfill `relative_path` from canonical path identity and derive `parent_dir` deterministically
+- [ ] add indexes `(repo_root, parent_dir)` and `(repo_root, relative_path)`
+- [ ] register the migration in `packages/atlas-contentstore/src/migrations.rs`
+- [ ] reject rows whose `relative_path` is not canonical
+- [ ] extend `SearchFilters` in `packages/atlas-contentstore/src/store/types.rs` with `subpath_prefix`, `exact_dir`, `exclude_prefixes: Vec<String>`, and `limit: usize`
+- [ ] default `limit` to `50` and cap it at `500`
+- [ ] push recursive scope as `relative_path >= ? AND relative_path < ?` range bounds
+- [ ] push non-recursive scope as `parent_dir = ?`
+- [ ] push each exclusion as `NOT (relative_path >= ? AND relative_path < ?)`
+- [ ] replace both hardcoded `LIMIT 50` clauses in `search.rs` with the bound `limit`
+- [ ] add tests for recursive scope, non-recursive scope, exclusions, combined filters, limit cap, and canonicalization rejection
+
+##### VR2.2 — Vector scope pre-filtering
+
+- [ ] add `VectorScope { subpath_prefix, exact_dir, exclude_prefixes, repo_ids, kinds, languages }` in `packages/atlas-store-sqlite/src/store/retrieval.rs`
+- [ ] change `nodes_by_vector_similarity` to accept `&VectorScope` and build the scope predicate in SQL
+- [ ] join `retrieval_chunks` to `nodes` and `files` so scope plus kind and language filters apply before cosine scoring
+- [ ] update every caller in `atlas-search` and `atlas-review` to pass an explicit scope
+- [ ] fail closed when `repo_root` is missing instead of scanning every repo
+- [ ] add `--exact-dir` and repeatable `--exclude-subpath` to `atlas query`, `atlas symbols`, `atlas context`, and `atlas review-context`
+- [ ] add the same fields to MCP `query_graph`, `list_symbols`, `get_context`, `get_review_context`, and `search_content`
+- [ ] thread scope through `packages/atlas-search/src/hybrid.rs` so hybrid retrieval obeys DSQ
+- [ ] add parity tests and a benchmark showing candidate-count reduction for a scoped query
+
+##### VR2.3 — Optional in-memory TrieHI bitmap index
+
+- [ ] add `roaring` to `[workspace.dependencies]` and `packages/atlas-store-sqlite/Cargo.toml` only when this stage is implemented
+- [ ] add `packages/atlas-store-sqlite/src/store/directory_trie.rs` with `DirectoryTrie` and `TrieNode { local: RoaringBitmap, inclusive: RoaringBitmap, children }`
+- [ ] maintain the invariant `inclusive(v) = local(v) union over child inclusive(child)`
+- [ ] build the trie lazily when `retrieval_chunks` count exceeds `retrieval.triehi_min_chunks` (default `10000`)
+- [ ] add config `retrieval.triehi_min_chunks` validated as `>= 1`
+- [ ] resolve recursive, non-recursive, and exclusion queries to bitmaps without SQL
+- [ ] apply the resolved bitmap before cosine scoring and report `scope_candidates` in debug metrics
+- [ ] map git rename and move detection in `atlas-engine` to `DSM MOVE`: relink the node and update `inclusive` sets on removed and added ancestor paths in `O(depth)`
+- [ ] rebuild the trie from `retrieval_chunks` when a move cannot be relinked deterministically
+- [ ] add tests for invariant maintenance across insert, move, merge, and delete, plus bitmap-versus-SQL result equality
+
+##### VR2 completion criteria
+
+- [ ] scoped vector search never evaluates out-of-scope chunks
+- [ ] graph and content stores return identical DSQ membership for the same predicate
+- [ ] no hardcoded `LIMIT 50` remains in content search
+- [ ] trie results equal SQL DSQ results
+- [ ] missing `repo_root` and traversal scope fail closed
+
+#### VR3 — Constraint-Aware Evidence-Gap Retrieval and Adaptive Escalation
+
+Rules:
+
+- use deterministic structural checks only; never add an LLM sufficiency judge
+- hard cap escalation at 3 rounds with default 1
+- never exceed `TokenCounter` budget
+- report gaps explicitly instead of silently widening every bucket
+- keep `get_minimal_context` as the first call in the escalation workflow
+
+Implementation structure:
+
+##### VR3.1 — Sufficiency report model
+
+- [ ] add `packages/atlas-review/src/context/sufficiency.rs`
+- [ ] define `EvidenceSufficiencyReport { target_resolved, callers_complete, tests_covered, dispatch_complete, overview_fresh }`
+- [ ] define `EvidenceGap` with exact variants `target_unresolved`, `callers_truncated`, `callees_truncated`, `tests_missing`, `dispatch_unresolved`, and `overview_not_fresh`
+- [ ] define `sufficiency_score` as the weighted fraction of satisfied required constraints
+- [ ] derive required constraints from intent: `Review`, `Remove`, and `Safety` require `target_resolved`, `callers_complete`, and `tests_covered`; `Trace` requires `callees_complete`; `Overview` requires `overview_fresh`
+- [ ] expose `escalation_reason`, `next_tools`, and `sufficiency_score`
+- [ ] add unit tests per intent and per satisfied/unsatisfied combination
+
+##### VR3.2 — Round 1 collection signals
+
+- [ ] record bucket truncation flags when `BUCKET_CALLERS` or `BUCKET_CALLEES` caps are hit in `packages/atlas-review/src/context/mod.rs`
+- [ ] set `target_resolved = false` when resolution returns ambiguity metadata
+- [ ] verify test presence through direct test neighbors or test-file mapping and record `tests_verified_absent` when absence was explicitly checked
+- [ ] detect unresolved `Implements` and `ImplementedBy` edges plus dynamic registration targets
+- [ ] derive `overview_fresh` from matched `OverviewRecord.freshness` and treat `unverified` as not fresh
+- [ ] record every signal in `ContextResult` metadata
+- [ ] add a fixed graph fixture covering each signal
+
+##### VR3.3 — Bounded Round 2 escalation
+
+- [ ] add config `context.escalation.enabled` (default `true`) and `context.escalation.max_rounds` (default `1`, max `3`)
+- [ ] trigger Round 2 only for unsatisfied required constraints
+- [ ] fetch only the missing evidence kinds (tests, callers, implementation targets, overview refresh hint)
+- [ ] stop when the `TokenCounter` budget is exhausted and record `skipped_reason = "budget_exhausted"`
+- [ ] emit `evidence_gaps`, `sufficiency_score`, `escalation_reason`, `next_tools`, and `rounds_used` in `ContextResult` metadata
+- [ ] surface the same fields in CLI `--json` and MCP context and review tools
+- [ ] add tests for truncation-triggered escalation, budget-exhausted stop, round cap, and deterministic output
+
+##### VR3 completion criteria
+
+- [ ] minimal context escalates only when the report is unsatisfied
+- [ ] escalation never exceeds budget or `max_rounds`
+- [ ] the decision trace is reconstructible from metadata alone
+- [ ] no LLM call is added to the context path
+
+#### VR4 — Query-Conditioned Experience Edges
+
+Rules:
+
+- keep edges in `session.db` only and never treat them as code graph truth
+- bind every edge to `commit_sha` plus source and target file hashes
+- suppress redundancy so transitive edge explosion stays impossible
+- default activation thresholds are cosine `0.80` and token Jaccard `0.65`
+- never activate a `possibly_stale` or `invalid` edge
+
+Implementation structure:
+
+##### VR4.1 — Migration `014_experience_edges.sql`
+
+- [ ] add `packages/atlas-session/src/migrations/014_experience_edges.sql` (numbering follows `013_memory_ops_and_fts.sql` and supersedes the provisional `013_experience_edges.sql` name in `docs/PLAN-RAG.md` §5.4)
+- [ ] create `experience_edges` with `id`, `repo_root`, `source_uri`, `target_uri`, `query_text`, `query_tokens_json`, `query_embedding`, `trace_summary`, `commit_sha`, `source_file_hash`, `target_file_hash`, `use_count`, `confidence`, `created_at`, and `last_validated_at`
+- [ ] add `freshness TEXT NOT NULL DEFAULT 'fresh'` with `CHECK (freshness IN ('fresh', 'possibly_stale', 'invalid'))`
+- [ ] add `CHECK (confidence >= 0 AND confidence <= 1)` and `CHECK (use_count > 0)`
+- [ ] add `UNIQUE (repo_root, source_uri, target_uri, query_text)`
+- [ ] add indexes `(repo_root, source_uri)` and `(repo_root, target_uri)`
+- [ ] register the migration and bump the session schema version
+- [ ] extend `atlas db check` with orphan-URI, invalid-freshness, and confidence-range checks
+- [ ] add a migration test applying `014` to a `013` database
+
+##### VR4.2 — Store and online construction
+
+- [ ] add `packages/atlas-session/src/store/experience_edges.rs` and register it in `packages/atlas-session/src/store/mod.rs`
+- [ ] define `NewExperienceEdge` with canonical URI validation and `trace_summary` capped at 512 chars
+- [ ] tokenize `query_text` into normalized lowercase tokens with a 64-token cap
+- [ ] store `query_embedding` only when an embedding provider is configured and reject dimension mismatches
+- [ ] implement redundancy suppression `targets \ existing_edge_targets` for each `(repo_root, source_uri, query_text)` group
+- [ ] upsert on conflict by incrementing `use_count`, refreshing `last_validated_at`, and keeping the higher `confidence`
+- [ ] add `invalidate_by_paths(repo_root, changed_paths)` marking one-endpoint edges `possibly_stale` and deleted-endpoint edges `invalid`
+- [ ] map changed file hashes from `atlas update` into `invalidate_by_paths`
+- [ ] add read-only `atlas experience inspect <uri>` with `--direction`, `--limit`, and `--json`
+- [ ] add `atlas experience prune --older-than <days> --dry-run` and MCP `experience_inspect` with identical output
+- [ ] add tests for redundancy suppression, hash invalidation, deleted targets, upsert counting, and prune dry-run
+
+##### VR4.3 — Activation in context assembly
+
+- [ ] add `activate_experience_edges(repo_root, query_text, intent, limit)` returning only `fresh` edges
+- [ ] activate by cosine `>= 0.80` when embeddings exist, otherwise by token Jaccard `>= 0.65` plus intent match
+- [ ] rank activations by `confidence * ln(1 + use_count)` and cap at `context.experience.max_edges` (default `3`)
+- [ ] seed `ContextEngine` Round 1 with activated targets using `SelectionReason::ExperienceShortcut`
+- [ ] attach provenance `edge_id`, `confidence`, `trace_summary`, and `commit_sha` to each shortcut
+- [ ] never emit a shortcut when `freshness != 'fresh'` or when the commit SHA differs and hashes are unverified
+- [ ] add tests proving a stale edge is not surfaced, a fresh edge reduces rounds, and provenance is present
+
+##### VR4 completion criteria
+
+- [ ] no experience edge is ever written to `worldtree.db`
+- [ ] stale or invalid edges are never activated
+- [ ] redundancy suppression blocks transitive edge explosion
+- [ ] activation output is deterministic for the same query, commit, and edge set
+- [ ] CLI and MCP inspect output match
+
+#### VQ1 — Evaluation and Token-Efficiency Gates
+
+Rules:
+
+- keep measurements deterministic and reproducible
+- compare token counts and candidate counts rather than wall-clock in CI gates
+- store baseline artifacts so regressions are visible
+
+Implementation structure:
+
+- [ ] extend `RetrievalMetrics` in `packages/atlas-search/src/eval.rs` with `l0_tokens`, `l1_tokens`, `l2_tokens`, `scope_candidate_count`, `unscoped_candidate_count`, `aux_recall_at_k`, `primary_recall_at_k`, and `rounds_used`
+- [ ] add `token_efficiency()` returning L0/L1/L2 token ratios against the L2 baseline
+- [ ] add `dsq_pruning_ratio()` returning candidate reduction for recursive, non-recursive, and exclusion predicates
+- [ ] add `auxiliary_lift()` returning the recall delta between primary-only and two-path recall
+- [ ] add `escalation_round_reduction()` returning rounds saved by experience edges
+- [ ] extend `packages/atlas-search/benches/retrieval_eval_bench.rs` to emit these metrics as JSON
+- [ ] add a deterministic fixture corpus with fixed code, memory, memoir, and overview rows for all four measurements
+- [ ] set acceptance thresholds: L0 tokens at or below 10% of L2, DSQ candidate reduction at or above 50% for scoped queries, auxiliary lift above 0 at `k = 10`, and escalation rounds at or below 1
+- [ ] store baseline JSON under `packages/atlas-search/benches/baselines/` and fail the bench gate on a regression beyond 10%
+- [ ] document methodology in `wiki/retrieval-evaluation.md`
+- [ ] add a CI job that runs the RAG eval bench and uploads the JSON artifact without gating merge
+- [ ] define release gate `RAG Adaptation Complete`
+
+##### VQ1 completion criteria
+
+- [ ] all four measurement families emit JSON
+- [ ] the fixture corpus produces identical results across two consecutive runs
+- [ ] baseline comparison is stable across two consecutive runs
+- [ ] `wiki/retrieval-evaluation.md` documents the methodology and thresholds
