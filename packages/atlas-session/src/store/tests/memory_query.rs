@@ -48,13 +48,13 @@ fn recall_memories_ranks_exact_topic_above_broad_matches() {
         .iter()
         .map(|hit| hit.memory.id.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(order, vec!["m2", "m3", "m1"]);
+    assert_eq!(order, vec!["m2", "m1"]);
     assert_eq!(
         hits.iter()
             .map(|hit| hit.relevance_score)
             .collect::<Vec<_>>(),
-        vec![0, 1, 2],
-        "exact topic must rank above contains matches above body-only matches"
+        vec![0, 2],
+        "exact topic must rank above body-only matches; FTS is token aware"
     );
 }
 

@@ -600,6 +600,34 @@ impl Config {
         );
 
         lines.extend(render_section(
+            "memory.recall",
+            &[
+                (
+                    "freshness_window_days",
+                    active.memory.recall.freshness_window_days.to_string(),
+                ),
+                ("weight_time", active.memory.recall.weight_time.to_string()),
+                (
+                    "weight_business",
+                    active.memory.recall.weight_business.to_string(),
+                ),
+                (
+                    "primary_quota_ratio",
+                    active.memory.recall.primary_quota_ratio.to_string(),
+                ),
+                (
+                    "aux_max_hops",
+                    active.memory.recall.aux_max_hops.to_string(),
+                ),
+            ],
+            active_mode,
+        ));
+        lines.push(
+            "# weight_time + weight_business must stay below 1.0; quota reserves the primary lexical path"
+                .to_owned(),
+        );
+
+        lines.extend(render_section(
             "overview",
             &[
                 ("enabled", active.overview.enabled.to_string()),

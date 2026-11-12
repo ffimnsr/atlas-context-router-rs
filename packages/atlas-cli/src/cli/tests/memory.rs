@@ -201,8 +201,9 @@ fn parse_memory_store_command() {
                     ref scope,
                     ref frontend,
                     ref source_id,
+                    ..
                 }
-        } if text == "remember hooks"
+        } if text.as_deref() == Some("remember hooks")
             && topic.as_deref() == Some("hooks")
             && title.as_deref() == Some("Hook notes")
             && importance.as_deref() == Some("critical")
@@ -210,6 +211,45 @@ fn parse_memory_store_command() {
             && frontend.as_deref() == Some("codex")
             && source_id.as_deref() == Some("artifact-1")
     ));
+}
+
+#[test]
+fn parse_memory_store_patch_command() {
+    let cli = parse(&[
+        "atlas",
+        "memory",
+        "store",
+        "--patch-id",
+        "abc123",
+        "--patch-text",
+        "<<<< SEARCH\nold\n====\nnew\n>>>> REPLACE",
+    ]);
+    assert!(matches!(
+        cli.command,
+        Command::Memory {
+            subcommand:
+                MemoryCommand::Store {
+                    text: None,
+                    ref patch_id,
+                    ref patch_text,
+                    patch_file: None,
+                    ..
+                }
+        } if patch_id.as_deref() == Some("abc123")
+            && patch_text.as_deref().is_some_and(|text| text.contains("<<<< SEARCH"))
+    ));
+
+    let conflict = Cli::try_parse_from([
+        "atlas",
+        "memory",
+        "store",
+        "text",
+        "--patch-id",
+        "abc123",
+        "--patch-text",
+        "x",
+    ]);
+    assert!(conflict.is_err(), "text and --patch-id must conflict");
 }
 #[test]
 fn parse_memory_recall_command() {

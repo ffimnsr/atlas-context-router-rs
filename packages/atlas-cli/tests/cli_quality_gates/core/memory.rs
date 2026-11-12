@@ -1030,27 +1030,61 @@ fn memory_consolidate_dry_run_then_apply_supersedes_duplicates() {
         "consolidated row must be listed"
     );
 
-    // Recall prefers the active consolidated row over the superseded one.
+    // Recall hides superseded rows entirely; the consolidated row carries the
+    // merged facts.
     let recall = read_json_data_output(
         "memory.recall",
         run_atlas(repo.path(), &["--json", "memory", "recall", "helm"]),
     );
-    let positions = recall["results"]
+    let recalled = recall["results"]
         .as_array()
         .expect("results")
         .iter()
-        .enumerate()
-        .map(|(index, hit)| (hit["memory"]["id"].as_str().unwrap_or_default(), index))
+        .map(|hit| hit["memory"]["id"].as_str().unwrap_or_default().to_owned())
         .collect::<Vec<_>>();
-    let consolidated_pos = positions
-        .iter()
-        .find(|(id, _)| *id == consolidated_id.as_str())
-        .map(|(_, index)| *index)
-        .expect("consolidated row in recall");
-    let superseded_pos = positions
-        .iter()
-        .find(|(id, _)| *id == merged_id.as_str())
-        .map(|(_, index)| *index)
-        .expect("superseded row in recall");
-    assert!(consolidated_pos < superseded_pos);
+    assert!(
+        recalled.contains(&consolidated_id),
+        "consolidated row in recall"
+    );
+    assert!(
+        !recalled.contains(&merged_id),
+        "superseded rows must not be surfaced by recall"
+    );
+}
+
+#[test]
+fn memory_store_applies_eua_patch_text() {
+    let repo = setup_fixture_repo();
+    let stored = store_memory(repo.path(), &["deploy uses helm", "--topic", "deploy"]);
+    let id = memory_id(&stored);
+
+    let patched = read_json_data_output(
+        "memory.store",
+        run_atlas(
+            repo.path(),
+            &[
+                "--json",
+                "memory",
+                "store",
+                "--patch-id",
+                &id,
+                "--patch-text",
+                "<<<< SEARCH\nhelm\n====\nhelm charts\n>>>> REPLACE",
+            ],
+        ),
+    );
+    assert_eq!(patched["patched"], json!(true));
+    assert_eq!(patched["patch_count"], json!(1));
+    assert_eq!(
+        patched["memory"]["body"],
+        json!("deploy uses helm charts")
+    );
+
+    let error = run_atlas_capture(
+        repo.path(),
+        &["memory", "store", "--patch-id", &id],
+    );
+    assert!(!error.status.success());
+    let stderr = String::from_utf8(error.stderr).expect("stderr utf-8");
+    assert!(stderr.contains("patch-text"), "got: {stderr}");
 }

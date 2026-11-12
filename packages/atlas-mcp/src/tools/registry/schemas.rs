@@ -844,13 +844,16 @@ pub(crate) enum MemoryScopeSchema {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MemoryStoreArgsSchema {
-    text: String,
+    text: Option<String>,
     topic: Option<String>,
     title: Option<String>,
     importance: Option<MemoryImportanceSchema>,
     scope: Option<MemoryScopeSchema>,
     frontend: Option<String>,
     source_id: Option<String>,
+    patch_id: Option<String>,
+    patch_file: Option<String>,
+    patch_text: Option<String>,
     output_format: Option<String>,
 }
 

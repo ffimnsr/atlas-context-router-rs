@@ -170,6 +170,10 @@ pub struct MemoryConfig {
     /// section is absent.
     #[serde(default)]
     pub wake_up: WakeUpConfig,
+    /// Two-path recall scoring and quota policy (VM3). Safe defaults apply
+    /// when the section is absent.
+    #[serde(default)]
+    pub recall: MemoryRecallConfig,
 }
 
 /// `[memory.decay]` retention policy for `atlas memory decay|stale|prune`.
@@ -314,7 +318,90 @@ impl MemoryConfig {
     /// Validates the memory surface config; used by `Config::load`.
     pub fn validate(&self) -> Result<()> {
         self.decay.validate()?;
-        self.wake_up.validate()
+        self.wake_up.validate()?;
+        self.recall.validate()
+    }
+}
+
+/// `[memory.recall]` two-path recall scoring and quota policy (VM3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryRecallConfig {
+    /// Memories updated within this many days keep `time_score = 1.0`.
+    #[serde(default = "default_recall_freshness_window_days")]
+    pub freshness_window_days: u32,
+    /// Composite weight for the freshness signal (`0..=1`).
+    #[serde(default = "default_recall_weight_time")]
+    pub weight_time: f64,
+    /// Composite weight for the business-importance signal (`0..=1`).
+    #[serde(default = "default_recall_weight_business")]
+    pub weight_business: f64,
+    /// Fraction of `limit` reserved for the primary lexical path.
+    #[serde(default = "default_recall_primary_quota_ratio")]
+    pub primary_quota_ratio: f64,
+    /// Maximum memoir relation hops for the auxiliary path (`1..=2`).
+    #[serde(default = "default_recall_aux_max_hops")]
+    pub aux_max_hops: u32,
+}
+
+impl Default for MemoryRecallConfig {
+    fn default() -> Self {
+        Self {
+            freshness_window_days: default_recall_freshness_window_days(),
+            weight_time: default_recall_weight_time(),
+            weight_business: default_recall_weight_business(),
+            primary_quota_ratio: default_recall_primary_quota_ratio(),
+            aux_max_hops: default_recall_aux_max_hops(),
+        }
+    }
+}
+
+fn default_recall_freshness_window_days() -> u32 {
+    1
+}
+
+fn default_recall_weight_time() -> f64 {
+    0.25
+}
+
+fn default_recall_weight_business() -> f64 {
+    0.15
+}
+
+fn default_recall_primary_quota_ratio() -> f64 {
+    0.75
+}
+
+fn default_recall_aux_max_hops() -> u32 {
+    2
+}
+
+impl MemoryRecallConfig {
+    /// Validates weights, quota, and hop bounds; fails `atlas doctor` clearly
+    /// through `Config::load` on invalid config.
+    pub fn validate(&self) -> Result<()> {
+        if !self.weight_time.is_finite() || !(0.0..=1.0).contains(&self.weight_time) {
+            anyhow::bail!("invalid config: memory.recall.weight_time must be between 0.0 and 1.0");
+        }
+        if !self.weight_business.is_finite() || !(0.0..=1.0).contains(&self.weight_business) {
+            anyhow::bail!(
+                "invalid config: memory.recall.weight_business must be between 0.0 and 1.0"
+            );
+        }
+        if self.weight_time + self.weight_business >= 1.0 {
+            anyhow::bail!(
+                "invalid config: memory.recall.weight_time + memory.recall.weight_business must be less than 1.0"
+            );
+        }
+        if !self.primary_quota_ratio.is_finite() || !(0.0..=1.0).contains(&self.primary_quota_ratio)
+        {
+            anyhow::bail!(
+                "invalid config: memory.recall.primary_quota_ratio must be between 0.0 and 1.0"
+            );
+        }
+        if !(1..=2).contains(&self.aux_max_hops) {
+            anyhow::bail!("invalid config: memory.recall.aux_max_hops must be 1 or 2");
+        }
+        Ok(())
     }
 }
 

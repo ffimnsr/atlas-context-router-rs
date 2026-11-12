@@ -350,6 +350,18 @@ pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
                 "properties/source_id",
                 "Source id linking this memory to a saved-context artifact.",
             ),
+            (
+                "properties/patch_id",
+                "Exact memory id to patch with an EUA search/replace document; mutually exclusive with text.",
+            ),
+            (
+                "properties/patch_file",
+                "File containing EUA `<<<< SEARCH ... ==== ... >>>> REPLACE` blocks (max 1 MiB).",
+            ),
+            (
+                "properties/patch_text",
+                "Inline EUA `<<<< SEARCH ... ==== ... >>>> REPLACE` patch text.",
+            ),
             ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
         ])),
         "memory_recall" => Some(typed_schema_with_descriptions::<MemoryRecallArgsSchema>(&[

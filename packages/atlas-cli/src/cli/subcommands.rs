@@ -284,10 +284,10 @@ pub enum SessionCommand {
 /// Sub-commands for `atlas memory`.
 #[derive(Debug, Subcommand)]
 pub enum MemoryCommand {
-    /// Store a memory record for the current repo.
+    /// Store a memory record for the current repo, or apply an EUA patch.
     Store {
         /// Memory body text; stored exactly as provided.
-        text: String,
+        text: Option<String>,
 
         /// Topic label for the memory.
         #[arg(long)]
@@ -312,6 +312,18 @@ pub enum MemoryCommand {
         /// Source id linking this memory to a saved-context artifact.
         #[arg(long)]
         source_id: Option<String>,
+
+        /// Exact memory id to patch with an EUA search/replace document.
+        #[arg(long, conflicts_with = "text")]
+        patch_id: Option<String>,
+
+        /// File containing `<<<< SEARCH ... ==== ... >>>> REPLACE` blocks.
+        #[arg(long, requires = "patch_id", conflicts_with = "patch_text")]
+        patch_file: Option<String>,
+
+        /// Inline `<<<< SEARCH ... ==== ... >>>> REPLACE` patch text.
+        #[arg(long, requires = "patch_id", conflicts_with = "patch_file")]
+        patch_text: Option<String>,
     },
 
     /// Recall memories matching a query; exact topic matches rank first.

@@ -11,7 +11,7 @@
 //! All mutations run inside a single transaction. `last_compaction_at` is updated
 //! on session_meta whenever at least one event is removed or promoted.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use rusqlite::params;
 use serde_json::Value;
@@ -21,8 +21,9 @@ use atlas_core::{AtlasError, Result};
 use crate::SessionId;
 
 use super::global_memory::update_global_memory_from_events;
+use super::memory_ops::{MemoryOp, apply_memory_op_on};
 use super::types::CurationResult;
-use super::util::format_now;
+use super::util::{canonical_json, format_now, hash_event};
 use super::{SessionEventRow, SessionEventType, SessionStore};
 
 // ── Tuning constants ─────────────────────────────────────────────────────────
@@ -44,6 +45,13 @@ const PROMOTION_PRIORITY: i32 = 90;
 
 /// Event types considered high-value and eligible for priority promotion.
 const PROMOTION_TYPES: &[&str] = &["DECISION", "USER_INTENT", "REASONING_RESULT"];
+
+/// Event types that must never enter a compressed group or deletion path.
+const COMPRESSION_PROTECTED_TYPES: &[SessionEventType] =
+    &[SessionEventType::Decision, SessionEventType::UserIntent];
+
+/// Priority of the deterministic SESSION_SUMMARY rollup event.
+const SUMMARY_PRIORITY: i32 = 85;
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
@@ -173,6 +181,14 @@ pub(super) fn compact_session_events(
     all_delete.sort_unstable();
     all_delete.dedup();
 
+    // VM2.3: protected event types never enter compression or deletion.
+    let protected_ids = events
+        .iter()
+        .filter(|event| COMPRESSION_PROTECTED_TYPES.contains(&event.event_type))
+        .map(|event| event.id)
+        .collect::<BTreeSet<_>>();
+    all_delete.retain(|id| !protected_ids.contains(id));
+
     // Collect IDs eligible for priority promotion.
     let promote_ids: Vec<i64> = events
         .iter()
@@ -199,11 +215,79 @@ pub(super) fn compact_session_events(
     };
     let promoted_count = promote_ids.len();
 
-    // ── Apply all mutations in a single transaction ───────────────────────────
+    // VM2.3: summarize every evicted row before deletion so topic timelines
+    // keep a deterministic rollup instead of vanishing outright.
+    let now = format_now();
+    let evicted_rows = all_delete
+        .iter()
+        .filter_map(|id| events.iter().find(|event| event.id == *id))
+        .collect::<Vec<_>>();
+    let summary_payload = compress_event_group(&evicted_rows, &now);
+    let evicted_topics = summary_payload
+        .as_ref()
+        .and_then(|payload| payload.get("topics"))
+        .and_then(Value::as_array)
+        .map(|topics| {
+            topics
+                .iter()
+                .filter_map(|topic| topic.as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    // ── Apply all mutations in a single transaction ──────────────────────────
+    let repo_root = store
+        .get_session_meta(session_id)?
+        .map(|meta| meta.repo_root);
     let tx = store
         .conn
         .transaction()
         .map_err(|e| AtlasError::Db(e.to_string()))?;
+
+    if let Some(payload) = &summary_payload {
+        let payload_json = canonical_json(payload);
+        let event_hash = hash_event(
+            &SessionEventType::SessionSummary,
+            SUMMARY_PRIORITY,
+            &payload_json,
+        );
+        tx.execute(
+            "INSERT INTO session_events
+                (session_id, event_type, priority, payload_json, event_hash, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                session_id.as_str(),
+                SessionEventType::SessionSummary.as_str(),
+                SUMMARY_PRIORITY,
+                payload_json,
+                event_hash,
+                now,
+            ],
+        )
+        .map_err(|e| AtlasError::Db(e.to_string()))?;
+
+        // VM2.3: stamp the deterministic TimeCompress rollup on the active
+        // memory entity for each evicted topic. Missing entities are skipped.
+        if let Some(repo_root) = repo_root.as_deref() {
+            let op = MemoryOp::TimeCompress {
+                window_label: "session_compaction".to_owned(),
+            };
+            for topic in &evicted_topics {
+                let memory_id = tx
+                    .query_row(
+                        "SELECT id FROM memories
+                         WHERE repo_root = ?1 AND topic = ?2 AND superseded_by IS NULL
+                         ORDER BY updated_at DESC, id ASC LIMIT 1",
+                        params![repo_root, topic],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .ok();
+                if let Some(memory_id) = memory_id {
+                    apply_memory_op_on(&tx, repo_root, &memory_id, &op, &now)?;
+                }
+            }
+        }
+    }
 
     for id in &all_delete {
         tx.execute("DELETE FROM session_events WHERE id = ?1", params![id])
@@ -219,7 +303,6 @@ pub(super) fn compact_session_events(
     }
 
     // Always stamp last_compaction_at — caller invoked compaction explicitly.
-    let now = format_now();
     tx.execute(
         "UPDATE session_meta
          SET last_compaction_at = ?2, updated_at = ?2
@@ -231,7 +314,10 @@ pub(super) fn compact_session_events(
     tx.commit().map_err(|e| AtlasError::Db(e.to_string()))?;
 
     let deleted_count = all_delete.len();
-    let events_after = events_before.saturating_sub(deleted_count);
+    let summary_written = usize::from(summary_payload.is_some());
+    let events_after = events_before
+        .saturating_sub(deleted_count)
+        .saturating_add(summary_written);
 
     // CM11: update global memory from all events (before eviction list is applied).
     // Best-effort — failure must not abort compaction.
@@ -250,6 +336,75 @@ pub(super) fn compact_session_events(
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Aggregate evicted rows per topic, file, and command into one deterministic
+/// `SESSION_SUMMARY` payload (VM2.3).
+///
+/// `DECISION` and `USER_INTENT` rows are always excluded. Returns `None` when
+/// nothing compressible was evicted so repeated compactions stay idempotent.
+fn compress_event_group(events: &[&SessionEventRow], now: &str) -> Option<Value> {
+    let mut rows = events
+        .iter()
+        .copied()
+        .filter(|event| !COMPRESSION_PROTECTED_TYPES.contains(&event.event_type))
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        return None;
+    }
+    rows.sort_by_key(|event| (event.created_at.clone(), event.id));
+
+    let mut total_reads = 0usize;
+    let mut command_runs = 0usize;
+    let mut failure_count = 0usize;
+    let mut topics = BTreeSet::new();
+    let mut files = BTreeMap::<String, usize>::new();
+    let mut commands = BTreeMap::<String, usize>::new();
+    let mut source_ids = BTreeSet::new();
+    let mut event_ids = Vec::new();
+
+    for event in &rows {
+        match event.event_type {
+            SessionEventType::FileRead => total_reads += 1,
+            SessionEventType::CommandRun => command_runs += 1,
+            SessionEventType::CommandFail | SessionEventType::Error => failure_count += 1,
+            _ => {}
+        }
+        if let Some(file) = extract_str_field(&event.payload_json, &["path", "file", "file_path"]) {
+            *files.entry(file).or_insert(0) += 1;
+        }
+        if let Some(command) = extract_str_field(&event.payload_json, &["command"]) {
+            *commands.entry(command).or_insert(0) += 1;
+        }
+        if let Some(topic) = extract_str_field(&event.payload_json, &["topic"]) {
+            topics.insert(topic);
+        }
+        if let Some(source_id) = extract_str_field(&event.payload_json, &["source_id"]) {
+            source_ids.insert(source_id);
+        }
+        event_ids.push(event.id.to_string());
+    }
+
+    let first_seen = rows.first().map(|event| event.created_at.clone());
+    let last_seen = rows.last().map(|event| event.created_at.clone());
+    let topics = topics.into_iter().collect::<Vec<_>>();
+
+    Some(serde_json::json!({
+        "tool": "compact_session_events",
+        "window_label": "session_compaction",
+        "compressed_at": now,
+        "evicted_event_count": rows.len(),
+        "total_reads": total_reads,
+        "command_runs": command_runs,
+        "failure_count": failure_count,
+        "first_seen": first_seen,
+        "last_seen": last_seen,
+        "topics": topics,
+        "files": files,
+        "commands": commands,
+        "source_ids": source_ids.into_iter().collect::<Vec<_>>(),
+        "event_ids": event_ids,
+    }))
+}
 
 /// Try to extract a string from the first matching key in `payload_json`.
 fn extract_str_field(payload_json: &str, keys: &[&str]) -> Option<String> {

@@ -151,6 +151,13 @@ fn config_runtime_json(config: &atlas_engine::Config) -> serde_json::Value {
                 "max_feedback_items": config.memory.wake_up.max_feedback_items,
                 "max_pending_changes": config.memory.wake_up.max_pending_changes,
             },
+            "recall": {
+                "freshness_window_days": config.memory.recall.freshness_window_days,
+                "weight_time": config.memory.recall.weight_time,
+                "weight_business": config.memory.recall.weight_business,
+                "primary_quota_ratio": config.memory.recall.primary_quota_ratio,
+                "aux_max_hops": config.memory.recall.aux_max_hops,
+            },
         },
     })
 }

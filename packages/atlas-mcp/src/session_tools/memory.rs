@@ -196,10 +196,50 @@ pub fn tool_memory_store(
     db_path: &str,
     output_format: OutputFormat,
 ) -> Result<Value> {
-    let text = args
-        .and_then(|a| a.get("text"))
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("missing required argument: text"))?;
+    let text = args.and_then(|a| a.get("text")).and_then(|v| v.as_str());
+    let patch_id = args
+        .and_then(|a| a.get("patch_id"))
+        .and_then(|v| v.as_str());
+    let patch_text = args
+        .and_then(|a| a.get("patch_text"))
+        .and_then(|v| v.as_str());
+    let patch_file = args
+        .and_then(|a| a.get("patch_file"))
+        .and_then(|v| v.as_str());
+
+    if let Some(memory_id) = patch_id {
+        if text.is_some() {
+            return Err(anyhow::anyhow!(
+                "memory_store accepts either text or patch_id, not both"
+            ));
+        }
+        let patch = read_patch_text(patch_text, patch_file)?;
+        let session_db = derive_session_db_path(db_path);
+        let mut store = SessionStore::open(&session_db)?;
+        let outcomes = store.apply_memory_patch(repo_root, memory_id, &patch, None)?;
+        let record = store.get_memory(repo_root, memory_id)?;
+        return build_normalized_tool_result_value(
+            &serde_json::json!({
+                "tool": "memory_store",
+                "repo_root": repo_root,
+                "memory": record,
+                "patched": true,
+                "patch_count": outcomes.len(),
+                "patches": outcomes,
+                "summary": {
+                    "memory_id": memory_id,
+                    "patched": true,
+                    "patch_count": outcomes.len(),
+                },
+                "warnings": [],
+            }),
+            output_format,
+        );
+    }
+
+    let text = text.ok_or_else(|| {
+        anyhow::anyhow!("missing required argument: text or patch_id with patch_text/patch_file")
+    })?;
     let topic = args.and_then(|a| a.get("topic")).and_then(|v| v.as_str());
     let title = args.and_then(|a| a.get("title")).and_then(|v| v.as_str());
     let importance = args
@@ -314,7 +354,20 @@ pub fn tool_memory_recall(
     };
 
     let hits = match open_session_store_best_effort(db_path) {
-        Some(store) => store.recall_memories(repo_root, query, &filter, shared, &viewer, limit)?,
+        Some(store) => {
+            let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root))
+                .unwrap_or_default();
+            let policy = atlas_session::MemoryRecallPolicy {
+                freshness_window_days: config.memory.recall.freshness_window_days,
+                weight_time: config.memory.recall.weight_time,
+                weight_business: config.memory.recall.weight_business,
+                primary_quota_ratio: config.memory.recall.primary_quota_ratio,
+                aux_max_hops: config.memory.recall.aux_max_hops,
+            };
+            store.recall_memories_with_policy(
+                repo_root, query, &filter, shared, &viewer, limit, &policy,
+            )?
+        }
         None => Vec::new(),
     };
 
@@ -325,6 +378,10 @@ pub fn tool_memory_recall(
                 "memory": hit.memory,
                 "relevance_score": hit.relevance_score,
                 "recall_score": hit.recall_score,
+                "origin_score": hit.ranking.origin_score,
+                "time_score": hit.ranking.time_score,
+                "importance_score": hit.ranking.importance_score,
+                "recall_path": hit.ranking.recall_path,
                 "ranking": hit.ranking,
             })
         })
@@ -400,6 +457,24 @@ pub fn tool_memory_recall(
         ),
     );
     Ok(response)
+}
+
+/// Read an EUA patch body from inline text or a file (1 MiB ceiling).
+fn read_patch_text(inline: Option<&str>, file: Option<&str>) -> Result<String> {
+    if let Some(text) = inline {
+        return Ok(text.to_owned());
+    }
+    let Some(path) = file else {
+        return Err(anyhow::anyhow!(
+            "patch_id requires patch_text or patch_file"
+        ));
+    };
+    const MAX_PATCH_BYTES: u64 = 1024 * 1024;
+    let metadata = std::fs::metadata(path)?;
+    if metadata.len() > MAX_PATCH_BYTES {
+        return Err(anyhow::anyhow!("patch file exceeds 1 MiB: {path}"));
+    }
+    Ok(std::fs::read_to_string(path)?)
 }
 
 // ---------------------------------------------------------------------------

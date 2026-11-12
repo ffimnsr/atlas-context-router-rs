@@ -24,8 +24,11 @@ mod feedback;
 mod global_memory;
 mod memoir;
 mod memory;
+mod memory_consolidate;
 mod memory_ops;
+mod memory_patch;
 mod memory_recall;
+mod memory_recall_aux;
 mod overview;
 mod resume;
 #[cfg(test)]
@@ -54,23 +57,30 @@ pub use self::overview::{
 };
 pub use self::types::{
     AgentMemorySummary, AgentPartitionSummary, AgentResponsibilitySummary, CurationResult,
-    DEFAULT_DEDUP_WINDOW_SECS, DEFAULT_MAX_SNAPSHOT_BYTES, DEFAULT_SESSION_DB,
+    DEFAULT_DEDUP_WINDOW_SECS, DEFAULT_MAX_SNAPSHOT_BYTES, DEFAULT_RECALL_AUX_MAX_HOPS,
+    DEFAULT_RECALL_FRESHNESS_WINDOW_DAYS, DEFAULT_RECALL_PRIMARY_QUOTA_RATIO,
+    DEFAULT_RECALL_WEIGHT_BUSINESS, DEFAULT_RECALL_WEIGHT_TIME, DEFAULT_SESSION_DB,
     DEFAULT_SESSION_MAX_EVENTS, DecisionRecord, DecisionSearchHit, DelegatedTaskSummary,
     DurableTaskListPage, DurableTaskRecord, DurableTaskStatus, DurableTaskUpdate, EventCategory,
     FeedbackRecord, FeedbackSearchFilter, FeedbackSearchHit, FeedbackStats, GlobalAccessEntry,
     GlobalWorkflowPattern, MAX_INLINE_EVENT_PAYLOAD_BYTES, MemoryConsolidationGroup,
     MemoryConsolidationPlan, MemoryDecayPolicy, MemoryDecayReport, MemoryDeleteResult,
     MemoryHealthCategory, MemoryHealthFinding, MemoryHealthReport, MemoryImportance,
-    MemoryListFilter, MemoryPruneResult, MemoryRecallRanking, MemoryRecord, MemoryScope,
-    MemorySearchHit, MemorySupersessionLink, MemoryViewer, NOISY_TOPIC_ENTRIES, NewDurableTask,
-    NewFeedback, NewMemory, NewSessionEvent, OVERSIZED_BODY_CHARS, ResumeSnapshot, SessionEventRow,
-    SessionEventType, SessionMeta, SessionStats, SessionStoreConfig,
+    MemoryListFilter, MemoryPruneResult, MemoryRecallPolicy, MemoryRecallRanking, MemoryRecord,
+    MemoryScope, MemorySearchHit, MemorySupersessionLink, MemoryViewer, NOISY_TOPIC_ENTRIES,
+    NewDurableTask, NewFeedback, NewMemory, NewSessionEvent, OVERSIZED_BODY_CHARS, ResumeSnapshot,
+    SessionEventRow, SessionEventType, SessionMeta, SessionStats, SessionStoreConfig,
 };
 
+pub use self::memory_consolidate::{
+    CONSOLIDATION_OVERFLOW_SOURCE_TYPE, ConsolidatedBody, OverflowSink, overflow_source_id,
+    route_overflow_body, synthesize_consolidated_body,
+};
 pub use self::memory_ops::{
     FAILURE_SIGNATURE_CAP, FAILURE_TOPIC_BUILD, FAILURE_TOPIC_TESTS, MAX_OP_HISTORY_ENTRIES,
     MemoryEntity, MemoryOp, MemoryOpHistory, MemoryOpHistoryEntry, OpOutcome, apply_memory_op,
 };
+pub use self::memory_patch::{PatchApplication, PatchBlock, apply_patch_block, parse_patch_blocks};
 
 use self::agent_memory::{summarize_agent_memory, summarize_agent_memory_from_events};
 use self::curation::compact_session_events;
@@ -79,10 +89,10 @@ use self::feedback::{
     feedback_matching, feedback_schema_issues, feedback_stats, search_feedback, store_feedback,
 };
 use self::memory::{
-    consolidation_plan, decay_reports, delete_memory, health_report, list_memories,
+    consolidation_plan, decay_reports, delete_memory, get_memory, health_report, list_memories,
     memory_schema_issues, prune_memories, stale_memories, store_memory,
 };
-use self::memory_recall::recall_memories;
+use self::memory_recall::{recall_memories, recall_memories_with_policy};
 use self::resume::build_resume_snapshot;
 use self::util::{
     canonical_json, enforce_event_limit, format_days_ago, format_now, format_seconds_ago,
@@ -277,6 +287,35 @@ impl SessionStore {
         )
     }
 
+    /// Two-path quota recall using an explicit `[memory.recall]` policy.
+    #[allow(clippy::too_many_arguments)]
+    pub fn recall_memories_with_policy(
+        &self,
+        repo_root: &str,
+        query: &str,
+        filter: &MemoryListFilter,
+        shared_only: bool,
+        viewer: &MemoryViewer,
+        limit: usize,
+        policy: &MemoryRecallPolicy,
+    ) -> Result<Vec<MemorySearchHit>> {
+        recall_memories_with_policy(
+            &self.conn,
+            repo_root,
+            query,
+            filter,
+            shared_only,
+            viewer,
+            limit,
+            policy,
+        )
+    }
+
+    /// Fetch one memory row by exact id within a repo.
+    pub fn get_memory(&self, repo_root: &str, memory_id: &str) -> Result<Option<MemoryRecord>> {
+        get_memory(&self.conn, repo_root, memory_id)
+    }
+
     /// List memories for a repo, filtered and sorted by `updated_at DESC`.
     pub fn list_memories(
         &self,
@@ -373,7 +412,19 @@ impl SessionStore {
         filter: &MemoryListFilter,
         dry_run: bool,
     ) -> Result<MemoryConsolidationPlan> {
-        consolidation_plan(&self.conn, repo_root, filter, dry_run)
+        consolidation_plan(&self.conn, repo_root, filter, dry_run, None)
+    }
+
+    /// Deterministic consolidation with an overflow sink (typically `context.db`)
+    /// for synthesized bodies that exceed `OVERSIZED_BODY_CHARS`.
+    pub fn consolidate_memories_with_overflow(
+        &self,
+        repo_root: &str,
+        filter: &MemoryListFilter,
+        dry_run: bool,
+        overflow: &mut self::memory_consolidate::OverflowSink<'_>,
+    ) -> Result<MemoryConsolidationPlan> {
+        consolidation_plan(&self.conn, repo_root, filter, dry_run, Some(overflow))
     }
 
     pub fn upsert_session_meta(

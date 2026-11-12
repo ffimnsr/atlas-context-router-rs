@@ -10,8 +10,8 @@ use anyhow::{Context, Result, bail};
 
 use atlas_contentstore::ContentStore;
 use atlas_session::{
-    MemoryDecayPolicy, MemoryImportance, MemoryListFilter, MemoryRecord, MemoryScope, MemoryViewer,
-    NewMemory, SessionId, SessionStore, normalize_frontend,
+    MemoryDecayPolicy, MemoryImportance, MemoryListFilter, MemoryRecallPolicy, MemoryRecord,
+    MemoryScope, MemoryViewer, NewMemory, SessionId, SessionStore, normalize_frontend,
 };
 use time::OffsetDateTime;
 
@@ -43,7 +43,37 @@ pub fn run_memory(cli: &Cli) -> Result<()> {
             scope,
             frontend,
             source_id,
+            patch_id,
+            patch_file,
+            patch_text,
         } => {
+            if let Some(memory_id) = patch_id {
+                let patch = read_patch_text(patch_text.as_deref(), patch_file.as_deref())?;
+                let outcomes = store.apply_memory_patch(&repo, memory_id, &patch, None)?;
+                let record = store.get_memory(&repo, memory_id)?;
+                if cli.json {
+                    print_json(
+                        "memory.store",
+                        serde_json::json!({
+                            "memory": record,
+                            "patched": true,
+                            "patch_count": outcomes.len(),
+                            "patches": outcomes,
+                        }),
+                    )?;
+                } else {
+                    println!("Memory patched: {memory_id}");
+                    println!("Blocks applied: {}", outcomes.len());
+                    if let Some(record) = &record {
+                        println!("Body       : {}", body_preview(&record.body));
+                    }
+                }
+                return Ok(());
+            }
+
+            let Some(text) = text else {
+                bail!("provide memory text or --patch-id with --patch-text/--patch-file");
+            };
             let importance = parse_optional_importance(importance.as_deref())?.unwrap_or_default();
             let scope = parse_optional_scope(scope.as_deref())?.unwrap_or_default();
             let frontend = frontend
@@ -96,7 +126,15 @@ pub fn run_memory(cli: &Cli) -> Result<()> {
                 frontend: "cli".to_owned(),
                 session_id: SessionId::derive(&repo, "", "cli").as_str().to_owned(),
             };
-            let hits = store.recall_memories(&repo, query, &filter, *shared, &viewer, *limit)?;
+            let hits = store.recall_memories_with_policy(
+                &repo,
+                query,
+                &filter,
+                *shared,
+                &viewer,
+                *limit,
+                &recall_policy(&config),
+            )?;
 
             if cli.json {
                 let results = hits
@@ -411,7 +449,34 @@ pub fn run_memory(cli: &Cli) -> Result<()> {
                 scope: parse_optional_scope(scope.as_deref())?,
                 ..Default::default()
             };
-            let plan = store.consolidate_memories(&repo, &filter, *dry_run)?;
+            let plan = if *dry_run {
+                store.consolidate_memories(&repo, &filter, true)?
+            } else {
+                let context_path = Path::new(&repo).join(".atlas").join("context.db");
+                let mut content =
+                    ContentStore::open(context_path.to_str().context("non-utf8 context.db path")?)?;
+                let mut sink = |source_id: &str, session_id: Option<&str>, body: &str| {
+                    content.index_artifact(
+                        atlas_contentstore::SourceMeta {
+                            id: source_id.to_owned(),
+                            session_id: session_id.map(str::to_owned),
+                            agent_id: None,
+                            source_type: atlas_session::CONSOLIDATION_OVERFLOW_SOURCE_TYPE
+                                .to_owned(),
+                            label: format!("Consolidated memory body ({source_id})"),
+                            repo_root: Some(repo.clone()),
+                            repo_roots: vec![repo.clone()],
+                            repo_id: None,
+                            repo_ids: Vec::new(),
+                            identity_kind: "memory_consolidation_overflow".to_owned(),
+                            identity_value: repo.clone(),
+                        },
+                        body,
+                        "text/plain",
+                    )
+                };
+                store.consolidate_memories_with_overflow(&repo, &filter, false, &mut sink)?
+            };
 
             if cli.json {
                 print_json(
@@ -491,6 +556,34 @@ pub fn run_memory(cli: &Cli) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Build the effective two-path recall policy from `[memory.recall]` config.
+fn recall_policy(config: &atlas_engine::Config) -> MemoryRecallPolicy {
+    MemoryRecallPolicy {
+        freshness_window_days: config.memory.recall.freshness_window_days,
+        weight_time: config.memory.recall.weight_time,
+        weight_business: config.memory.recall.weight_business,
+        primary_quota_ratio: config.memory.recall.primary_quota_ratio,
+        aux_max_hops: config.memory.recall.aux_max_hops,
+    }
+}
+
+/// Read an EUA patch body from inline text or a file (1 MiB ceiling).
+fn read_patch_text(inline: Option<&str>, file: Option<&str>) -> Result<String> {
+    if let Some(text) = inline {
+        return Ok(text.to_owned());
+    }
+    let Some(path) = file else {
+        bail!("--patch-id requires --patch-text or --patch-file");
+    };
+    const MAX_PATCH_BYTES: u64 = 1024 * 1024;
+    let metadata = std::fs::metadata(path)
+        .with_context(|| format!("cannot read patch file metadata: {path}"))?;
+    if metadata.len() > MAX_PATCH_BYTES {
+        bail!("patch file exceeds 1 MiB: {path}");
+    }
+    std::fs::read_to_string(path).with_context(|| format!("cannot read patch file: {path}"))
 }
 
 /// Build the effective decay policy from `[memory.decay]` config; a missing

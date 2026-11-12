@@ -252,31 +252,51 @@ pub(super) fn store_memory_at(
     })
 }
 
+/// Fetch one memory row by exact id within a repo.
+pub(super) fn get_memory(
+    conn: &Connection,
+    repo_root: &str,
+    memory_id: &str,
+) -> Result<Option<MemoryRecord>> {
+    conn.query_row(
+        "SELECT id, repo_root, session_id, frontend, scope, topic, title, body, importance,
+                created_at, updated_at, last_accessed_at, decay_score, source_id, metadata_json,
+                superseded_by
+         FROM memories
+         WHERE id = ?1 AND repo_root = ?2",
+        params![memory_id, repo_root],
+        row_to_memory,
+    )
+    .optional()
+    .map_err(|e| AtlasError::Db(e.to_string()))
+}
+
 // ── Filtering and list ────────────────────────────────────────────────────────
 
 pub(super) fn append_filter_clauses(
     sql: &mut String,
     params: &mut Vec<String>,
     filter: &MemoryListFilter,
+    prefix: &str,
 ) {
     if let Some(topic) = &filter.topic {
-        sql.push_str(" AND topic = ? COLLATE NOCASE");
+        sql.push_str(&format!(" AND {prefix}topic = ? COLLATE NOCASE"));
         params.push(topic.clone());
     }
     if let Some(importance) = filter.importance {
-        sql.push_str(" AND importance = ?");
+        sql.push_str(&format!(" AND {prefix}importance = ?"));
         params.push(importance.as_str().to_owned());
     }
     if let Some(scope) = filter.scope {
-        sql.push_str(" AND scope = ?");
+        sql.push_str(&format!(" AND {prefix}scope = ?"));
         params.push(scope.as_str().to_owned());
     }
     if let Some(older_than) = &filter.older_than {
-        sql.push_str(" AND updated_at < ?");
+        sql.push_str(&format!(" AND {prefix}updated_at < ?"));
         params.push(older_than.clone());
     }
     if let Some(newer_than) = &filter.newer_than {
-        sql.push_str(" AND updated_at > ?");
+        sql.push_str(&format!(" AND {prefix}updated_at > ?"));
         params.push(newer_than.clone());
     }
 }
@@ -310,7 +330,7 @@ pub(super) fn list_memories(
          WHERE repo_root = ?1",
     );
     let mut params = vec![repo_root.to_owned()];
-    append_filter_clauses(&mut sql, &mut params, filter);
+    append_filter_clauses(&mut sql, &mut params, filter, "");
     if !filter.include_superseded {
         sql.push_str(" AND superseded_by IS NULL");
     }
@@ -667,6 +687,7 @@ pub(super) fn consolidation_plan(
     repo_root: &str,
     filter: &MemoryListFilter,
     dry_run: bool,
+    mut overflow: Option<&mut super::memory_consolidate::OverflowSink<'_>>,
 ) -> Result<MemoryConsolidationPlan> {
     let rows = list_memories(conn, repo_root, filter)?;
 
@@ -745,19 +766,63 @@ pub(super) fn consolidation_plan(
             .map(|member| member.id.clone())
             .collect::<Vec<_>>();
 
+        // VM2.1: synthesize every distinct fact from all members in
+        // chronological order instead of cloning `members[0].body`.
+        let synthesis = super::memory_consolidate::synthesize_consolidated_body(&members);
+        let member_ids = members
+            .iter()
+            .map(|member| member.id.clone())
+            .collect::<Vec<_>>();
+        let planned_overflow_id = synthesis
+            .overflow
+            .then(|| super::memory_consolidate::overflow_source_id(repo_root, &member_ids));
+        // Without a sink (library callers) overflow must not lose data: keep the
+        // full body on the row and do not advertise an unstored source id.
+        let unrouted_overflow = synthesis.overflow && !dry_run && overflow.is_none();
+        let overflow_id = if unrouted_overflow {
+            None
+        } else {
+            planned_overflow_id
+        };
+        let row_body = if unrouted_overflow {
+            synthesis
+                .full_body
+                .clone()
+                .unwrap_or_else(|| synthesis.body.clone())
+        } else {
+            synthesis.body.clone()
+        };
+
+        let importance = members
+            .iter()
+            .map(|member| importance_rank(member.importance))
+            .min()
+            .map(importance_from_rank)
+            .unwrap_or(kept.importance);
+        let mut metadata = kept.metadata.clone();
+        metadata["consolidated"] = serde_json::json!(true);
+        metadata["merged_ids"] = serde_json::to_value(&merged).unwrap_or_default();
+        metadata["merged_source_ids"] = serde_json::to_value(&source_ids).unwrap_or_default();
+        metadata["merged_unit_count"] = serde_json::json!(synthesis.distinct_units);
+        metadata["overflow_source_id"] = serde_json::to_value(&overflow_id).unwrap_or_default();
+        let metadata_json = serde_json::to_string(&metadata).map_err(|error| {
+            AtlasError::Other(format!("serialize consolidated metadata: {error}"))
+        })?;
+
         let consolidated_id = if dry_run {
             None
         } else {
-            let importance = members
-                .iter()
-                .map(|member| importance_rank(member.importance))
-                .min()
-                .map(importance_from_rank)
-                .unwrap_or(kept.importance);
-            let mut metadata = kept.metadata.clone();
-            metadata["consolidated"] = serde_json::json!(true);
-            metadata["merged_ids"] = serde_json::to_value(&merged).unwrap_or_default();
-            metadata["merged_source_ids"] = serde_json::to_value(&source_ids).unwrap_or_default();
+            if let (Some(full_body), Some(sink)) =
+                (synthesis.full_body.as_deref(), overflow.as_deref_mut())
+            {
+                super::memory_consolidate::route_overflow_body(
+                    sink,
+                    repo_root,
+                    &member_ids,
+                    kept.session_id.as_deref(),
+                    full_body,
+                )?;
+            }
             let input = NewMemory {
                 repo_root: repo_root.to_owned(),
                 session_id: kept.session_id.clone(),
@@ -765,7 +830,7 @@ pub(super) fn consolidation_plan(
                 scope: kept.scope,
                 topic: kept.topic.clone(),
                 title: kept.title.clone(),
-                body: kept.body.clone(),
+                body: row_body.clone(),
                 importance,
                 source_id: kept.source_id.clone(),
                 metadata,
@@ -782,7 +847,7 @@ pub(super) fn consolidation_plan(
                     "INSERT INTO memory_supersessions
                         (old_memory_id, new_memory_id, reason, created_at)
                      VALUES (?1, ?2, ?3, ?4)",
-                    params![member.id, record.id, group_key, now],
+                    params![member.id, record.id, "consolidated", now],
                 )
                 .map_err(|e| AtlasError::Db(e.to_string()))?;
             }
@@ -796,7 +861,11 @@ pub(super) fn consolidation_plan(
             group_key,
             kept_memory_id: kept.id.clone(),
             merged_memory_ids: merged,
-            source_ids,
+            source_ids: source_ids.clone(),
+            body: row_body,
+            metadata_json,
+            merged_source_ids: source_ids,
+            overflow_source_id: overflow_id,
             consolidated_id,
         });
     }

@@ -1748,49 +1748,49 @@ Implementation structure:
 
 ##### VM2.1 — Deterministic structured consolidation
 
-- [ ] add `packages/atlas-session/src/store/memory_consolidate.rs`
-- [ ] add `synthesize_consolidated_body(members: &[MemoryRecord]) -> ConsolidatedBody` sorting members by `created_at ASC`
-- [ ] split bodies into normalized sentence and bullet units on newline, `". "`, `"! "`, `"? "`, and `"。"`
-- [ ] dedupe by normalized key (lowercase, whitespace-collapsed, trailing punctuation stripped) while keeping the first chronological original text
-- [ ] preserve distinct facts up to `OVERSIZED_BODY_CHARS`; on overflow store the full synthesized body in `context.db` and reference it by `source_id`
-- [ ] collect `merged_source_ids` from every member into the consolidated `metadata_json`
-- [ ] set consolidated `importance` to the highest member importance, `topic` from the group key, and `title` from the first member
-- [ ] update `consolidation_plan()` in `memory.rs` to call the synthesizer and return `body`, `metadata_json`, and `merged_source_ids` in dry-run output
-- [ ] apply mode writes one consolidated row, `memory_supersessions` rows with `reason = 'consolidated'`, and `superseded_by` markers
-- [ ] add tests for overlapping plus unique sentences, chronological order, dedupe, overflow routing, and dry-run no-mutation
+- [x] add `packages/atlas-session/src/store/memory_consolidate.rs`
+- [x] add `synthesize_consolidated_body(members: &[MemoryRecord]) -> ConsolidatedBody` sorting members by `created_at ASC`
+- [x] split bodies into normalized sentence and bullet units on newline, `". "`, `"! "`, `"? "`, and `"。"`
+- [x] dedupe by normalized key (lowercase, whitespace-collapsed, trailing punctuation stripped) while keeping the first chronological original text
+- [x] preserve distinct facts up to `OVERSIZED_BODY_CHARS`; on overflow store the full synthesized body in `context.db` and reference it by `source_id`
+- [x] collect `merged_source_ids` from every member into the consolidated `metadata_json`
+- [x] set consolidated `importance` to the highest member importance, `topic` from the group key, and `title` from the first member
+- [x] update `consolidation_plan()` in `memory.rs` to call the synthesizer and return `body`, `metadata_json`, and `merged_source_ids` in dry-run output
+- [x] apply mode writes one consolidated row, `memory_supersessions` rows with `reason = 'consolidated'`, and `superseded_by` markers
+- [x] add tests for overlapping plus unique sentences, chronological order, dedupe, overflow routing, and dry-run no-mutation
 
 ##### VM2.2 — EUA patch parser and applier
 
-- [ ] add `packages/atlas-session/src/store/memory_patch.rs`
-- [ ] parse `<<<< SEARCH` / `====` / `>>>> REPLACE` blocks and support multiple blocks per patch in document order
-- [ ] reject unbalanced or nested markers with typed error code `memory_patch_invalid`
-- [ ] apply exact substring replacement first and require a unique match, otherwise fail with `memory_patch_ambiguous`
-- [ ] fall back to bounded Levenshtein when no exact match exists, scanning candidate windows of `search.chars().count()` across the body
-- [ ] default `max_edit_distance` to `max(1, ceil(0.15 * search.chars().count()))` when the caller omits it
-- [ ] reject `max_edit_distance` above `0.5 * search.chars().count()`
-- [ ] record each patch as one `MemoryOp::EuaPatch` history entry containing `search_hash`, `replace_len`, `edit_distance`, and `matched_exact`
-- [ ] add `atlas memory store --patch-id <memory_id> --patch-file <path>` and `--patch-text <text>`
-- [ ] add matching `memory_store` MCP fields `patch_id`, `patch_file`, and `patch_text` with identical validation
-- [ ] reject patching superseded memories and patches that would produce an empty body
-- [ ] add tests for exact patch, fuzzy patch at 0.10 distance, rejection above threshold, ambiguous match, invalid markers, and superseded-row rejection
+- [x] add `packages/atlas-session/src/store/memory_patch.rs`
+- [x] parse `<<<< SEARCH` / `====` / `>>>> REPLACE` blocks and support multiple blocks per patch in document order
+- [x] reject unbalanced or nested markers with typed error code `memory_patch_invalid`
+- [x] apply exact substring replacement first and require a unique match, otherwise fail with `memory_patch_ambiguous`
+- [x] fall back to bounded Levenshtein when no exact match exists, scanning candidate windows of `search.chars().count()` across the body
+- [x] default `max_edit_distance` to `max(1, ceil(0.15 * search.chars().count()))` when the caller omits it
+- [x] reject `max_edit_distance` above `0.5 * search.chars().count()`
+- [x] record each patch as one `MemoryOp::EuaPatch` history entry containing `search_hash`, `replace_len`, `edit_distance`, and `matched_exact`
+- [x] add `atlas memory store --patch-id <memory_id> --patch-file <path>` and `--patch-text <text>`
+- [x] add matching `memory_store` MCP fields `patch_id`, `patch_file`, and `patch_text` with identical validation
+- [x] reject patching superseded memories and patches that would produce an empty body
+- [x] add tests for exact patch, fuzzy patch at 0.10 distance, rejection above threshold, ambiguous match, invalid markers, and superseded-row rejection
 
 ##### VM2.3 — `TIME_COMPRESS` before curation deletion
 
-- [ ] add `compress_event_group(...)` to `curation.rs` aggregating evicted rows per topic, file, and command into a `SESSION_SUMMARY` metadata record with `total_reads`, `command_runs`, `failure_count`, `first_seen`, `last_seen`, and `source_ids`
-- [ ] emit the summary as a `SESSION_SUMMARY` event before any `DELETE FROM session_events`
-- [ ] keep `DECISION` and `USER_INTENT` events out of compressed groups
-- [ ] keep `critical` memories and their supersession chains out of time-compression deletion
-- [ ] call `MemoryOp::TimeCompress` from `compact_session_events()` so topic timelines keep a deterministic rollup
-- [ ] perform compression and deletion in one transaction and roll back when the summary write fails
-- [ ] add tests for counts, ordering, protected events, rollback, and idempotent second compaction
+- [x] add `compress_event_group(...)` to `curation.rs` aggregating evicted rows per topic, file, and command into a `SESSION_SUMMARY` metadata record with `total_reads`, `command_runs`, `failure_count`, `first_seen`, `last_seen`, and `source_ids`
+- [x] emit the summary as a `SESSION_SUMMARY` event before any `DELETE FROM session_events`
+- [x] keep `DECISION` and `USER_INTENT` events out of compressed groups
+- [x] keep `critical` memories and their supersession chains out of time-compression deletion
+- [x] call `MemoryOp::TimeCompress` from `compact_session_events()` so topic timelines keep a deterministic rollup
+- [x] perform compression and deletion in one transaction and roll back when the summary write fails
+- [x] add tests for counts, ordering, protected events, rollback, and idempotent second compaction
 
 ##### VM2 completion criteria
 
-- [ ] consolidated body contains every distinct sentence from all merged members
-- [ ] fuzzy patching applies at or below threshold and fails above it
-- [ ] no `DELETE FROM session_events` runs without a prior summary write
-- [ ] `DECISION`, `USER_INTENT`, and `critical` rows are protected
-- [ ] consolidation dry-run leaves storage unchanged
+- [x] consolidated body contains every distinct sentence from all merged members
+- [x] fuzzy patching applies at or below threshold and fails above it
+- [x] no `DELETE FROM session_events` runs without a prior summary write
+- [x] `DECISION`, `USER_INTENT`, and `critical` rows are protected
+- [x] consolidation dry-run leaves storage unchanged
 
 #### VM3 — Two-Path Quota-Based Memory Recall
 
@@ -1806,38 +1806,38 @@ Implementation structure:
 
 ##### VM3.1 — FTS5 and freshness scoring
 
-- [ ] add config `memory.recall.freshness_window_days` (default `1`), `memory.recall.weight_time` (default `0.25`), and `memory.recall.weight_business` (default `0.15`)
-- [ ] validate freshness window as non-negative and weights in `0..=1` with `weight_time + weight_business < 1`
-- [ ] replace the `LIKE '%query%'` predicate in `memory_recall.rs` with `memories_fts MATCH` using the existing FTS query escaping helper
-- [ ] tokenize multi-word queries and match all tokens first, then OR fallback when the AND form returns zero rows
-- [ ] keep the exact-topic `LEXICAL_TIER_WEIGHT` tier above FTS hits
-- [ ] compute `S_origin` from normalized BM25 plus importance, scope, and source-backed weights
-- [ ] compute `S_time = 1.0` inside the freshness window and `1 / (1 + age_days / 30)` after it
-- [ ] compute `S_busi` from importance (`critical = 1.0`, `high = 0.75`, `normal = 0.5`, `low = 0.25`)
-- [ ] compute `(1 - weight_time - weight_business) * S_origin + weight_time * S_time + weight_business * S_busi` and clamp to `0..=1`
-- [ ] include `origin_score`, `time_score`, `importance_score`, and `recall_path` in JSON recall output
-- [ ] add tests for non-adjacent multi-token matching, freshness boundary, and score clamping
+- [x] add config `memory.recall.freshness_window_days` (default `1`), `memory.recall.weight_time` (default `0.25`), and `memory.recall.weight_business` (default `0.15`)
+- [x] validate freshness window as non-negative and weights in `0..=1` with `weight_time + weight_business < 1`
+- [x] replace the `LIKE '%query%'` predicate in `memory_recall.rs` with `memories_fts MATCH` using the existing FTS query escaping helper
+- [x] tokenize multi-word queries and match all tokens first, then OR fallback when the AND form returns zero rows
+- [x] keep the exact-topic `LEXICAL_TIER_WEIGHT` tier above FTS hits
+- [x] compute `S_origin` from normalized BM25 plus importance, scope, and source-backed weights
+- [x] compute `S_time = 1.0` inside the freshness window and `1 / (1 + age_days / 30)` after it
+- [x] compute `S_busi` from importance (`critical = 1.0`, `high = 0.75`, `normal = 0.5`, `low = 0.25`)
+- [x] compute `(1 - weight_time - weight_business) * S_origin + weight_time * S_time + weight_business * S_busi` and clamp to `0..=1`
+- [x] include `origin_score`, `time_score`, `importance_score`, and `recall_path` in JSON recall output
+- [x] add tests for non-adjacent multi-token matching, freshness boundary, and score clamping
 
 ##### VM3.2 — Auxiliary memoir path and quota merge
 
-- [ ] add `packages/atlas-session/src/store/memory_recall_aux.rs`
-- [ ] add config `memory.recall.primary_quota_ratio` (default `0.75`) and `memory.recall.aux_max_hops` (default `2`, max `2`)
-- [ ] match query tokens against `memoir_concepts.name` and `memoir_concepts.description` case-insensitively
-- [ ] traverse `memoir_relations` from 1 to `aux_max_hops` using the bounded BFS already used by `memoir::inspect`
-- [ ] map concept `source_id` to `memories.source_id` and keep rows not already returned by the primary path
-- [ ] rank auxiliary candidates independently with depth and relation-type penalties
-- [ ] apply `Q_primary = ceil(primary_quota_ratio * limit)` and `Q_aux = limit - Q_primary`; let auxiliary fill leftover capacity when primary underfills
-- [ ] merge primary rows first, then auxiliary rows, tagging `recall_path = "primary"` or `"auxiliary"`
-- [ ] exclude superseded rows and rows outside caller visibility scopes from both paths
-- [ ] add tests for non-adjacent multi-token queries, quota split at `limit = 4` and `limit = 10`, no duplicate ids across paths, empty-memoir behavior, and visibility enforcement
+- [x] add `packages/atlas-session/src/store/memory_recall_aux.rs`
+- [x] add config `memory.recall.primary_quota_ratio` (default `0.75`) and `memory.recall.aux_max_hops` (default `2`, max `2`)
+- [x] match query tokens against `memoir_concepts.name` and `memoir_concepts.description` case-insensitively
+- [x] traverse `memoir_relations` from 1 to `aux_max_hops` using the bounded BFS already used by `memoir::inspect`
+- [x] map concept `source_id` to `memories.source_id` and keep rows not already returned by the primary path
+- [x] rank auxiliary candidates independently with depth and relation-type penalties
+- [x] apply `Q_primary = ceil(primary_quota_ratio * limit)` and `Q_aux = limit - Q_primary`; let auxiliary fill leftover capacity when primary underfills
+- [x] merge primary rows first, then auxiliary rows, tagging `recall_path = "primary"` or `"auxiliary"`
+- [x] exclude superseded rows and rows outside caller visibility scopes from both paths
+- [x] add tests for non-adjacent multi-token queries, quota split at `limit = 4` and `limit = 10`, no duplicate ids across paths, empty-memoir behavior, and visibility enforcement
 
 ##### VM3 completion criteria
 
-- [ ] `atlas memory recall "postgres connection pool"` matches memories whose tokens are non-adjacent
-- [ ] recall JSON explains both path scores per hit
-- [ ] `limit = 10` returns at most 8 primary and 2 auxiliary rows before underfill
-- [ ] recall never returns another frontend's private memories
-- [ ] recall works with no embedding provider configured
+- [x] `atlas memory recall "postgres connection pool"` matches memories whose tokens are non-adjacent
+- [x] recall JSON explains both path scores per hit
+- [x] `limit = 10` returns at most 8 primary and 2 auxiliary rows before underfill
+- [x] recall never returns another frontend's private memories
+- [x] recall works with no embedding provider configured
 
 ### Workstream B — VikingRAG + TrieHI Retrieval Layer
 

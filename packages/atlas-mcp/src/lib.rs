@@ -47,9 +47,9 @@
 //! | `purge_saved_context`     | CM7: delete saved artifacts by session or age            |
 //! | `cross_session_search`    | CM11: search saved context across all sessions for repo  |
 //! | `get_global_memory`       | CM11: frequent symbols/files/workflows; related sessions |
-//! | `memory_store`            | ICM-A: store a memory record through the shared service  |
+//! | `memory_store`            | ICM-A/VM2: store a memory or apply an EUA patch          |
 //! | `memory_ops`              | VM1: typed operator history for one memory row           |
-//! | `memory_recall`           | ICM-A: recall memories with visibility rules and hints   |
+//! | `memory_recall`           | ICM-A/VM3: two-path recall with score breakdown and hints |
 //! | `feedback_record`         | ICM-C: record a correction when a prediction was wrong    |
 //! | `memoir_create`           | ICM-F: create a memoir concept graph                     |
 //! | `memoir_add_concept`      | ICM-F: add a concept to an existing memoir graph         |

@@ -317,6 +317,56 @@ fn memory_recall_without_session_db_returns_empty() {
 }
 
 #[test]
+fn memory_store_applies_eua_patch_blocks() {
+    let dir = TempDir::new().unwrap();
+    let db_path = setup_db_path(&dir);
+    std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+    let repo_root = dir.path().to_string_lossy().into_owned();
+
+    let stored = store_via_tool(
+        &repo_root,
+        &db_path,
+        &serde_json::json!({ "text": "deploy uses helm", "topic": "deploy" }),
+    );
+    let memory_id = stored["memory"]["id"].as_str().unwrap().to_owned();
+
+    let result = tool_memory_store(
+        Some(&serde_json::json!({
+            "patch_id": memory_id,
+            "patch_text": "<<<< SEARCH\nhelm\n====\nhelm charts\n>>>> REPLACE"
+        })),
+        &repo_root,
+        &db_path,
+        OutputFormat::Json,
+    );
+    let body = tool_body(&result.unwrap());
+    assert_eq!(body["patched"], true);
+    assert_eq!(body["patch_count"], 1);
+    assert_eq!(body["memory"]["body"], "deploy uses helm charts");
+    assert_eq!(body["patches"][0]["op"], "eua_patch");
+
+    let error = tool_memory_store(
+        Some(&serde_json::json!({ "patch_id": memory_id })),
+        &repo_root,
+        &db_path,
+        OutputFormat::Json,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("patch_text or patch_file"), "got: {error}");
+
+    let error = tool_memory_store(
+        Some(&serde_json::json!({})),
+        &repo_root,
+        &db_path,
+        OutputFormat::Json,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("text or patch_id"), "got: {error}");
+}
+
+#[test]
 fn memory_ops_returns_history_and_handles_unknown_ids() {
     let dir = TempDir::new().unwrap();
     let db_path = setup_db_path(&dir);

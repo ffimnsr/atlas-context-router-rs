@@ -19,11 +19,21 @@ Session identity, event ledger, and resume snapshots for Atlas context memory. D
   - `MemoryRecord` / `NewMemory` — one record shape shared by CLI and MCP
   - `memories` table — continuity-side persistence, validated by `atlas db check`
 
-- **Memory curation (ICM-B)**
+- **Memory curation (ICM-B + VM2)**
   - `MemoryDecayPolicy` — retention days per importance, critical protected by default
   - `decay_reports()` / `stale_memories()` / `prune_memories()` — score, list, and prune without touching saved-context artifacts
   - `memory_health()` — deterministic stale/duplicated/orphaned/oversized/noisy findings
-  - `consolidate_memories()` — deterministic grouping, superseded markers, and `memory_supersessions` link rows
+  - `consolidate_memories()` — deterministic grouping, non-destructive sentence synthesis, superseded markers, and `memory_supersessions` link rows; oversized bodies route to `context.db`
+  - `apply_memory_patch()` — `<<<< SEARCH / ==== / >>>> REPLACE` EUA patching with exact-first, bounded Levenshtein fallback
+  - `compact_session()` — writes a `SESSION_SUMMARY` rollup and `TimeCompress` stamps before deleting evicted events
+
+- **Typed memory operators (VM1)**
+  - `MemoryOp` — `Set`, `Sum`, `Count`, `Max`, `Avg`, `AppendUnique`, `EuaPatch`, `TimeCompress`
+  - `apply_memory_op()` / `memory_op_history()` — pure operator application plus bounded per-row history
+
+- **Two-path memory recall (VM3)**
+  - `MemoryRecallPolicy` — freshness window, composite weights, primary quota, memoir hop bound
+  - `recall_memories_with_policy()` — FTS5 primary path plus auxiliary memoir path with independent ranking
 
 - **Feedback records (ICM-C)**
   - `NewFeedback` / `FeedbackRecord` — predicted vs actual corrections with symbol/file/kind context

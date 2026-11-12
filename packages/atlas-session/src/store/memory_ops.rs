@@ -6,9 +6,9 @@
 //! an LLM call, a network round trip, or ad-hoc SQL in callers.
 //!
 //! Operators are pure (`apply_memory_op`) plus a thin transactional wrapper
-//! (`SessionStore::apply_memory_op`). `EuaPatch` and `TimeCompress` are parsed
-//! and applied by the VM2 modules; they are rejected here with an explicit
-//! message instead of silently degrading.
+//! (`SessionStore::apply_memory_op`). `EuaPatch` delegates to
+//! [`super::memory_patch`] and `TimeCompress` stamps a deterministic topic
+//! rollup in metadata.
 
 use std::collections::BTreeSet;
 
@@ -59,13 +59,15 @@ pub enum MemoryOp {
         item: Value,
         max_items: usize,
     },
-    /// Apply a VikingMem EUA search/replace patch (implemented in VM2).
+    /// Apply a VikingMem EUA search/replace patch (VM2).
     EuaPatch {
         search: String,
         replace: String,
-        max_edit_distance: usize,
+        /// Caller-supplied threshold; default is 15% of the search length.
+        #[serde(default)]
+        max_edit_distance: Option<usize>,
     },
-    /// Compress a topic timeline into a deterministic summary (implemented in VM2).
+    /// Compress a topic timeline into a deterministic summary (VM2).
     TimeCompress { window_label: String },
 }
 
@@ -91,6 +93,9 @@ pub struct MemoryOpHistoryEntry {
     pub op: String,
     pub at: String,
     pub fields: Vec<String>,
+    /// Operator-specific evidence (EUA patches record match details here).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
 }
 
 /// Mutable entity view loaded for operator application.
@@ -135,6 +140,7 @@ pub struct MemoryOpHistory {
 /// Apply one operator to an in-memory entity. Never touches the database.
 pub fn apply_memory_op(entity: &mut MemoryEntity, op: &MemoryOp, now: &str) -> Result<OpOutcome> {
     let mut changed = BTreeSet::new();
+    let mut details = None;
 
     match op {
         MemoryOp::Set { field, value } => {
@@ -239,15 +245,42 @@ pub fn apply_memory_op(entity: &mut MemoryEntity, op: &MemoryOp, now: &str) -> R
             let _ = metadata_object_mut(entity)?.insert(field.clone(), Value::Array(items));
             changed.insert(format!("metadata.{field}"));
         }
-        MemoryOp::EuaPatch { .. } => {
-            return Err(op_error(
-                "eua_patch requires VM2 memory patch support; no operator was applied",
-            ));
+        MemoryOp::EuaPatch {
+            search,
+            replace,
+            max_edit_distance,
+        } => {
+            let application = super::memory_patch::apply_patch_block(
+                &entity.body,
+                search,
+                replace,
+                *max_edit_distance,
+            )?;
+            entity.body = application.body;
+            changed.insert("body".to_owned());
+            details = Some(json!({
+                "search_hash": application.search_hash,
+                "replace_len": application.replace_len,
+                "edit_distance": application.edit_distance,
+                "matched_exact": application.matched_exact,
+            }));
         }
-        MemoryOp::TimeCompress { .. } => {
-            return Err(op_error(
-                "time_compress requires VM2 consolidation support; no operator was applied",
-            ));
+        MemoryOp::TimeCompress { window_label } => {
+            let label = window_label.trim();
+            if label.is_empty() {
+                return Err(op_error("time_compress requires a non-empty window label"));
+            }
+            let compressed_at = now.to_owned();
+            let body_chars = entity.body.chars().count();
+            let _ = metadata_object_mut(entity)?.insert(
+                "time_compress".to_owned(),
+                json!({
+                    "window_label": label,
+                    "compressed_at": compressed_at,
+                    "body_chars": body_chars,
+                }),
+            );
+            changed.insert("metadata.time_compress".to_owned());
         }
     }
 
@@ -255,6 +288,7 @@ pub fn apply_memory_op(entity: &mut MemoryEntity, op: &MemoryOp, now: &str) -> R
         op: op.name().to_owned(),
         at: now.to_owned(),
         fields: changed.iter().cloned().collect(),
+        details,
     };
     entity.op_history.push(entry.clone());
     if entity.op_history.len() > MAX_OP_HISTORY_ENTRIES {

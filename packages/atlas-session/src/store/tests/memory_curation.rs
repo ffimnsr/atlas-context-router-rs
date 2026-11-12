@@ -810,9 +810,14 @@ fn consolidation_plan_dry_run_groups_and_preserves_source_ids() {
         },
     );
 
-    let plan =
-        super::memory::consolidation_plan(&store.conn, "/repo", &MemoryListFilter::default(), true)
-            .unwrap();
+    let plan = super::memory::consolidation_plan(
+        &store.conn,
+        "/repo",
+        &MemoryListFilter::default(),
+        true,
+        None,
+    )
+    .unwrap();
     assert!(plan.dry_run);
     assert_eq!(plan.groups.len(), 1);
     let group = &plan.groups[0];
@@ -909,9 +914,14 @@ fn consolidation_plan_groups_by_same_body_and_metadata_category() {
         },
     );
 
-    let plan =
-        super::memory::consolidation_plan(&store.conn, "/repo", &MemoryListFilter::default(), true)
-            .unwrap();
+    let plan = super::memory::consolidation_plan(
+        &store.conn,
+        "/repo",
+        &MemoryListFilter::default(),
+        true,
+        None,
+    )
+    .unwrap();
     let by_topic = |topic: &str| {
         plan.groups
             .iter()
@@ -963,6 +973,7 @@ fn consolidation_apply_supersedes_merged_rows_and_links_them() {
         "/repo",
         &MemoryListFilter::default(),
         false,
+        None,
     )
     .unwrap();
     assert!(!plan.dry_run);
@@ -1006,7 +1017,7 @@ fn consolidation_apply_supersedes_merged_rows_and_links_them() {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
-    assert_eq!(body, "deploy uses helm");
+    assert_eq!(body, "deploy uses helm charts\ndeploy uses helm");
     assert_eq!(source_id.as_deref(), Some("src-a"));
     let metadata: Value = serde_json::from_str(&metadata_json).unwrap();
     assert_eq!(metadata["consolidated"], serde_json::json!(true));
@@ -1046,8 +1057,14 @@ fn consolidation_keeps_merged_rows_visible_behind_include_superseded() {
             category: None,
         },
     );
-    super::memory::consolidation_plan(&store.conn, "/repo", &MemoryListFilter::default(), false)
-        .unwrap();
+    super::memory::consolidation_plan(
+        &store.conn,
+        "/repo",
+        &MemoryListFilter::default(),
+        false,
+        None,
+    )
+    .unwrap();
 
     // Default list hides superseded rows.
     let listed = store
@@ -1070,7 +1087,8 @@ fn consolidation_keeps_merged_rows_visible_behind_include_superseded() {
     let m2 = all.iter().find(|m| m.id == "m2").unwrap();
     assert!(m2.superseded_by.is_some());
 
-    // Recall ranks the active consolidated row above the superseded one.
+    // Recall rejects superseded rows; the active consolidated row keeps every
+    // distinct fact from the merged member.
     let viewer = MemoryViewer {
         frontend: "cli".to_owned(),
         session_id: "s1".to_owned(),
@@ -1085,15 +1103,8 @@ fn consolidation_keeps_merged_rows_visible_behind_include_superseded() {
             10,
         )
         .unwrap();
-    let positions = hits
-        .iter()
-        .enumerate()
-        .map(|(index, hit)| (hit.memory.id.as_str(), index))
-        .collect::<Vec<_>>();
-    let m1_pos = positions.iter().find(|(id, _)| *id == "m1").unwrap().1;
-    let m2_pos = positions.iter().find(|(id, _)| *id == "m2").unwrap().1;
     assert!(
-        m1_pos < m2_pos,
-        "active rows must rank above superseded rows"
+        hits.iter().all(|hit| hit.memory.id != "m2"),
+        "superseded rows must not be surfaced by recall"
     );
 }

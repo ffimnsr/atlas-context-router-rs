@@ -219,6 +219,34 @@ fn memory_decay_partial_section_fills_missing_fields_with_defaults() {
 }
 
 #[test]
+fn memory_recall_defaults_and_validation() {
+    let dir = tempdir().expect("tempdir");
+    let atlas_dir = dir.path();
+    fs::write(atlas_dir.join(crate::paths::ATLAS_CONFIG), "[build]\n").expect("write config");
+    let config = Config::load(atlas_dir).expect("load config");
+    let recall = &config.memory.recall;
+    assert_eq!(recall.freshness_window_days, 1);
+    assert_eq!(recall.weight_time, 0.25);
+    assert_eq!(recall.weight_business, 0.15);
+    assert_eq!(recall.primary_quota_ratio, 0.75);
+    assert_eq!(recall.aux_max_hops, 2);
+
+    for body in [
+        "[memory.recall]\nweight_time = 0.9\nweight_business = 0.2\n",
+        "[memory.recall]\nprimary_quota_ratio = 1.5\n",
+        "[memory.recall]\naux_max_hops = 3\n",
+    ] {
+        let dir = tempdir().expect("tempdir");
+        fs::write(dir.path().join(crate::paths::ATLAS_CONFIG), body).expect("write config");
+        let error = Config::load(dir.path()).expect_err("invalid recall config must fail");
+        assert!(
+            error.to_string().contains("memory.recall"),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+#[test]
 fn memory_decay_rejects_non_positive_retention_days() {
     for (key, value, expected) in [
         ("low_days", "0", "memory.decay.low_days"),

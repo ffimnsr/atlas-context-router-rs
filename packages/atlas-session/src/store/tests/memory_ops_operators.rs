@@ -290,7 +290,7 @@ fn append_unique_dedupes_and_caps_items() {
 }
 
 #[test]
-fn history_is_capped_and_defers_vm2_operators() {
+fn history_is_capped_and_applies_vm2_operators() {
     let mut entity = entity();
     for index in 0..(MAX_OP_HISTORY_ENTRIES + 4) {
         apply_memory_op(
@@ -305,29 +305,29 @@ fn history_is_capped_and_defers_vm2_operators() {
     assert_eq!(entity.op_history.len(), MAX_OP_HISTORY_ENTRIES);
     assert_eq!(entity.op_history.last().unwrap().op, "count");
 
-    let before = entity.clone();
-    assert!(
-        apply_memory_op(
-            &mut entity,
-            &MemoryOp::EuaPatch {
-                search: "a".to_owned(),
-                replace: "b".to_owned(),
-                max_edit_distance: 1,
-            },
-            "2026-01-01T00:00:00Z",
-        )
-        .is_err()
-    );
-    assert_eq!(entity.op_history, before.op_history);
-    assert!(
-        apply_memory_op(
-            &mut entity,
-            &MemoryOp::TimeCompress {
-                window_label: "week".to_owned(),
-            },
-            "2026-01-01T00:00:00Z",
-        )
-        .is_err()
+    let patch = MemoryOp::EuaPatch {
+        search: entity.body.clone(),
+        replace: "patched body".to_owned(),
+        max_edit_distance: Some(1),
+    };
+    let outcome = apply_memory_op(&mut entity, &patch, "2026-01-01T00:00:00Z").unwrap();
+    assert_eq!(entity.body, "patched body");
+    assert_eq!(outcome.op, "eua_patch");
+    let details = outcome.history_entry.details.expect("patch details");
+    assert_eq!(details["matched_exact"], serde_json::json!(true));
+    assert_eq!(details["edit_distance"], serde_json::json!(0));
+
+    apply_memory_op(
+        &mut entity,
+        &MemoryOp::TimeCompress {
+            window_label: "week".to_owned(),
+        },
+        "2026-01-01T00:00:00Z",
+    )
+    .unwrap();
+    assert_eq!(
+        entity.metadata["time_compress"]["window_label"],
+        serde_json::json!("week")
     );
 }
 

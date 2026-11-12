@@ -101,6 +101,9 @@ pub enum SessionEventType {
     Error,
     SessionStart,
     SessionResume,
+    /// Deterministic rollup written before curation deletes low-level events
+    /// (VM2 `TIME_COMPRESS`).
+    SessionSummary,
 }
 
 impl SessionEventType {
@@ -116,6 +119,7 @@ impl SessionEventType {
             Self::Error => EventCategory::Error,
             Self::FileRead | Self::FileWrite => EventCategory::FileOperation,
             Self::SessionStart | Self::SessionResume => EventCategory::SessionLifecycle,
+            Self::SessionSummary => EventCategory::Reasoning,
         }
     }
 
@@ -137,6 +141,7 @@ impl SessionEventType {
             Self::Error => "ERROR",
             Self::SessionStart => "SESSION_START",
             Self::SessionResume => "SESSION_RESUME",
+            Self::SessionSummary => "SESSION_SUMMARY",
         }
     }
 }
@@ -168,6 +173,7 @@ impl std::str::FromStr for SessionEventType {
             "ERROR" => Ok(Self::Error),
             "SESSION_START" => Ok(Self::SessionStart),
             "SESSION_RESUME" => Ok(Self::SessionResume),
+            "SESSION_SUMMARY" => Ok(Self::SessionSummary),
             other => Err(AtlasError::Other(format!(
                 "unknown session event type: {other}"
             ))),
@@ -625,6 +631,9 @@ impl NewMemory {
 pub struct MemorySearchHit {
     pub memory: MemoryRecord,
     pub relevance_score: i32,
+    /// Raw FTS5 BM25 value for primary-path hits; `0.0` for auxiliary hits.
+    #[serde(default)]
+    pub bm25_score: f64,
     pub recall_score: f64,
     pub ranking: MemoryRecallRanking,
 }
@@ -650,6 +659,21 @@ pub struct MemoryRecallRanking {
     pub superseded: bool,
     /// Whole days since `updated_at` (0 when unknown or in the future).
     pub age_days: u32,
+    /// Normalized origin score combining lexical evidence, importance, scope,
+    /// and source-backed evidence (VM3).
+    #[serde(default)]
+    pub origin_score: f64,
+    /// Freshness score: `1.0` inside the freshness window, then
+    /// `1 / (1 + age_days / 30)`.
+    #[serde(default)]
+    pub time_score: f64,
+    /// Business-importance score (`critical = 1.0`, `high = 0.75`,
+    /// `normal = 0.5`, `low = 0.25`).
+    #[serde(default)]
+    pub importance_score: f64,
+    /// Which recall path produced this hit: `primary` or `auxiliary`.
+    #[serde(default)]
+    pub recall_path: String,
 }
 
 /// Filters shared by memory recall and list surfaces.
@@ -694,6 +718,81 @@ pub struct MemoryViewer {
     /// Viewer session id; only `session`-scoped memories with the same id are visible.
     pub session_id: String,
 }
+
+/// Recall scoring and quota policy mirrored from `[memory.recall]` (VM3).
+///
+/// Lexical recall stays the default; the auxiliary memoir path only widens the
+/// candidate set and never pools its raw scores with the primary path.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MemoryRecallPolicy {
+    /// Memories updated within this many days keep `time_score = 1.0`.
+    pub freshness_window_days: u32,
+    /// Composite weight for the freshness signal (`0..=1`).
+    pub weight_time: f64,
+    /// Composite weight for the business-importance signal (`0..=1`).
+    pub weight_business: f64,
+    /// Fraction of `limit` reserved for the primary lexical path (`0..=1`).
+    pub primary_quota_ratio: f64,
+    /// Maximum memoir relation hops for the auxiliary path (`1..=2`).
+    pub aux_max_hops: u32,
+}
+
+impl Default for MemoryRecallPolicy {
+    fn default() -> Self {
+        Self {
+            freshness_window_days: DEFAULT_RECALL_FRESHNESS_WINDOW_DAYS,
+            weight_time: DEFAULT_RECALL_WEIGHT_TIME,
+            weight_business: DEFAULT_RECALL_WEIGHT_BUSINESS,
+            primary_quota_ratio: DEFAULT_RECALL_PRIMARY_QUOTA_RATIO,
+            aux_max_hops: DEFAULT_RECALL_AUX_MAX_HOPS,
+        }
+    }
+}
+
+impl MemoryRecallPolicy {
+    /// Validates weights, quota, and hop bounds; used by `Config::load`.
+    pub fn validate(&self) -> atlas_core::Result<()> {
+        if !self.weight_time.is_finite() || !(0.0..=1.0).contains(&self.weight_time) {
+            return Err(AtlasError::Other(
+                "memory.recall.weight_time must be between 0.0 and 1.0".to_owned(),
+            ));
+        }
+        if !self.weight_business.is_finite() || !(0.0..=1.0).contains(&self.weight_business) {
+            return Err(AtlasError::Other(
+                "memory.recall.weight_business must be between 0.0 and 1.0".to_owned(),
+            ));
+        }
+        if self.weight_time + self.weight_business >= 1.0 {
+            return Err(AtlasError::Other(
+                "memory.recall.weight_time + memory.recall.weight_business must be less than 1.0"
+                    .to_owned(),
+            ));
+        }
+        if !self.primary_quota_ratio.is_finite() || !(0.0..=1.0).contains(&self.primary_quota_ratio)
+        {
+            return Err(AtlasError::Other(
+                "memory.recall.primary_quota_ratio must be between 0.0 and 1.0".to_owned(),
+            ));
+        }
+        if !(1..=2).contains(&self.aux_max_hops) {
+            return Err(AtlasError::Other(
+                "memory.recall.aux_max_hops must be 1 or 2".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Default freshness tolerance window in days (`[memory.recall]`).
+pub const DEFAULT_RECALL_FRESHNESS_WINDOW_DAYS: u32 = 1;
+/// Default composite weight for freshness.
+pub const DEFAULT_RECALL_WEIGHT_TIME: f64 = 0.25;
+/// Default composite weight for business importance.
+pub const DEFAULT_RECALL_WEIGHT_BUSINESS: f64 = 0.15;
+/// Default quota reserved for the primary lexical path.
+pub const DEFAULT_RECALL_PRIMARY_QUOTA_RATIO: f64 = 0.75;
+/// Default maximum memoir hops for the auxiliary path.
+pub const DEFAULT_RECALL_AUX_MAX_HOPS: u32 = 2;
 
 // ── ICM-B — memory curation (decay, stale, prune, health, consolidation) ──────
 
@@ -871,6 +970,17 @@ pub struct MemoryConsolidationGroup {
     /// Every distinct non-null `source_id` in the group (preserved in the
     /// consolidated record metadata).
     pub source_ids: Vec<String>,
+    /// Deterministic synthesized body containing every distinct fact from all
+    /// members in chronological order (truncated on overflow).
+    pub body: String,
+    /// Full merged metadata JSON written to the consolidated row.
+    pub metadata_json: String,
+    /// Every distinct member `source_id` preserved by consolidation (same
+    /// value set as [`Self::source_ids`], kept for JSON consumers).
+    pub merged_source_ids: Vec<String>,
+    /// Set when the synthesized body exceeded `OVERSIZED_BODY_CHARS` and the
+    /// full text was routed to `context.db`.
+    pub overflow_source_id: Option<String>,
     /// Id of the consolidated memory; `Some` only after apply mode ran.
     pub consolidated_id: Option<String>,
 }

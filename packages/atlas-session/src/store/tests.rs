@@ -118,14 +118,18 @@ fn seed_memory_full(
 
 mod compaction;
 mod concurrency;
+mod curation_compress;
 mod durable;
 mod feedback;
 mod memoir;
+mod memory_consolidate;
 mod memory_curation;
 mod memory_ops;
 mod memory_ops_operators;
+mod memory_patch;
 mod memory_query;
 mod memory_recall;
+mod memory_recall_quota;
 mod memory_schema;
 mod memory_store;
 mod quarantine;
