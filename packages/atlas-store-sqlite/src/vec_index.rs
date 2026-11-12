@@ -5,12 +5,25 @@
 //! so KNN queries use the C/SIMD path when the statically linked extension is
 //! available. Every operation degrades to the caller's BLOB scan on error; a
 //! missing or stale index is rebuilt from the BLOB column.
+//!
+//! Scoped queries pass the exact in-scope chunk ids through `rowid IN (...)`, so
+//! subpath, kind, language, and multi-repo filters keep the accelerated path
+//! without approximating the scope as vec0 constraints.
 
 use std::sync::Once;
 
 use rusqlite::{Connection, params};
 
 const TABLE_PREFIX: &str = "retrieval_vec_";
+
+/// Maximum number of chunk ids bound into one KNN query.
+///
+/// The bundled SQLite allows 32,766 statement variables; 8,000 keeps each
+/// statement well clear of that limit while bounding the SQL text size.
+const MAX_IDS_PER_QUERY: usize = 8_000;
+
+/// sqlite-vec rejects `k` values above this cap.
+const MAX_KNN_K: usize = 4_096;
 
 /// Register sqlite-vec as a process-wide SQLite auto-extension.
 ///
@@ -191,52 +204,108 @@ pub(crate) fn delete_for_node(
     delete_ids(conn, &ids)
 }
 
-/// Run a KNN query through vec0, optionally restricted to one repo partition.
+/// Run a KNN query through vec0.
 ///
-/// Returns `None` when the extension or index is unavailable, so callers keep
-/// the exact BLOB-scan path. Scores are cosine similarity (`1 - distance`).
+/// `repo_id` restricts the search to one partition. `chunk_ids` restricts it to
+/// an exact set of in-scope chunk rows, which lets scoped queries (subpath,
+/// directory, exclusions, kinds, languages, multi-repo) keep the accelerated
+/// path: SQL resolves the scope to chunk ids, and vec0 ranks only those rows.
+///
+/// Returns `None` when the extension, index, or a KNN statement is unavailable,
+/// so callers keep the exact BLOB-scan path. Scores are cosine similarity
+/// (`1 - distance`).
 pub(crate) fn try_knn(
     conn: &Connection,
     query: &[f32],
     limit: usize,
     repo_id: Option<&str>,
+    chunk_ids: Option<&[i64]>,
 ) -> Option<(Vec<(String, f64)>, usize)> {
-    if query.is_empty() || limit == 0 {
+    try_knn_batched(conn, query, limit, repo_id, chunk_ids, MAX_IDS_PER_QUERY)
+}
+
+/// [`try_knn`] with an explicit batch size for the `rowid IN (...)` filter.
+///
+/// Exposed so tests can exercise the batch-merge path without seeding tens of
+/// thousands of chunks; production callers always use [`MAX_IDS_PER_QUERY`].
+pub(crate) fn try_knn_batched(
+    conn: &Connection,
+    query: &[f32],
+    limit: usize,
+    repo_id: Option<&str>,
+    chunk_ids: Option<&[i64]>,
+    batch_size: usize,
+) -> Option<(Vec<(String, f64)>, usize)> {
+    if query.is_empty() || limit == 0 || limit > MAX_KNN_K {
         return None;
     }
     let dim = query.len();
     ensure_index(conn, dim).ok()?;
-    let candidates = embedded_count(conn, dim, repo_id).ok()? as usize;
-
     let name = table_name(dim);
-    let sql = match repo_id {
-        Some(_) => format!(
-            "SELECT rc.node_qn, v.distance
-             FROM {name} v
-             JOIN retrieval_chunks rc ON rc.id = v.rowid
-             WHERE v.embedding MATCH vec_f32(?1) AND k = ?2 AND v.source_repo_id = ?3"
-        ),
-        None => format!(
-            "SELECT rc.node_qn, v.distance
-             FROM {name} v
-             JOIN retrieval_chunks rc ON rc.id = v.rowid
-             WHERE v.embedding MATCH vec_f32(?1) AND k = ?2"
-        ),
+    let k = limit.min(MAX_KNN_K);
+
+    let Some(chunk_ids) = chunk_ids else {
+        let candidates = embedded_count(conn, dim, repo_id).ok()? as usize;
+        let hits = knn_query(conn, &name, query, k, repo_id, None)?;
+        return Some((hits, candidates));
     };
+
+    let mut ids = chunk_ids.to_vec();
+    ids.sort_unstable();
+    ids.dedup();
+    if ids.is_empty() {
+        return Some((Vec::new(), 0));
+    }
+
+    // Top-`k` of a union equals the top-`k` of the union of each batch's
+    // top-`k`, so splitting a large id set stays exact.
+    let mut hits = Vec::new();
+    for batch in ids.chunks(batch_size.max(1)) {
+        hits.extend(knn_query(conn, &name, query, k, repo_id, Some(batch))?);
+    }
+    hits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    hits.truncate(limit);
+    Some((hits, ids.len()))
+}
+
+/// Execute one KNN statement against a vec0 table.
+fn knn_query(
+    conn: &Connection,
+    name: &str,
+    query: &[f32],
+    k: usize,
+    repo_id: Option<&str>,
+    chunk_ids: Option<&[i64]>,
+) -> Option<Vec<(String, f64)>> {
+    let mut sql = format!(
+        "SELECT rc.node_qn, v.distance
+         FROM {name} v
+         JOIN retrieval_chunks rc ON rc.id = v.rowid
+         WHERE v.embedding MATCH vec_f32(?) AND k = ?"
+    );
+    let mut bind: Vec<rusqlite::types::Value> = vec![f32_blob(query).into(), (k as i64).into()];
+    if let Some(repo_id) = repo_id {
+        sql.push_str(" AND v.source_repo_id = ?");
+        bind.push(repo_id.to_owned().into());
+    }
+    if let Some(chunk_ids) = chunk_ids {
+        let placeholders = vec!["?"; chunk_ids.len()].join(", ");
+        sql.push_str(&format!(" AND v.rowid IN ({placeholders})"));
+        bind.extend(chunk_ids.iter().map(|id| (*id).into()));
+    }
+
     let mut stmt = conn.prepare(&sql).ok()?;
-    let map_row = |row: &rusqlite::Row<'_>| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?));
-    let rows = match repo_id {
-        Some(repo_id) => stmt
-            .query_map(params![f32_blob(query), limit as i64, repo_id], map_row)
-            .ok()?,
-        None => stmt
-            .query_map(params![f32_blob(query), limit as i64], map_row)
-            .ok()?,
-    };
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(bind.iter()), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+        })
+        .ok()?;
     let mut hits: Vec<(String, f64)> = rows
-        .filter_map(Result::ok)
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .ok()?
+        .into_iter()
         .map(|(qn, distance)| (qn, 1.0 - distance))
         .collect();
     hits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    Some((hits, candidates))
+    Some(hits)
 }

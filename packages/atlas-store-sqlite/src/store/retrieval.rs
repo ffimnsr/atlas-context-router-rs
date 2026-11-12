@@ -108,18 +108,81 @@ impl Default for VectorScope {
     }
 }
 
-/// True when the remaining scope predicates can be served exactly by vec0.
+/// True when no scope predicate needs SQL pre-filtering.
 ///
-/// `subpath`/directory prefixes, exclusions, kinds, and languages still need
-/// the SQL prefilter + BLOB scan. A single repo id maps to the vec0 partition
-/// key.
-fn scope_is_vec_eligible(scope: &VectorScope) -> bool {
+/// Unfiltered (and single-repo) queries map directly onto vec0: no id set is
+/// needed, and a single repo id becomes the vec0 partition key.
+fn scope_has_no_filters(scope: &VectorScope) -> bool {
     scope.subpath_prefix.is_none()
         && scope.exact_dir.is_none()
         && scope.exclude_prefixes.is_empty()
         && scope.repo_ids.len() <= 1
         && scope.kinds.is_empty()
         && scope.languages.is_empty()
+}
+
+/// Build the SQL predicates and bind values that realise a scope exactly.
+///
+/// `skip_path_clauses` is set when the TrieHI bitmap already resolves path
+/// scopes in memory, matching the BLOB-scan behaviour.
+fn scope_filter(scope: &VectorScope, skip_path_clauses: bool) -> (Vec<String>, Vec<String>) {
+    let mut clauses: Vec<String> = vec!["rc.embedding IS NOT NULL".to_owned()];
+    let mut bind: Vec<String> = Vec::new();
+
+    if !skip_path_clauses {
+        if let Some(prefix) = scope.subpath_prefix.as_deref() {
+            bind.push(prefix.to_owned());
+            let low = bind.len();
+            bind.push(scope_upper_bound(prefix));
+            let high = bind.len();
+            clauses.push(format!("n.file_path >= ?{low} AND n.file_path < ?{high}"));
+        }
+        if let Some(dir) = scope.exact_dir.as_deref() {
+            bind.push(dir.to_owned());
+            let index = bind.len();
+            clauses.push(format!(
+                "(substr(n.file_path, 1, length(?{index}) + 1) = ?{index} || '/' AND instr(substr(n.file_path, length(?{index}) + 2), '/') = 0)"
+            ));
+        }
+        for prefix in &scope.exclude_prefixes {
+            bind.push(prefix.clone());
+            let low = bind.len();
+            bind.push(scope_upper_bound(prefix));
+            let high = bind.len();
+            clauses.push(format!(
+                "NOT (n.file_path >= ?{low} AND n.file_path < ?{high})"
+            ));
+        }
+    }
+    if !scope.repo_ids.is_empty() {
+        let mut placeholders = Vec::new();
+        for repo_id in &scope.repo_ids {
+            bind.push(repo_id.clone());
+            placeholders.push(format!("?{}", bind.len()));
+        }
+        clauses.push(format!(
+            "rc.source_repo_id IN ({})",
+            placeholders.join(", ")
+        ));
+    }
+    if !scope.kinds.is_empty() {
+        let mut placeholders = Vec::new();
+        for kind in &scope.kinds {
+            bind.push(kind.clone());
+            placeholders.push(format!("?{}", bind.len()));
+        }
+        clauses.push(format!("n.kind IN ({})", placeholders.join(", ")));
+    }
+    if !scope.languages.is_empty() {
+        let mut placeholders = Vec::new();
+        for language in &scope.languages {
+            bind.push(language.clone());
+            placeholders.push(format!("?{}", bind.len()));
+        }
+        clauses.push(format!("n.language IN ({})", placeholders.join(", ")));
+    }
+
+    (clauses, bind)
 }
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
@@ -398,75 +461,41 @@ impl Store {
     ) -> Result<(Vec<ScoredNode>, usize)> {
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         let scope = scope.validated()?;
-        // Unscoped queries use the sqlite-vec KNN index when available. Any
-        // scope filter or index error keeps the exact BLOB-scan path below.
-        if scope_is_vec_eligible(&scope)
+        // Unfiltered queries use the sqlite-vec KNN index directly. Any index
+        // error keeps the exact BLOB-scan path below.
+        if scope_has_no_filters(&scope)
             && let Some((candidates, scope_candidates)) = crate::vec_index::try_knn(
                 &self.conn,
                 query_embedding,
                 limit.max(1),
                 scope.repo_ids.first().map(String::as_str),
+                None,
             )
         {
             tracing::debug!(scope_candidates, "vec0 KNN path");
             return self.finish_vector_candidates(candidates, scope_candidates, limit);
         }
+
         let trie_bitmap = self.trie_scope_bitmap(&scope)?;
+        let (clauses, bind) = scope_filter(&scope, trie_bitmap.is_some());
+        let from_sql = "FROM retrieval_chunks rc
+             JOIN nodes n
+               ON n.qualified_name = rc.node_qn
+              AND n.source_repo_id = rc.source_repo_id";
 
-        let mut clauses: Vec<String> = vec!["rc.embedding IS NOT NULL".to_owned()];
-        let mut bind: Vec<String> = Vec::new();
-
-        if trie_bitmap.is_none() {
-            if let Some(prefix) = scope.subpath_prefix.as_deref() {
-                bind.push(prefix.to_owned());
-                let low = bind.len();
-                bind.push(scope_upper_bound(prefix));
-                let high = bind.len();
-                clauses.push(format!("n.file_path >= ?{low} AND n.file_path < ?{high}"));
-            }
-            if let Some(dir) = scope.exact_dir.as_deref() {
-                bind.push(dir.to_owned());
-                let index = bind.len();
-                clauses.push(format!(
-                    "(substr(n.file_path, 1, length(?{index}) + 1) = ?{index} || '/' AND instr(substr(n.file_path, length(?{index}) + 2), '/') = 0)"
-                ));
-            }
-            for prefix in &scope.exclude_prefixes {
-                bind.push(prefix.clone());
-                let low = bind.len();
-                bind.push(scope_upper_bound(prefix));
-                let high = bind.len();
-                clauses.push(format!(
-                    "NOT (n.file_path >= ?{low} AND n.file_path < ?{high})"
-                ));
-            }
-        }
-        if !scope.repo_ids.is_empty() {
-            let mut placeholders = Vec::new();
-            for repo_id in &scope.repo_ids {
-                bind.push(repo_id.clone());
-                placeholders.push(format!("?{}", bind.len()));
-            }
-            clauses.push(format!(
-                "rc.source_repo_id IN ({})",
-                placeholders.join(", ")
-            ));
-        }
-        if !scope.kinds.is_empty() {
-            let mut placeholders = Vec::new();
-            for kind in &scope.kinds {
-                bind.push(kind.clone());
-                placeholders.push(format!("?{}", bind.len()));
-            }
-            clauses.push(format!("n.kind IN ({})", placeholders.join(", ")));
-        }
-        if !scope.languages.is_empty() {
-            let mut placeholders = Vec::new();
-            for language in &scope.languages {
-                bind.push(language.clone());
-                placeholders.push(format!("?{}", bind.len()));
-            }
-            clauses.push(format!("n.language IN ({})", placeholders.join(", ")));
+        // Scoped queries keep the accelerated path by resolving the exact
+        // in-scope chunk ids in SQL, then restricting the KNN to that rowid set.
+        if let Some((candidates, scope_candidates)) = self.scoped_vec_candidates(
+            query_embedding,
+            limit,
+            &scope,
+            trie_bitmap.as_ref(),
+            from_sql,
+            &clauses,
+            &bind,
+        ) {
+            tracing::debug!(scope_candidates, "vec0 scoped KNN path");
+            return self.finish_vector_candidates(candidates, scope_candidates, limit);
         }
 
         let select_columns = if trie_bitmap.is_some() {
@@ -475,12 +504,7 @@ impl Store {
             "n.qualified_name, rc.embedding"
         };
         let sql = format!(
-            "SELECT {select_columns}
-             FROM retrieval_chunks rc
-             JOIN nodes n
-               ON n.qualified_name = rc.node_qn
-              AND n.source_repo_id = rc.source_repo_id
-             WHERE {}",
+            "SELECT {select_columns} {from_sql} WHERE {}",
             clauses.join(" AND ")
         );
 
@@ -519,6 +543,53 @@ impl Store {
         );
 
         self.finish_vector_candidates(candidates, scope_candidates, limit)
+    }
+
+    /// Resolve the exact in-scope chunk ids, then rank them with vec0.
+    ///
+    /// This keeps subpath, directory, exclusion, kind, language, and multi-repo
+    /// scopes on the accelerated path: SQL resolves scope to ids, and the KNN
+    /// ranks only those rows. Returns `None` so the caller runs the BLOB scan
+    /// when the extension/index is unavailable.
+    #[allow(clippy::too_many_arguments)]
+    fn scoped_vec_candidates(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+        scope: &VectorScope,
+        trie_bitmap: Option<&roaring::RoaringBitmap>,
+        from_sql: &str,
+        clauses: &[String],
+        bind: &[String],
+    ) -> Option<(Vec<(String, f64)>, usize)> {
+        let sql = format!("SELECT rc.id {from_sql} WHERE {}", clauses.join(" AND "));
+        let mut stmt = self.conn.prepare(&sql).ok()?;
+        let ids: Vec<i64> = stmt
+            .query_map(rusqlite::params_from_iter(bind.iter()), |row| {
+                row.get::<_, i64>(0)
+            })
+            .ok()?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .ok()?
+            .into_iter()
+            .filter(|id| match trie_bitmap {
+                Some(bitmap) => u32::try_from(*id).is_ok_and(|id| bitmap.contains(id)),
+                None => true,
+            })
+            .collect();
+        crate::vec_index::try_knn(
+            &self.conn,
+            query_embedding,
+            limit.max(1),
+            // The id set already encodes the repo restriction exactly; a
+            // partition-key filter would wrongly drop every repo but the first.
+            scope
+                .repo_ids
+                .first()
+                .filter(|_| scope.repo_ids.len() == 1)
+                .map(String::as_str),
+            Some(&ids),
+        )
     }
 
     fn finish_vector_candidates(
