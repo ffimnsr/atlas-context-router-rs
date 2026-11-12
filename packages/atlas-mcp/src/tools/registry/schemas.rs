@@ -337,6 +337,19 @@ pub(crate) struct TraverseGraphArgsSchema {
 #[allow(dead_code)]
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct TraceCallsArgsSchema {
+    from: String,
+    to: Option<String>,
+    direction: Option<String>,
+    edge_kinds: Option<Vec<String>>,
+    max_depth: Option<u64>,
+    max_nodes: Option<u64>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SymbolNeighborsArgsSchema {
     qname: String,
     limit: Option<u64>,

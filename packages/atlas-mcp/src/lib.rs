@@ -23,6 +23,7 @@
 //! | `embed_chunks`            | Generate/persist vectors for un-embedded chunks          |
 //! | `postprocess_graph`       | Explicit derived-analytics refresh after build/update    |
 //! | `traverse_graph`          | Reachability walk from qualified name                    |
+//! | `trace_calls`             | Directional call-chain trace with path search            |
 //! | `get_minimal_context`     | Compact auto-detected review context                     |
 //! | `explain_change`          | Advanced impact: risk, change kinds, boundary/test gaps  |
 //! | `get_session_status`      | CM7: current session identity and event count            |

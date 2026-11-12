@@ -171,6 +171,30 @@ pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
                 ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
             ],
         )),
+        "trace_calls" => Some(typed_schema_with_descriptions::<TraceCallsArgsSchema>(&[
+            ("properties/from", "Starting symbol name or qualified name."),
+            (
+                "properties/to",
+                "Optional target symbol for shortest-path tracing.",
+            ),
+            (
+                "properties/direction",
+                "Trace direction: down (callees, default), up (callers), or both.",
+            ),
+            (
+                "properties/edge_kinds",
+                "Edge kinds to follow (default ['calls']).",
+            ),
+            (
+                "properties/max_depth",
+                "Maximum hops from the root (default 3).",
+            ),
+            (
+                "properties/max_nodes",
+                "Maximum symbols in the trace (default 200).",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
         "symbol_neighbors" => Some(typed_schema_with_descriptions::<SymbolNeighborsArgsSchema>(
             &[
                 (

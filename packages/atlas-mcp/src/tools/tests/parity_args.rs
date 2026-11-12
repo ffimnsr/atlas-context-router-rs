@@ -43,6 +43,9 @@ pub(super) fn parity_args(tool_name: &str, source_id: &str, repo_root: &str) -> 
         "traverse_graph" => {
             json!({ "from_qn": "src/service.rs::fn::compute", "output_format": "json" })
         }
+        "trace_calls" => {
+            json!({ "from": "src/service.rs::fn::compute", "direction": "down", "output_format": "json" })
+        }
         "get_minimal_context" => {
             json!({ "change_source": { "kind": "working_tree" }, "output_format": "json" })
         }

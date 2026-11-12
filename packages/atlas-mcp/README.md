@@ -22,7 +22,7 @@ MCP server exposing Atlas graph, impact, and review tools over stdio. Implements
 - `explain_change` — advanced risk analysis and test gaps
 - `status` — health check and graph stats
 - `doctor` — deep repo and DB diagnostics
-- Plus: `traverse_graph`, `symbol_neighbors`, `resolve_symbol`, `search_content`, `analyze_safety`, `analyze_removal`, `analyze_dead_code`, and more
+- Plus: `trace_calls`, `traverse_graph`, `symbol_neighbors`, `resolve_symbol`, `search_content`, `analyze_safety`, `analyze_removal`, `analyze_dead_code`, and more
 
 Listens on stdio or Unix socket; supports JSON-RPC 2.0 message framing.
 

@@ -129,6 +129,7 @@ pub(crate) const TYPED_GRAPH_SCHEMA_TOOLS: &[&str] = &[
     "batch_query_graph",
     "resolve_symbol",
     "symbol_neighbors",
+    "trace_calls",
     "traverse_graph",
     "cross_file_links",
     "concept_clusters",

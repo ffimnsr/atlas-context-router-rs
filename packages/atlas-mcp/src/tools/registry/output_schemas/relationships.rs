@@ -64,6 +64,119 @@ pub(crate) fn traverse_graph_output_schema() -> Value {
     )
 }
 
+pub(crate) fn trace_calls_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "root_symbol": { "type": "string" },
+            "target_symbol": { "type": ["string", "null"] },
+            "direction": { "type": "string" },
+            "edge_kinds": { "type": "array", "items": { "type": "string" } },
+            "depth": { "type": "integer" },
+            "path": { "$ref": "#/$defs/trace_path" },
+            "nodes": { "type": "array", "items": { "$ref": "#/$defs/trace_node" } },
+            "edges": { "type": "array", "items": { "$ref": "#/$defs/trace_edge" } },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "node_count": { "type": "integer" },
+                    "edge_count": { "type": "integer" },
+                    "max_depth_reached": { "type": "integer" },
+                    "path_found": { "type": "boolean" }
+                },
+                "required": ["node_count", "edge_count", "max_depth_reached", "path_found"]
+            }
+        }),
+        &[
+            "tool",
+            "root_symbol",
+            "target_symbol",
+            "direction",
+            "edge_kinds",
+            "depth",
+            "path",
+            "nodes",
+            "edges",
+            "summary",
+            "truncated",
+            "atlas_provenance",
+        ],
+        Some(serde_json::json!({
+            "trace_node": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "qualified_name": { "type": "string" },
+                    "name": { "type": "string" },
+                    "kind": { "type": "string" },
+                    "language": { "type": "string" },
+                    "file": { "type": "string" },
+                    "line_start": { "type": "integer" },
+                    "line_end": { "type": "integer" },
+                    "is_test": { "type": "boolean" },
+                    "depth": { "type": "integer" },
+                    "direction": { "type": "string" },
+                    "via": {
+                        "oneOf": [
+                            { "$ref": "#/$defs/trace_edge" },
+                            { "type": "null" }
+                        ]
+                    }
+                },
+                "required": [
+                    "qualified_name",
+                    "name",
+                    "kind",
+                    "language",
+                    "file",
+                    "line_start",
+                    "line_end",
+                    "is_test",
+                    "depth",
+                    "direction",
+                    "via"
+                ]
+            },
+            "trace_edge": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "from": { "type": "string" },
+                    "to": { "type": "string" },
+                    "kind": { "type": "string" },
+                    "file": { "type": "string" },
+                    "line": { "type": ["integer", "null"] },
+                    "confidence": { "type": "number" },
+                    "confidence_tier": { "type": ["string", "null"] }
+                },
+                "required": ["from", "to", "kind", "file", "line", "confidence", "confidence_tier"]
+            },
+            "trace_path": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "found": { "type": "boolean" },
+                    "nodes": { "type": "array", "items": { "type": "string" } },
+                    "edges": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "from": { "type": "string" },
+                                "to": { "type": "string" },
+                                "kind": { "type": "string" }
+                            },
+                            "required": ["from", "to", "kind"]
+                        }
+                    }
+                },
+                "required": ["found", "nodes", "edges"]
+            }
+        })),
+    )
+}
+
 pub(crate) fn get_context_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({

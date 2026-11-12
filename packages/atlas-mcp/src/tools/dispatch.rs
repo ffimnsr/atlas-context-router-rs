@@ -51,6 +51,7 @@ use super::shared::{
     resolve_repo_scope_selection,
 };
 use super::symbols::tool_list_symbols;
+use super::trace::tool_trace_calls;
 
 fn response_file_list(response: &serde_json::Value, pointer: &str) -> Vec<String> {
     response
@@ -140,6 +141,7 @@ fn normalized_contract_tool(name: &str) -> bool {
             | "get_minimal_context"
             | "explain_change"
             | "traverse_graph"
+            | "trace_calls"
             | "get_context"
             | "build_graph"
             | "update_graph"
@@ -426,6 +428,7 @@ pub(crate) fn is_known_tool_name(name: &str) -> bool {
         | "postprocess_graph"
         | "embed_chunks"
         | "traverse_graph"
+        | "trace_calls"
         | "get_minimal_context"
         | "explain_change"
         | "get_context"
@@ -619,6 +622,7 @@ fn call_inner(
         "embed_chunks" => tool_embed_chunks(args, repo_root, db_path, output_format),
         "postprocess_graph" => tool_postprocess_graph(args, repo_root, db_path, output_format),
         "traverse_graph" => tool_traverse_graph(args, repo_root, db_path, output_format),
+        "trace_calls" => tool_trace_calls(args, repo_root, db_path, output_format),
         "get_minimal_context" => tool_get_minimal_context(args, repo_root, db_path, output_format),
         "explain_change" => tool_explain_change(args, repo_root, db_path, output_format),
         "get_context" => tool_get_context(args, repo_root, db_path, output_format),
@@ -768,8 +772,8 @@ fn tool_graph_requirement(name: &str) -> Option<GraphToolRequirement> {
         "query_graph" | "batch_query_graph" | "resolve_symbol" | "explain_query"
         | "list_symbols" => Some(GraphToolRequirement::SymbolLookup),
         // Traversal: blocked on Partial, Corrupt, Missing.
-        "symbol_neighbors" | "traverse_graph" | "cross_file_links" | "concept_clusters"
-        | "list_graph_stats" => Some(GraphToolRequirement::Traversal),
+        "symbol_neighbors" | "traverse_graph" | "trace_calls" | "cross_file_links"
+        | "concept_clusters" | "list_graph_stats" => Some(GraphToolRequirement::Traversal),
         // Analysis: blocked on Partial, Corrupt, Missing.
         "get_context"
         | "get_impact_radius"

@@ -268,6 +268,7 @@ fn tool_output_schema_for(name: &str) -> Option<Value> {
         "get_minimal_context" => Some(get_minimal_context_output_schema()),
         "explain_change" => Some(explain_change_output_schema()),
         "traverse_graph" => Some(traverse_graph_output_schema()),
+        "trace_calls" => Some(trace_calls_output_schema()),
         "get_context" => Some(get_context_output_schema()),
         "get_session_status" => Some(get_session_status_output_schema()),
         "compact_session" => Some(compact_session_output_schema()),

@@ -85,7 +85,7 @@ the tool's documentation for the exact config file location and key name.
 
 - First code-exploration step: call `status` unless graph freshness is already known from current turn.
 - Symbol or usage question: start with `query_graph` or `resolve_symbol`.
-- Caller/callee/test question: use `symbol_neighbors` before wider traversal.
+- Caller/callee/test question: use `symbol_neighbors` for one hop; use `trace_calls` for directional multi-hop chains or a path between two symbols.
 - Broader context needed: use `get_context` before `traverse_graph`.
 - Last resort for relationships: use `traverse_graph` with bounded `max_depth` and `max_nodes`.
 - File reads/edits are OK after Atlas identifies exact files, or when user already named exact files.
@@ -104,7 +104,8 @@ Symbol/usage tasks:
 1. `query_graph` or `resolve_symbol`.
 2. `symbol_neighbors` for direct callers, callees, and tests.
 3. `get_context` for bounded ranked context.
-4. `traverse_graph` only when one-hop context is insufficient.
+4. `trace_calls` when you need a directional call chain or a path to a target.
+5. `traverse_graph` only when unfiltered multi-hop reachability is needed.
 
 Allowed reasons to escalate:
 - ambiguous symbol resolution
@@ -134,7 +135,7 @@ Runtime docs are canonical for current arguments and output contracts. Do not tr
 ### Common tool map
 
 - symbol lookup: `query_graph`, `resolve_symbol`
-- relationships: `symbol_neighbors`, `traverse_graph`, `get_context`
+- relationships: `symbol_neighbors`, `trace_calls`, `traverse_graph`, `get_context`
 - review/change context: `detect_changes`, `get_minimal_context`, `get_review_context`
 - impact/risk: `get_impact_radius`, `explain_change`, `assess_risk`, `analyze_safety`
 - graph build: `build_graph` with `{}` for missing/corrupt graph DB or full reindex; `update_graph` with direct `change_source` for incremental refresh

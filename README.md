@@ -537,6 +537,20 @@ atlas doctor
 atlas db-check
 ```
 
+## Call Tracing (`atlas trace`)
+
+`atlas trace` follows call chains from one symbol: upward to its callers, downward to its callees, or both. It follows `calls` edges by default, resolves every hop to a real graph node, and can return the shortest call path to another symbol.
+
+```bash
+atlas trace build_graph --direction down --depth 2
+atlas trace reconcile_call_targets --direction up
+atlas trace build_graph --to resolve_import_target
+atlas trace build_graph --edge-kind calls --edge-kind implements
+atlas --json trace build_graph --direction down
+```
+
+`--direction` accepts `down` (default), `up`, or `both`; `--edge-kind` is repeatable; `--depth` (default 3) and `--max-nodes` (default 200) bound the trace. `FROM` and `--to` accept a symbol name or qualified name; ambiguous names return candidates.
+
 ## Context Engine (`atlas context`)
 
 `atlas context` builds bounded, machine-readable context around a symbol, file, or change-set.
@@ -770,6 +784,7 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `embed_chunks` | Generate and persist vectors for un-embedded retrieval chunks |
 | `postprocess_graph` | Refresh derived graph analytics after build/update without reparsing |
 | `traverse_graph` | Bi-directional graph traversal from a qualified name |
+| `trace_calls` | Directional call-chain trace: callers, callees, or shortest path to a target |
 | `get_minimal_context` | Auto-detect changes and return compact impact bundle |
 | `explain_change` | Advanced impact: risk, change kinds, boundary/test gaps |
 | `get_session_status` | Current session identity, event count, and resume state |

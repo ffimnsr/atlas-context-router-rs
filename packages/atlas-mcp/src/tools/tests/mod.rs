@@ -22,6 +22,7 @@ mod parity_args;
 mod readiness;
 mod registry;
 mod symbols;
+mod trace;
 
 pub(super) struct McpFixture {
     pub(super) _dir: TempDir,

@@ -27,6 +27,7 @@ mod postprocess;
 mod recovery;
 mod search;
 mod taxonomy;
+mod trace;
 mod vec_index;
 
 #[test]

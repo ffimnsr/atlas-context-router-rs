@@ -115,6 +115,23 @@ pub(super) fn tools() -> Vec<Value> {
                 }
         }),
         json!({
+                "name": "trace_calls",
+                "description": "Directional call-chain trace from a symbol. Follows callers (up), callees (down), or both, bounded by depth and node caps, and optionally finds the shortest call path to a target symbol. Resolves call edges only to real graph nodes so expression-level targets do not pollute the chain.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "from":       { "type": "string",  "description": "Starting symbol name or qualified name (e.g. 'build_graph' or 'src/lib.rs::fn::build_graph')." },
+                        "to":         { "type": "string",  "description": "Optional target symbol for shortest-path tracing instead of a full trace." },
+                        "direction":  { "type": "string",  "description": "Trace direction: down (callees, default), up (callers), or both." },
+                        "edge_kinds": { "type": "array", "items": { "type": "string" }, "description": "Edge kinds to follow (default ['calls']). Accepts calls, imports, contains, defines, implements, extends, tests, references, tested_by." },
+                        "max_depth":  { "type": "integer", "description": "Maximum hops from the root (default 3)." },
+                        "max_nodes":  { "type": "integer", "description": "Maximum symbols in the trace (default 200)." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["from"]
+                }
+        }),
+        json!({
                 "name": "symbol_neighbors",
                 "description": "Return the immediate graph neighbourhood of a symbol: callers, callees, call edge sites with source lines, test nodes, containment siblings, and import-linked nodes. Useful for understanding a symbol's role and exact direct usage sites without a full traversal.",
                 "inputSchema": {

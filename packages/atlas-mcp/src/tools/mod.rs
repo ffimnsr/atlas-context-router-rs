@@ -11,6 +11,7 @@ mod postprocess;
 mod registry;
 pub(crate) mod shared;
 mod symbols;
+mod trace;
 
 pub use dispatch::call;
 pub(crate) use dispatch::{call_with_worker_threads, is_known_tool_name};

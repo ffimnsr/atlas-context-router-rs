@@ -420,6 +420,7 @@ fn typed_graph_schemas_preserve_required_fields_and_descriptions() {
             "resolve_symbol" => ["name"].into_iter().map(ToOwned::to_owned).collect(),
             "symbol_neighbors" => ["qname"].into_iter().map(ToOwned::to_owned).collect(),
             "traverse_graph" => ["from_qn"].into_iter().map(ToOwned::to_owned).collect(),
+            "trace_calls" => ["from"].into_iter().map(ToOwned::to_owned).collect(),
             "cross_file_links" => ["file"].into_iter().map(ToOwned::to_owned).collect(),
             "concept_clusters" => ["files"].into_iter().map(ToOwned::to_owned).collect(),
             "list_symbols" => BTreeSet::new(),

@@ -477,6 +477,12 @@ For active backlog, see ISSUES.md.
 - `atlas symbols` and MCP `list_symbols` are implemented for paginated repo symbol inventory with kind, language, subpath, and repo_id filters, shared kind-alias normalization in `atlas-core`, totals, and `next_offset` paging.
 - A `/symbols` shell command is implemented over the same service surface.
 
+## Directional Call Tracing
+
+- `atlas trace <FROM>` and MCP `trace_calls` are implemented for directional call-chain tracing with `up`, `down`, and `both` directions, an `--edge-kind` / `edge_kinds` filter defaulting to `calls`, depth and node caps, and a `--to` / `to` shortest-path mode over the same direction and edge-kind constraints.
+- Trace hops join graph nodes in SQL, so unresolved expression-level call targets never enter the chain, and the legacy bidirectional `traverse_graph` walk remains unchanged for general reachability.
+- CLI text output renders per-hop direction markers, edge kind, and source site, while JSON output mirrors the MCP node, edge, path, and summary shape.
+
 ## Developer Tooling and Reporting
 
 - A canonical `docs/error_codes.md` catalog is implemented and referenced by README, MCP responses, and tests as the single error-code source.

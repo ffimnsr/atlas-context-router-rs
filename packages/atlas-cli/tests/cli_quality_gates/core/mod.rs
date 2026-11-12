@@ -31,6 +31,7 @@ mod review;
 mod serve;
 mod session;
 mod snapshots;
+mod trace;
 mod version;
 mod wake_up;
 mod worktree;

@@ -25,6 +25,7 @@ mod repo;
 mod session;
 mod shell_symbols;
 mod symbols;
+mod trace;
 mod uri;
 mod wake_up;
 
@@ -53,6 +54,7 @@ pub use reasoning::{run_analyze, run_refactor};
 pub use repo::run_repo;
 pub use session::run_session;
 pub use symbols::run_symbols;
+pub use trace::run_trace;
 pub use uri::run_uri;
 pub use wake_up::run_wake_up;
 

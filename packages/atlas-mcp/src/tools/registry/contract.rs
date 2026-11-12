@@ -55,6 +55,7 @@ pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
         | "get_minimal_context"
         | "explain_change"
         | "traverse_graph"
+        | "trace_calls"
         | "get_context"
         | "build_graph"
         | "update_graph"

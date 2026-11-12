@@ -296,6 +296,46 @@ pub enum Command {
         allow_partial: bool,
     },
 
+    /// Follow call chains from a symbol: callers, callees, or a path to a target.
+    ///
+    /// Examples:
+    ///   atlas trace build_graph --direction down --depth 2
+    ///   atlas trace build_graph --direction up
+    ///   atlas trace build_graph --to reconcile_call_targets
+    Trace {
+        /// Starting symbol name or qualified name.
+        #[arg(value_name = "FROM")]
+        from: String,
+
+        /// Target symbol for shortest-path tracing.
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Trace direction: down (callees, default), up (callers), or both.
+        #[arg(long, default_value = "down")]
+        direction: String,
+
+        /// Edge kinds to follow (repeatable; default calls).
+        #[arg(long = "edge-kind", value_name = "KIND")]
+        edge_kinds: Vec<String>,
+
+        /// Maximum hops from the root (default: 3).
+        #[arg(long, default_value_t = 3)]
+        depth: u32,
+
+        /// Maximum symbols in the trace (default: 200).
+        #[arg(long, default_value_t = 200)]
+        max_nodes: usize,
+
+        /// Allow traversal on a stale graph; prints a freshness warning.
+        #[arg(long)]
+        allow_stale: bool,
+
+        /// Allow traversal on a partial (degraded) graph.
+        #[arg(long)]
+        allow_partial: bool,
+    },
+
     /// Show runtime manual for one visible exported MCP tool.
     Man {
         /// Manual namespace. Must be `mcp`.

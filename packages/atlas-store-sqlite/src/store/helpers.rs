@@ -180,10 +180,18 @@ fn rewrite_known_path_prefixes(value: &str, mappings: &[(&str, &str)]) -> String
 }
 
 pub(super) fn row_to_node(row: &Row<'_>) -> rusqlite::Result<Node> {
-    let kind_str: String = row.get(1)?;
+    row_to_node_at(row, 0)
+}
+
+/// Decode a node whose column block starts at `base`.
+///
+/// Used by queries that project a node plus an edge (or other columns) in the
+/// same row without changing the sharing column order.
+pub(super) fn row_to_node_at(row: &Row<'_>, base: usize) -> rusqlite::Result<Node> {
+    let kind_str: String = row.get(base + 1)?;
     let kind = kind_str.parse::<NodeKind>().unwrap_or(NodeKind::Function);
 
-    let extra_str: Option<String> = row.get(14)?;
+    let extra_str: Option<String> = row.get(base + 14)?;
     let extra_json = extra_str
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok())
@@ -192,30 +200,35 @@ pub(super) fn row_to_node(row: &Row<'_>) -> rusqlite::Result<Node> {
     let repo_provenance = parse_repo_provenance(&extra_json);
 
     Ok(Node {
-        id: NodeId(row.get(0)?),
+        id: NodeId(row.get(base)?),
         kind,
-        name: row.get(2)?,
-        qualified_name: row.get(3)?,
-        file_path: row.get(4)?,
-        line_start: row.get(5)?,
-        line_end: row.get(6)?,
-        language: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
-        parent_name: row.get(8)?,
-        params: row.get(9)?,
-        return_type: row.get(10)?,
-        modifiers: row.get(11)?,
-        is_test: row.get::<_, i32>(12)? != 0,
-        file_hash: row.get::<_, Option<String>>(13)?.unwrap_or_default(),
+        name: row.get(base + 2)?,
+        qualified_name: row.get(base + 3)?,
+        file_path: row.get(base + 4)?,
+        line_start: row.get(base + 5)?,
+        line_end: row.get(base + 6)?,
+        language: row.get::<_, Option<String>>(base + 7)?.unwrap_or_default(),
+        parent_name: row.get(base + 8)?,
+        params: row.get(base + 9)?,
+        return_type: row.get(base + 10)?,
+        modifiers: row.get(base + 11)?,
+        is_test: row.get::<_, i32>(base + 12)? != 0,
+        file_hash: row.get::<_, Option<String>>(base + 13)?.unwrap_or_default(),
         extra_json,
         repo_provenance,
     })
 }
 
 pub(super) fn row_to_edge(row: &Row<'_>) -> rusqlite::Result<Edge> {
-    let kind_str: String = row.get(1)?;
+    row_to_edge_at(row, 0)
+}
+
+/// Decode an edge whose column block starts at `base`.
+pub(super) fn row_to_edge_at(row: &Row<'_>, base: usize) -> rusqlite::Result<Edge> {
+    let kind_str: String = row.get(base + 1)?;
     let kind = kind_str.parse::<EdgeKind>().unwrap_or(EdgeKind::References);
 
-    let extra_str: Option<String> = row.get(8)?;
+    let extra_str: Option<String> = row.get(base + 8)?;
     let extra_json = extra_str
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok())
@@ -224,14 +237,14 @@ pub(super) fn row_to_edge(row: &Row<'_>) -> rusqlite::Result<Edge> {
     let repo_provenance = parse_repo_provenance(&extra_json);
 
     Ok(Edge {
-        id: row.get(0)?,
+        id: row.get(base)?,
         kind,
-        source_qn: row.get(2)?,
-        target_qn: row.get(3)?,
-        file_path: row.get(4)?,
-        line: row.get(5)?,
-        confidence: row.get(6)?,
-        confidence_tier: row.get(7)?,
+        source_qn: row.get(base + 2)?,
+        target_qn: row.get(base + 3)?,
+        file_path: row.get(base + 4)?,
+        line: row.get(base + 5)?,
+        confidence: row.get(base + 6)?,
+        confidence_tier: row.get(base + 7)?,
         extra_json,
         repo_provenance,
     })

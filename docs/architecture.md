@@ -201,7 +201,7 @@ Atlas has two coordinated retrieval surfaces: the graph (symbol and relationship
 
 | Surface | Answers |
 | ------- | ------- |
-| **Graph search** (`query_graph`, `symbol_neighbors`, `traverse_graph`, `get_context`) | Symbols, ownership, callers, callees, tests, imports, and structural relationships |
+| **Graph search** (`query_graph`, `symbol_neighbors`, `traverse_graph`, `trace_calls`, `get_context`) | Symbols, ownership, callers, callees, call chains, tests, imports, and structural relationships |
 | **Content lookup** (`search_content`, `search_files`, `search_templates`, `search_text_assets`) | Prompts, docs, config, SQL, templates, logs, and embedded text assets |
 | **Saved-context lookup** (`search_saved_context`, `read_saved_context`) | Prior Atlas outputs and session artifacts from `context.db` |
 | **Context engine** (`get_context`, `get_review_context`) | Merges both surfaces under one bounded selection, ranking, evidence, and truncation policy |

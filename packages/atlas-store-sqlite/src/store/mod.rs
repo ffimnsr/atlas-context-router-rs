@@ -14,6 +14,7 @@ mod recovery;
 mod retrieval;
 mod search;
 mod taxonomy;
+mod trace;
 
 pub use self::build_state::{BuildFinishStats, GraphBuildState, GraphBuildStatus};
 pub use self::context::{ConfidenceTierEdge, SemanticReferenceEdge};
@@ -25,6 +26,9 @@ pub use self::history::{
 };
 pub use self::recovery::{GraphRecoveryMode, GraphStoreRecovery, GraphStoreRecoveryError};
 pub use self::retrieval::{DEFAULT_TRIEHI_MIN_CHUNKS, VectorScope};
+pub use self::trace::{
+    TraceDirection, TraceNode, TraceOptions, TracePath, TracePathResult, TraceResult,
+};
 
 type DanglingEdge = (i64, String, String, String, &'static str);
 

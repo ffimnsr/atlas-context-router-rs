@@ -84,6 +84,7 @@ const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "tool_help",
     "tool_list",
     "tool_search",
+    "trace_calls",
     "traverse_graph",
     "update_graph",
     "wake_up",

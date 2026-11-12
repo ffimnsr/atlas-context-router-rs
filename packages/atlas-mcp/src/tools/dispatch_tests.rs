@@ -264,6 +264,9 @@ fn schema_test_args(name: &str, saved_source_id: &str, repo_root: &str) -> serde
         "traverse_graph" => {
             json!({"from_qn": "src/lib.rs::fn::greet", "output_format": "json"})
         }
+        "trace_calls" => {
+            json!({"from": "src/lib.rs::fn::greet", "direction": "down", "output_format": "json"})
+        }
         "get_minimal_context" => {
             json!({"change_source": {"kind": "working_tree"}, "output_format": "json"})
         }
