@@ -39,16 +39,16 @@ For terms that are easy to misread in this document:
 
 ## Roadmap Layout
 
-- Part V. Remaining focused follow-up patches: Retrieval Follow-Up Patch remainder, Runtime Event Classification and Resume Grouping Patch, Reachability Measurement and Rust Guard Patch, Shared Parser Query Migration Patch remainder, Context Escalation Contract Patch, Dynamic Agent Policy and Hook Enforcement Patch.
+- Part V. Remaining focused follow-up patches: Retrieval Follow-Up Patch remainder, Runtime Event Classification and Resume Grouping Patch, Reachability Measurement and Rust Guard Patch, Shared Parser Query Migration Patch remainder, and Minimal-Context Escalation Metadata Patch. Runtime policy surface is deferred.
 - Part XII. Remaining RAG follow-up: deferred memory-operator wiring only. VM1–VM3, VR1–VR4, and VQ1 are shipped; see SHIPPED.md.
 
 ## Cross-Cutting Track Map
 
 - Retrieval and search follow-ups: Retrieval Follow-Up Patch remainder
 - Context continuity and runtime memory: Runtime Event Classification and Resume Grouping Patch
-- Graph safety and workflow: Context Escalation Contract Patch
+- Graph safety and workflow: Minimal-Context Escalation Metadata Patch
 - Rust parser correctness: Reachability Measurement and Rust Guard Patch, Shared Parser Query Migration Patch remainder
-- Agent policy and enforcement: Dynamic Agent Policy and Hook Enforcement Patch
+- Agent policy and enforcement: no active work; runtime policy surface is deferred
 - RAG adaptation: deferred memory-operator wiring in Part XII; all retrieval and memory tracks shipped
 
 ---
@@ -366,250 +366,67 @@ Remaining:
 
 ---
 
-### Context Escalation Contract Patch
+### Minimal-Context Escalation Metadata Patch
 
-Atlas has compact context tools, review context, symbol lookup, neighbor tools, and wider traversal tools, but the preferred order is currently only hinted in prompts and installed instructions. Make the core agent workflow explicit: start with the smallest bounded graph context that can answer the question, then escalate only when evidence says broader context is needed.
+The canonical minimal-first workflow and its agent-facing surfaces are shipped: installed AGENTS instructions, `review_change` and `inspect_symbol` prompts, README, and MCP tool guidance all document the same order. VR3 also emits evidence-sufficiency and escalation metadata for context and review results.
 
-#### Patch E1 — Define minimal-context-first workflow
+Do not add internal minimal-context enforcement to higher-level tools. It duplicates retrieval already performed by those tools, adds latency and tokens, and conflicts with explicit tool contracts such as review, impact, and refactor planning that need their full target set.
 
-- [ ] document canonical escalation order for review/change tasks:
-  - [ ] `detect_changes` when files are unknown
-  - [ ] `get_minimal_context` for first bounded triage
-  - [ ] `get_review_context` only when changed-symbol, neighbor, or risk detail is needed
-  - [ ] `explain_change` when deterministic risk/test-gap explanation is needed
-  - [ ] `get_impact_radius` when explicit blast radius is needed
-- [ ] document canonical escalation order for symbol/usage tasks:
-  - [ ] `query_graph` / `resolve_symbol` first
-  - [ ] `symbol_neighbors` for direct callers/callees/tests
-  - [ ] `get_context` for bounded ranked context
-  - [ ] `traverse_graph` only when one-hop context is insufficient
-- [ ] define allowed reasons to escalate:
-  - [ ] ambiguous symbol resolution
-  - [ ] truncated result
-  - [ ] missing caller/callee/test evidence
-  - [ ] cross-file or cross-package risk
-  - [ ] explicit user request for broader context
-  - [ ] safety-critical uncertainty
-- [ ] define anti-patterns:
-  - [ ] starting review with full review context when minimal context is enough
-  - [ ] using traversal before symbol resolution
-  - [ ] using file search before graph tools answer structural questions
-  - [ ] broad traversal without a bounded max depth and max nodes
+Rules:
 
-Why:
-- reduces token load and noisy context
-- keeps graph workflows deterministic and cheap by default
+- keep escalation evidence-driven and deterministic
+- do not add a second retrieval pass inside tools that already resolve their targets
+- keep default output stable when no escalation is justified
+- keep prompt, README, installed instructions, and tool descriptions aligned
 
-#### Patch E2 — Surface contract in MCP, prompts, and installed instructions
+Implementation structure:
 
-- [ ] update MCP tool descriptions to mention minimal-first escalation where relevant
-- [ ] update `review_change` prompt to make minimal context first a requirement, not just a recommendation
-- [ ] update `inspect_symbol` prompt to require direct-neighbor context before wider traversal
-- [ ] update README MCP workflow section to match same order
-- [ ] ensure wording is consistent across CLI install block, MCP prompts, and README
+#### Patch E3 — Escalation hints on minimal context and neighbors
 
-Why:
-- agents follow tool descriptions and prompts more reliably than implicit design intent
-- one workflow description prevents drift across docs and MCP metadata
+- [ ] add `next_tools: Vec<String>` and `recommended_escalation_reason: Option<String>` to `get_minimal_context` output in `packages/atlas-mcp/src/tools/context_ops/minimal.rs`, skipped from JSON when empty or absent
+- [ ] map `summary.truncated = true` to `next_tools = ["get_review_context"]` and reason `truncated`
+- [ ] map `deleted_files_present` to `next_tools` including `get_impact_radius` and reason `deleted_files`
+- [ ] map `test_impact` to `next_tools` including `get_review_context` and reason `missing_tests`
+- [ ] leave both fields empty when the result is complete and unambiguous
+- [ ] add the same fields to `symbol_neighbors` output in `packages/atlas-mcp/src/tools/graph.rs` when budget metadata reports truncation
+- [ ] map neighbor truncation to `next_tools = ["get_context", "traverse_graph"]` and reason `truncated`
+- [ ] update MCP output schemas for `get_minimal_context` and `symbol_neighbors` with optional `next_tools` and `recommended_escalation_reason`
+- [ ] add tests for complete output, truncated output, deleted-file output, and test-impact output
+- [ ] audit MCP tool descriptions for `get_review_context`, `get_impact_radius`, `explain_change`, `get_context`, and `traverse_graph`; add minimal-first wording where missing
+- [ ] add a drift test that asserts the same escalation order appears in `packages/atlas-cli/src/install/instructions.rs`, `packages/atlas-mcp/src/prompts.rs`, and README
 
-#### Patch E2.5 — Enforce minimal-context-first inside higher-level tools
+#### Rejected enforcement
 
-- [ ] require higher-level tools to start from minimal bounded context internally unless explicitly bypassed:
-  - [ ] `get_review_context`
-  - [ ] `explain_change`
-  - [ ] `get_impact_radius`
-  - [ ] `analyze_safety`
-  - [ ] `analyze_remove`
-  - [ ] `analyze_dead_code`
-  - [ ] `analyze_dependency`
-  - [ ] refactor planning tools
-- [ ] define explicit bypass reasons:
-  - [ ] user requested full context
-  - [ ] minimal context is truncated
-  - [ ] minimal context reports ambiguity
-  - [ ] tool requires full impact graph by contract
-  - [ ] configured safety policy requires broader context
-- [ ] include metadata showing whether minimal context was used, bypassed, or escalated:
-  - [ ] `minimal_context_used`
-  - [ ] `minimal_context_bypassed`
-  - [ ] `escalation_reason`
-  - [ ] `next_tools`
-- [ ] add tests proving review/analyze/impact tools do not over-fetch when minimal context is sufficient
+- [ ] do not require `get_review_context`, `explain_change`, `get_impact_radius`, `analyze_*`, or refactor tools to run `get_minimal_context` internally; VR3 sufficiency already escalates when evidence is missing
 
-Why:
-- workflow guidance is weaker than internal enforcement
-- higher-level tools should not silently bypass bounded triage
+#### Patch completion criteria
 
-#### Patch E3 — Add escalation metadata and tests where practical
-
-- [ ] include response metadata that helps decide whether to escalate:
-  - [ ] `truncated`
-  - [ ] `omitted_count`
-  - [ ] `ambiguity`
-  - [ ] `next_tools`
-  - [ ] `recommended_escalation_reason`
-- [ ] ensure `get_minimal_context` reports when review context would add useful detail
-- [ ] ensure `symbol_neighbors` reports when traversal may be needed because caps were hit
-- [ ] add prompt/registry snapshot tests for minimal-first contract wording
-- [ ] add MCP response tests for escalation metadata on truncated/ambiguous outputs
-
-Why:
-- tools should tell agents when more context is justified
-- escalation should be evidence-driven, not habit-driven
-
-#### Patch E completion criteria
-
-- [ ] minimal-context-first contract is documented as required workflow
-- [ ] higher-level tools internally start from minimal context or emit explicit bypass metadata
-- [ ] MCP prompts, tool descriptions, README, and installed AGENTS instructions agree
-- [ ] graph/context responses expose enough metadata to justify escalation
-- [ ] tests protect contract wording and escalation metadata
+- [ ] `get_minimal_context` and `symbol_neighbors` emit escalation hints only when justified
+- [ ] complete results keep default output byte-stable
+- [ ] context and review tools keep VR3 sufficiency metadata
+- [ ] prompt, installed instructions, README, and tool descriptions agree on escalation order
+- [ ] no tool performs a hidden second retrieval pass
 
 ---
 
-### Dynamic Agent Policy and Hook Enforcement Patch
+### Runtime Policy Surface — Deferred
 
-Atlas already installs static AGENTS/CLAUDE instructions and platform hook files, but current workflow policy still lives mostly in static text. Add one runtime policy surface plus hard hook enforcement so agents can load fresh Atlas workflow guidance at session start without trying to make markdown executable.
+Not worth implementing now. Static AGENTS/CLAUDE instructions, install bootstrap text, MCP prompts, and hook capture already carry graph-first and minimal-first workflow guidance. A runtime `agent_instructions` tool plus hook-boundary enforcement adds a policy cache, version negotiation, protected-tool blocking, and host-specific fallback without measured compliance gain.
 
-#### Patch A1 — Canonical runtime policy contract
+Blockers:
 
-- [ ] define compact `AgentInstructionsPolicy` model in shared service code with fields:
-  - [ ] `policy_version`
-  - [ ] `generated_at`
-  - [ ] `frontend`
-  - [ ] `policy_mode`
-  - [ ] `required_first_step`
-  - [ ] `required_tool_order`
-  - [ ] `protected_tools`
-  - [ ] `forbidden_patterns`
-  - [ ] `fallback_behavior`
-  - [ ] `trust_notes`
-  - [ ] `source`
-- [ ] keep policy payload deterministic and compact enough for hook/session injection
-- [ ] make one shared Rust service produce policy for both MCP tool calls and `atlas hook`
-- [ ] version policy explicitly so hooks can detect stale cached payloads
-- [ ] add serde round-trip tests for policy schema stability
+- hard enforcement conflicts with the existing best-effort hook contract and must not block primary CLI/MCP flow
+- hosts without native hooks cannot enforce preload, so behavior diverges by host
+- protected-tool blocking can break valid sessions when policy preload is delayed or unavailable
+- static instructions and VR3 escalation metadata already cover the guidance
 
-Why:
-- runtime workflow policy should have one source of truth
-- MCP tool output, hook preload, prompts, and installed instructions must not drift
+Revisit only if:
 
-#### Patch A2 — MCP `agent_instructions` tool surface
+- a host provides reliable mandatory pre-tool hooks
+- measured cases show agents ignoring static guidance
+- runtime policy versioning is required for compliance
 
-- [ ] add `agent_instructions` to MCP tool registry in `packages/atlas-mcp/src/tools/registry.rs`
-- [ ] add dispatch arm in `packages/atlas-mcp/src/tools/dispatch.rs`
-- [ ] implement handler that returns current `AgentInstructionsPolicy`
-- [ ] accept explicit inputs:
-  - [ ] `frontend`
-  - [ ] `policy_mode`
-  - [ ] `include_fallback_static_rules`
-  - [ ] `output_format`
-- [ ] default output to compact agent-facing payload suitable for session preload
-- [ ] include TOON and JSON parity tests for tool output
-- [ ] add registry snapshot test so installed instructions and MCP registry stay aligned
-
-Why:
-- agent needs runtime policy as normal Atlas surface, not hidden ad hoc hook text
-- hook runner should reuse same policy source returned by MCP
-
-#### Patch A3 — Installed instruction bootstrap text
-
-- [ ] update install-generated instruction block in `packages/atlas-cli/src/install/instructions.rs`
-- [ ] replace duplicated workflow detail with explicit bootstrap rule:
-  - [ ] call `agent_instructions` before substantive repo exploration
-  - [ ] use static AGENTS rules only when runtime policy is unavailable
-  - [ ] keep graph-first and minimal-context-first invariants in static text
-- [ ] keep injected section idempotent under existing instruction markers
-- [ ] add install test proving stale injected section is replaced with new bootstrap wording
-- [ ] add install test proving user-authored content before and after injected section is preserved
-
-Why:
-- static markdown should bootstrap runtime policy, not duplicate mutable operational rules
-- install flow already owns AGENTS.md injected guidance and should remain source for static bootstrap text
-
-#### Patch A4 — Generic hook runner preload integration
-
-- [ ] extend the generic `.atlas/hooks/atlas-hook` runner so preload path calls shared Rust policy service instead of duplicating JSON assembly in shell
-- [ ] preload runtime policy on session-start and prompt-submit at the runner/CLI boundary
-- [ ] keep preload host-agnostic; Atlas does not generate per-tool hook config files
-- [ ] cache last successful compact policy payload under `.atlas/hooks/lib/` with version/hash metadata
-- [ ] define bounded cache TTL or invalidation rule so long sessions can refresh policy safely
-- [ ] add tests for runner preload output after install
-
-Why:
-- existing generic hook runner already exists and should carry runtime policy preload
-- session-start and prompt-submit are strongest points for loading fresh policy before work begins
-
-#### Patch A5 — Hard enforcement at hook boundary
-
-- [ ] make hook enforcement check whether current session has loaded valid policy version before protected tool execution
-- [ ] define initial protected tool set:
-  - [ ] `query_graph`
-  - [ ] `get_context`
-  - [ ] `get_review_context`
-  - [ ] `get_minimal_context`
-  - [ ] `get_impact_radius`
-  - [ ] `explain_change`
-  - [ ] graph-backed analysis tools
-  - [ ] refactor planning tools
-- [ ] define exempt diagnostic/repair tools that remain fail-open when policy preload fails:
-  - [ ] `status`
-  - [ ] `doctor`
-  - [ ] `db_check`
-  - [ ] `debug_graph`
-  - [ ] `build_or_update_graph`
-- [ ] return explicit enforcement decision metadata:
-  - [ ] `policy_loaded`
-  - [ ] `policy_version`
-  - [ ] `enforcement_mode`
-  - [ ] `blocked_reason`
-  - [ ] `fallback_active`
-- [ ] record enforcement events through existing adapter/session APIs; do not let hooks write SQLite directly
-- [ ] add integration test proving protected tool is blocked before preload and allowed after preload
-
-Why:
-- AGENTS text alone cannot guarantee runtime behavior
-- hook boundary is correct deterministic enforcement point for required policy preload
-
-#### Patch A6 — Fallback and degraded-mode behavior
-
-- [ ] define explicit fallback path when runtime policy fetch fails:
-  - [ ] static AGENTS/install rules remain active
-  - [ ] protected tools use configured fail-open or fail-closed behavior by class
-  - [ ] fallback state is surfaced in metadata instead of silent skip
-- [ ] ensure fallback does not bypass graph-readiness checks or existing safety gates
-- [ ] ensure fallback path remains deterministic when cache exists but live fetch fails
-- [ ] add tests for:
-  - [ ] live fetch failure with valid cache
-  - [ ] live fetch failure without cache
-  - [ ] stale cache version rejection
-  - [ ] explicit degraded metadata in hook/session output
-
-Why:
-- runtime policy fetch can fail and behavior must stay explicit, bounded, and safe
-- degraded mode should not silently weaken existing Atlas safety contracts
-
-#### Patch A7 — Prompt and documentation consistency
-
-- [ ] update MCP prompts in `packages/atlas-mcp/src/prompts.rs` to mention `agent_instructions` as first runtime step where relevant
-- [ ] update installed AGENTS instructions to reference runtime-policy bootstrap and fallback rules
-- [ ] update README and wiki MCP workflow docs to match same wording
-- [ ] ensure graph/content companion wording and minimal-context-first wording stay consistent with runtime-policy contract
-- [ ] add snapshot tests protecting prompt/install/doc wording from drift
-
-Why:
-- prompts and installed instructions are agent-facing control surfaces and must agree
-- runtime policy is only useful if every workflow surface points to same first-step contract
-
-#### Patch A completion criteria
-
-- [ ] `agent_instructions` exists as MCP tool with stable compact output
-- [ ] installed AGENTS/bootstrap text tells agents to call `agent_instructions` first and defines fallback clearly
-- [ ] the generic `.atlas/hooks/atlas-hook` runner preloads runtime policy on session/prompt start
-- [ ] protected Atlas tools are blocked when required policy preload has not happened
-- [ ] fallback mode is explicit, deterministic, and covered by tests
-- [ ] prompts, installed instructions, README, and wiki workflow docs agree on runtime-policy-first behavior
-- [ ] adapter/session event flow records policy preload and enforcement decisions without direct hook SQLite writes
+If revisited, limit the first step to a read-only `agent_instructions` MCP tool returning compact policy metadata. Do not add hook-boundary blocking, policy caches, or protected-tool enforcement.
 
 ---
 
