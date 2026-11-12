@@ -14,6 +14,7 @@ use super::helpers::fts5_escape;
 use super::*;
 
 mod build_state;
+mod chunk_embedding;
 mod concurrency;
 mod context;
 mod graph;

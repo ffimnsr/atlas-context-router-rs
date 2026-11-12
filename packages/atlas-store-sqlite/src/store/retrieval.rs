@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use atlas_core::{
     AtlasError, Node, ParsedFile, RankingEvidence, Result, RetrievalMode, ScoredNode,
     SearchMatchedField,
@@ -186,6 +188,20 @@ impl Store {
         self.conn.execute_batch("BEGIN IMMEDIATE").map_err(db_err)?;
 
         let result = (|| {
+            // Preserve vectors for chunks whose text did not change. Re-parsing a
+            // file must not force a full re-embed of every symbol it contains.
+            let mut select_stmt = self
+                .conn
+                .prepare(
+                    "SELECT rc.node_qn, rc.chunk_idx, rc.text, rc.embedding
+                     FROM retrieval_chunks rc
+                     WHERE rc.source_repo_id = ?1
+                       AND rc.node_qn IN (
+                           SELECT qualified_name FROM nodes
+                           WHERE source_repo_id = ?1 AND file_path = ?2
+                       )",
+                )
+                .map_err(db_err)?;
             let mut delete_stmt = self
                 .conn
                 .prepare(
@@ -200,25 +216,51 @@ impl Store {
             let mut upsert_stmt = self
                 .conn
                 .prepare(
-                    "INSERT INTO retrieval_chunks (source_repo_id, node_qn, chunk_idx, text)
-                     VALUES (?1, ?2, ?3, ?4)
+                    "INSERT INTO retrieval_chunks (source_repo_id, node_qn, chunk_idx, text, embedding)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
                      ON CONFLICT(source_repo_id, node_qn, chunk_idx)
-                     DO UPDATE SET text = excluded.text",
+                     DO UPDATE SET text = excluded.text, embedding = excluded.embedding",
                 )
                 .map_err(db_err)?;
 
             let mut written = 0usize;
             for parsed_file in files {
+                type ChunkKey = (String, i32);
+                type ChunkSnapshot = (String, Option<Vec<u8>>);
+                let mut previous: HashMap<ChunkKey, ChunkSnapshot> = HashMap::new();
+                {
+                    let rows = select_stmt
+                        .query_map(params![source_repo_id, parsed_file.path], |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, i32>(1)?,
+                                row.get::<_, String>(2)?,
+                                row.get::<_, Option<Vec<u8>>>(3)?,
+                            ))
+                        })
+                        .map_err(db_err)?;
+                    for row in rows {
+                        let (node_qn, chunk_idx, text, embedding) = row.map_err(db_err)?;
+                        previous.insert((node_qn, chunk_idx), (text, embedding));
+                    }
+                }
+
                 delete_stmt
                     .execute(params![source_repo_id, parsed_file.path])
                     .map_err(db_err)?;
                 for node in &parsed_file.nodes {
+                    let text = node.chunk_text();
+                    let embedding = previous
+                        .get(&(node.qualified_name.clone(), 0))
+                        .filter(|(old_text, _)| old_text == &text)
+                        .and_then(|(_, embedding)| embedding.clone());
                     upsert_stmt
                         .execute(params![
                             source_repo_id,
                             node.qualified_name,
                             0,
-                            node.chunk_text()
+                            text,
+                            embedding
                         ])
                         .map_err(db_err)?;
                     written += 1;
