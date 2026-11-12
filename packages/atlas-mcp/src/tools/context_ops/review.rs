@@ -16,6 +16,10 @@ pub(crate) fn tool_get_review_context(
     let max_depth = u64_arg(args, "max_depth").unwrap_or(3) as u32;
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(200) as usize;
     let token_budget = u64_arg(args, "token_budget").map(|n| n as usize);
+    let include_overviews = bool_arg(args, "include_overviews").unwrap_or(false);
+    let include_stale_overviews = bool_arg(args, "include_stale_overviews").unwrap_or(false);
+    let overview_limit = u64_arg(args, "overview_limit").map(|n| n as usize);
+    let overview_max_bytes = u64_arg(args, "overview_max_bytes").map(|n| n as usize);
 
     let store = open_store(db_path)?;
     let policy = load_budget_policy(repo_root)?;
@@ -32,7 +36,27 @@ pub(crate) fn tool_get_review_context(
         max_nodes: Some(max_nodes),
         depth: Some(max_depth),
         token_budget,
+        include_overviews,
+        overview_limit,
+        overview_max_bytes,
+        overview_freshness: include_stale_overviews.then(|| {
+            vec![
+                "fresh".to_owned(),
+                "possibly_stale".to_owned(),
+                "stale".to_owned(),
+            ]
+        }),
         ..ContextRequest::default()
+    };
+    let overview_session = if include_overviews {
+        atlas_session::SessionStore::open(&atlas_adapters::derive_session_db_path(db_path)).ok()
+    } else {
+        None
+    };
+    let engine = if let Some(session) = overview_session.as_ref() {
+        engine.with_overview_store(repo_root, session)
+    } else {
+        engine
     };
     let result = engine.build(&request).context("context engine failed")?;
     let file_refs: Vec<&str> = resolved.files.iter().map(String::as_str).collect();

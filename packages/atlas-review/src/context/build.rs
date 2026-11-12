@@ -181,6 +181,7 @@ pub(super) fn build_review_context(
         workflow: None,
         saved_context_sources: vec![],
         content_assets: vec![],
+        overviews: vec![],
         budget: impact.budget.clone(),
     };
 

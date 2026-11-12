@@ -222,6 +222,7 @@ pub(super) fn build_symbol_context(
         workflow: None,
         saved_context_sources: vec![],
         content_assets: vec![],
+        overviews: vec![],
         budget: BudgetReport::not_applicable(),
     };
 
@@ -254,6 +255,7 @@ pub(super) fn build_ambiguous_result(
         workflow: None,
         saved_context_sources: vec![],
         content_assets: vec![],
+        overviews: vec![],
         budget: BudgetReport::not_applicable(),
     }
 }
@@ -283,6 +285,7 @@ pub(super) fn build_not_found_result(
         workflow: None,
         saved_context_sources: vec![],
         content_assets: vec![],
+        overviews: vec![],
         budget: BudgetReport::not_applicable(),
     }
 }

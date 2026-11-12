@@ -80,6 +80,7 @@ fn run_cli() -> anyhow::Result<()> {
         Command::Session { .. } => commands::run_session(&cli),
         Command::Memory { .. } => commands::run_memory(&cli),
         Command::Memoir { .. } => commands::run_memoir(&cli),
+        Command::Overview { .. } => commands::run_overview(&cli),
         Command::Feedback { .. } => commands::run_feedback(&cli),
         Command::WakeUp { .. } => commands::run_wake_up(&cli),
         Command::Hook { .. } => commands::run_hook(&cli),

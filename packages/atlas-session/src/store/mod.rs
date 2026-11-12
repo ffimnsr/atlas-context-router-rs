@@ -25,6 +25,7 @@ mod global_memory;
 mod memoir;
 mod memory;
 mod memory_recall;
+mod overview;
 mod resume;
 #[cfg(test)]
 mod tests;
@@ -37,6 +38,18 @@ pub use self::memoir::{
     MEMOIR_RELATION_TYPES, MemoirConcept, MemoirGraph, MemoirInspectQuery, MemoirInspection,
     MemoirInspectionEdge, MemoirRelation, MemoirRelationDirection, NewMemoirConcept,
     NewMemoirGraph, NewMemoirRelation, normalize_memoir_relation,
+};
+pub use self::overview::{
+    NewOverviewRecord, OVERVIEW_DESCRIPTION_PREVIEW_MAX_CHARS, OVERVIEW_INLINE_BODY_BUDGET_BYTES,
+    OVERVIEW_LIST_ITEM_MAX_CHARS, OVERVIEW_LIST_MAX_ITEMS, OVERVIEW_SCHEMA_VERSION,
+    OVERVIEW_SUMMARY_MAX_CHARS, OVERVIEW_TITLE_MAX_CHARS, OverviewAnalysisInput,
+    OverviewAnalysisPacket, OverviewBudgetMeta, OverviewCodeExcerpt, OverviewContextHit,
+    OverviewContextQuery, OverviewDeleteResult, OverviewExportRequest, OverviewExportScope,
+    OverviewFreshness, OverviewGraphProvenance, OverviewListFilter, OverviewPacketBudget,
+    OverviewPacketEvidence, OverviewPacketFreshness, OverviewRanking, OverviewRecord,
+    OverviewSearchFilter, OverviewSearchHit, OverviewSourceKind, OverviewStaleFilter,
+    OverviewSubject, OverviewSubjectKind, bound_new_overview_record, canonicalize_subject_path,
+    packet_id, subject_id, truncate_chars, validate_confidence,
 };
 pub use self::types::{
     AgentMemorySummary, AgentPartitionSummary, AgentResponsibilitySummary, CurationResult,

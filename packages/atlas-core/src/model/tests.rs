@@ -264,6 +264,11 @@ fn sample_context_request_symbol() -> ContextRequest {
         token_budget: None,
         include_content_assets: false,
         max_content_assets: None,
+        include_overviews: false,
+        overview_limit: None,
+        overview_freshness: None,
+        overview_subject_kinds: None,
+        overview_max_bytes: None,
     }
 }
 
@@ -649,6 +654,21 @@ fn context_result_round_trip() {
                 ..ContextRankingEvidence::default()
             }),
         }],
+        overviews: vec![ContextOverview {
+            overview_id: "overview-1".to_string(),
+            subject_id: "subject-1".to_string(),
+            subject_kind: "function".to_string(),
+            title: "compute".to_string(),
+            summary: "computes values".to_string(),
+            preview: "computes values".to_string(),
+            freshness: "fresh".to_string(),
+            confidence: 0.8,
+            selection_reason: "same_symbol".to_string(),
+            source_id: Some("body-1".to_string()),
+            canonical_file_path: Some("src/lib.rs".to_string()),
+            qualified_name: Some("src/lib.rs::fn::compute".to_string()),
+            stale_reason: None,
+        }],
         budget: BudgetReport::within_budget("review_context_extraction.max_nodes", 50, 1),
     };
     let json = serde_json::to_string(&result).unwrap();
@@ -660,6 +680,8 @@ fn context_result_round_trip() {
     assert!(!back.truncation.truncated);
     assert!(back.workflow.is_some());
     assert_eq!(back.saved_context_sources.len(), 1);
+    assert_eq!(back.overviews.len(), 1);
+    assert_eq!(back.overviews[0].selection_reason, "same_symbol");
 }
 
 #[test]
@@ -687,6 +709,7 @@ fn context_result_with_ambiguity_round_trip() {
         workflow: None,
         saved_context_sources: vec![],
         budget: BudgetReport::within_budget("review_context_extraction.max_nodes", 50, 0),
+        overviews: vec![],
     };
     let json = serde_json::to_string(&result).unwrap();
     let back: ContextResult = serde_json::from_str(&json).unwrap();

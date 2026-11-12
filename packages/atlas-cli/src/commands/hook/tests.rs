@@ -11,6 +11,7 @@ use crate::cli_paths::canonicalize_cli_path;
 
 use super::hook_result_json;
 use super::runtime::{read_hook_payload_from, resolve_hook_repo};
+use super::{overview_hook_metadata, overview_triggered};
 
 struct PanicRead;
 
@@ -30,6 +31,33 @@ fn hook_cli_without_repo() -> Cli {
             event: "session-start".to_owned(),
         },
     }
+}
+
+#[test]
+fn overview_triggered_accepts_commit_commands_and_manual_flag() {
+    assert!(overview_triggered(&json!({ "overview": true })));
+    assert!(overview_triggered(
+        &json!({ "command": "git commit -m change" })
+    ));
+    assert!(overview_triggered(&json!({ "command": "git merge main" })));
+    assert!(!overview_triggered(&json!({ "command": "cargo test" })));
+}
+
+#[test]
+fn overview_hook_metadata_is_nonblocking_on_failure() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let repo = dir.path().to_string_lossy().into_owned();
+    // A directory at the graph DB path makes Store::open fail; the hook must
+    // return failure metadata instead of panicking or blocking the hook.
+    let graph_db_path = dir.path().join("not-a-db");
+    std::fs::create_dir_all(&graph_db_path).unwrap();
+    let metadata = overview_hook_metadata(
+        &repo,
+        graph_db_path.to_str().unwrap(),
+        &json!({ "overview": true }),
+    )
+    .expect("manual overview trigger must attempt a plan");
+    assert_eq!(metadata["status"], "failed");
 }
 
 #[test]

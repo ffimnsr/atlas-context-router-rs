@@ -368,6 +368,11 @@ pub fn run_context(cli: &Cli) -> Result<()> {
             agent_id,
             merge_agent_partitions,
             token_budget,
+            include_overviews,
+            include_stale_overviews,
+            overview_limit,
+            overview_max_bytes,
+            overview_subject_kinds,
         ) = match &cli.command {
             Command::Context {
                 query,
@@ -386,6 +391,11 @@ pub fn run_context(cli: &Cli) -> Result<()> {
                 agent_id,
                 merge_agent_partitions,
                 token_budget,
+                include_overviews,
+                include_stale_overviews,
+                overview_limit,
+                overview_max_bytes,
+                overview_subject_kinds,
             } => (
                 query.clone(),
                 file.clone(),
@@ -403,6 +413,11 @@ pub fn run_context(cli: &Cli) -> Result<()> {
                 agent_id.clone(),
                 *merge_agent_partitions,
                 *token_budget,
+                *include_overviews,
+                *include_stale_overviews,
+                *overview_limit,
+                *overview_max_bytes,
+                overview_subject_kinds.clone(),
             ),
             _ => unreachable!(),
         };
@@ -483,6 +498,25 @@ pub fn run_context(cli: &Cli) -> Result<()> {
         }
         request.agent_id = agent_id.clone();
         request.merge_agent_partitions = merge_agent_partitions;
+        request.include_overviews = include_overviews;
+        request.overview_limit = overview_limit;
+        request.overview_max_bytes = overview_max_bytes;
+        if include_stale_overviews {
+            request.overview_freshness = Some(vec![
+                "fresh".to_owned(),
+                "possibly_stale".to_owned(),
+                "stale".to_owned(),
+            ]);
+        }
+        if let Some(kinds) = overview_subject_kinds {
+            request.overview_subject_kinds = Some(
+                kinds
+                    .split(',')
+                    .map(|value| value.trim().to_owned())
+                    .filter(|value| !value.is_empty())
+                    .collect(),
+            );
+        }
 
         let store = match Store::open(&db_path) {
             Err(e) => {
@@ -535,10 +569,22 @@ pub fn run_context(cli: &Cli) -> Result<()> {
         }
 
         let token_counter = load_token_counter(&repo)?;
-        let engine = ContextEngine::new(&store)
+        let overview_session = if include_overviews {
+            let session_db = atlas_engine::paths::session_db_path(&db_path);
+            Some(
+                atlas_session::SessionStore::open(&session_db)
+                    .with_context(|| format!("cannot open session store at {session_db}"))?,
+            )
+        } else {
+            None
+        };
+        let mut engine = ContextEngine::new(&store)
             .with_budget_policy(load_budget_policy(&repo)?)
             .with_token_counter(token_counter.counter)
             .with_token_fallback(token_counter.fallback_used, token_counter.fallback_reason);
+        if let Some(session) = overview_session.as_ref() {
+            engine = engine.with_overview_store(&repo, session);
+        }
         let result = engine.build(&request).context("context engine failed")?;
         let linked_decisions = search_linked_decisions(&repo, &request);
 

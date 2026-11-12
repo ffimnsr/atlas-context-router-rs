@@ -1182,17 +1182,39 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
         memory_schema_issues,
         feedback_schema_ok,
         feedback_schema_issues,
+        overview_schema_ok,
+        overview_schema_issues,
     ) = if session_db_exists {
         match SessionStore::open(&session_db_path) {
             Ok(session_store) => {
                 let memory_issues = session_store.memory_schema_issues();
                 let feedback_issues = session_store.feedback_schema_issues();
+                let mut overview_issues = session_store.overview_schema_issues();
+                let content_db = atlas_engine::paths::content_db_path(&db_path);
+                if Path::new(&content_db).exists()
+                    && let Ok(content_store) = ContentStore::open(&content_db)
+                {
+                    for (overview_id, source_id) in session_store.overview_source_ids() {
+                        if content_store
+                            .get_source(&source_id)
+                            .ok()
+                            .flatten()
+                            .is_none()
+                        {
+                            overview_issues.push(format!(
+                                "orphan overview source_id: id={overview_id} source_id={source_id}"
+                            ));
+                        }
+                    }
+                }
                 (
                     true,
                     memory_issues.is_empty(),
                     memory_issues,
                     feedback_issues.is_empty(),
                     feedback_issues,
+                    overview_issues.is_empty(),
+                    overview_issues,
                 )
             }
             Err(e) => (
@@ -1201,10 +1223,12 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
                 vec![format!("cannot open session store: {e}")],
                 false,
                 vec![format!("cannot open session store: {e}")],
+                false,
+                vec![format!("cannot open session store: {e}")],
             ),
         }
     } else {
-        (true, true, Vec::new(), true, Vec::new())
+        (true, true, Vec::new(), true, Vec::new(), true, Vec::new())
     };
 
     let ok = issues.is_empty()
@@ -1212,10 +1236,11 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
         && dangling.is_empty()
         && session_db_ok
         && memory_schema_ok
-        && feedback_schema_ok;
+        && feedback_schema_ok
+        && overview_schema_ok;
     let error_code = if !issues.is_empty() || !orphans.is_empty() || !dangling.is_empty() {
         integrity_issue_code(&issues, !orphans.is_empty() || !dangling.is_empty())
-    } else if !memory_schema_ok || !feedback_schema_ok {
+    } else if !memory_schema_ok || !feedback_schema_ok || !overview_schema_ok {
         "schema_mismatch"
     } else {
         "none"
@@ -1255,6 +1280,10 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
                 "feedback_schema": {
                     "ok": feedback_schema_ok,
                     "issues": feedback_schema_issues,
+                },
+                "overview_schema": {
+                    "ok": overview_schema_ok,
+                    "issues": overview_schema_issues,
                 },
             },
         });
@@ -1305,6 +1334,12 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
         if !feedback_schema_ok {
             eprintln!("Feedback schema FAILED: {session_db_path}");
             for issue in &feedback_schema_issues {
+                eprintln!("  {issue}");
+            }
+        }
+        if !overview_schema_ok {
+            eprintln!("Overview schema FAILED: {session_db_path}");
+            for issue in &overview_schema_issues {
                 eprintln!("  {issue}");
             }
         }

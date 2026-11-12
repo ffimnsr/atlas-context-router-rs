@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "subject": { "kind": "package", "repo_root": "/repo", "commit_sha": "abc123", "package_name": "atlas-parser" },
+  "title": "Parser package",
+  "summary": "Parses repository source files into graph nodes and edges.",
+  "description": "Package-level description of the parser pipeline.",
+  "responsibilities": ["tree-sitter parsing", "symbol extraction"],
+  "tags": ["package", "parser"],
+  "confidence": 0.8,
+  "source_kind": "external_llm"
+}

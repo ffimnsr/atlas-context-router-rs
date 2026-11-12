@@ -9,6 +9,7 @@ mod insights;
 mod install;
 mod memoir;
 mod memory;
+mod overview;
 mod query;
 mod update;
 

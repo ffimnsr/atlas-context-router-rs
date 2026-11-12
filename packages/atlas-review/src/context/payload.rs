@@ -413,6 +413,12 @@ pub(super) fn trim_one_payload_unit(result: &mut ContextResult) -> bool {
         result.saved_context_sources.remove(index);
         return true;
     }
+    // ICM-G7: overview previews are supporting context; drop them before
+    // graph nodes when the payload budget is exceeded.
+    if !result.overviews.is_empty() {
+        result.overviews.pop();
+        return true;
+    }
     if trim_workflow(result) {
         return true;
     }

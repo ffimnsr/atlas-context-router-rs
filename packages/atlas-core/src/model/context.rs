@@ -108,6 +108,24 @@ pub struct ContextRequest {
     pub include_content_assets: bool,
     /// Maximum content assets to include. `None` uses the policy default.
     pub max_content_assets: Option<usize>,
+    // --- ICM-G7: overview memory context integration ---
+    /// When `true`, the engine includes matching overview records from the
+    /// continuity store. Overview bodies stay preview-only; full bodies are
+    /// retrieved through `source_id`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub include_overviews: bool,
+    /// Maximum overview records to include. `None` uses the policy default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overview_limit: Option<usize>,
+    /// Allowed overview freshness states (e.g. `fresh`, `possibly_stale`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overview_freshness: Option<Vec<String>>,
+    /// Allowed overview subject kinds (e.g. `file`, `function`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overview_subject_kinds: Option<Vec<String>>,
+    /// Byte cap for overview previews. `None` uses the policy default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overview_max_bytes: Option<usize>,
 }
 
 impl Default for ContextRequest {
@@ -135,6 +153,11 @@ impl Default for ContextRequest {
             token_budget: None,
             include_content_assets: false,
             max_content_assets: None,
+            include_overviews: false,
+            overview_limit: None,
+            overview_freshness: None,
+            overview_subject_kinds: None,
+            overview_max_bytes: None,
         }
     }
 }
@@ -756,8 +779,38 @@ pub struct ContextResult {
     /// content store is provided to the engine. Ordered by descending
     /// `relevance_score`.
     pub saved_context_sources: Vec<SavedContextSource>,
+    /// Fresh (or explicitly allowed stale) overview records relevant to the
+    /// selected graph context (ICM-G7). Preview-only; full bodies are fetched
+    /// through `source_id`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overviews: Vec<ContextOverview>,
     #[serde(flatten)]
     pub budget: BudgetReport,
+}
+
+/// One overview record surfaced inside a [`ContextResult`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextOverview {
+    pub overview_id: String,
+    pub subject_id: String,
+    pub subject_kind: String,
+    pub title: String,
+    pub summary: String,
+    /// Bounded preview; never the full overview body.
+    pub preview: String,
+    pub freshness: String,
+    pub confidence: f64,
+    /// Why this record matched: `same_symbol`, `same_file`, `containing_module`,
+    /// `package_summary`, `project_summary`, or `changed_dependency`.
+    pub selection_reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_file_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualified_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale_reason: Option<String>,
 }
 
 #[cfg(test)]

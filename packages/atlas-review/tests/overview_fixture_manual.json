@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "subject": { "kind": "file", "repo_root": "/repo", "commit_sha": "abc123", "canonical_file_path": "README.md" },
+  "title": "README overview",
+  "summary": "Manual overview written by a human without a packet id.",
+  "description": "Manual records are marked unverified when no packet id is present.",
+  "tags": ["manual"],
+  "confidence": 0.4,
+  "source_kind": "manual"
+}

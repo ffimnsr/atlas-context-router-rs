@@ -69,6 +69,89 @@ pub struct Config {
     pub parsers: ParsersConfig,
     #[serde(default)]
     pub memory: MemoryConfig,
+    #[serde(default)]
+    pub overview: OverviewConfig,
+}
+
+/// `[overview]` external-analysis handoff configuration (ICM-G9).
+///
+/// Atlas never infers a model provider from environment variables. The
+/// external analyzer command is either absent or an explicit command string.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OverviewConfig {
+    #[serde(default = "default_overview_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub auto_export_on_commit: bool,
+    #[serde(default = "default_overview_auto_mark_stale")]
+    pub auto_mark_stale_on_commit: bool,
+    #[serde(default)]
+    pub external_analyzer_command: Option<String>,
+    #[serde(default)]
+    pub ingest_after_external_command: bool,
+    #[serde(default = "default_overview_max_subjects")]
+    pub max_subjects_per_run: usize,
+    #[serde(default = "default_overview_max_packet_bytes")]
+    pub max_packet_bytes: usize,
+}
+
+fn default_overview_enabled() -> bool {
+    true
+}
+
+fn default_overview_auto_mark_stale() -> bool {
+    true
+}
+
+fn default_overview_max_subjects() -> usize {
+    50
+}
+
+fn default_overview_max_packet_bytes() -> usize {
+    1_048_576
+}
+
+impl Default for OverviewConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_overview_enabled(),
+            auto_export_on_commit: false,
+            auto_mark_stale_on_commit: default_overview_auto_mark_stale(),
+            external_analyzer_command: None,
+            ingest_after_external_command: false,
+            max_subjects_per_run: default_overview_max_subjects(),
+            max_packet_bytes: default_overview_max_packet_bytes(),
+        }
+    }
+}
+
+impl OverviewConfig {
+    pub fn validate(&self) -> Result<()> {
+        if self.max_subjects_per_run == 0 || self.max_subjects_per_run > 1_000 {
+            anyhow::bail!(
+                "invalid config: overview.max_subjects_per_run must be between 1 and 1000"
+            );
+        }
+        if self.max_packet_bytes < 1_024 || self.max_packet_bytes > 64 * 1_024 * 1_024 {
+            anyhow::bail!(
+                "invalid config: overview.max_packet_bytes must be between 1024 and 67108864"
+            );
+        }
+        if let Some(command) = self.external_analyzer_command.as_deref() {
+            let trimmed = command.trim();
+            if trimmed.is_empty() {
+                anyhow::bail!(
+                    "invalid config: overview.external_analyzer_command must not be empty"
+                );
+            }
+            if trimmed.starts_with('$') {
+                anyhow::bail!(
+                    "invalid config: overview.external_analyzer_command must be an explicit command, not an environment variable reference"
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Memory surface configuration (ICM-A + ICM-B + ICM-D).

@@ -378,5 +378,83 @@ pub(super) fn tools() -> Vec<Value> {
                     "required": ["concept"]
                 }
         }),
+        json!({
+                "name": "overview_export",
+                "description": "Export bounded overview analysis packets for external LLM or human analysis. Atlas never calls a model: packets include canonical subject identity, commit SHA, graph freshness, bounded evidence, and budget metadata. Same request fields and defaults as `atlas overview export` (ICM-G).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "scope":              { "type": "string", "description": "project, packages, modules, files, symbols, functions, methods, or changed (default project)." },
+                        "subjects":           { "type": "array", "items": { "type": "string" }, "description": "Specific subjects: qualified name, file path, package, or module." },
+                        "subject":            { "type": "string", "description": "Single subject shorthand." },
+                        "changed":            { "type": "boolean", "description": "Export subjects affected by changed files only." },
+                        "changed_only":       { "type": "boolean", "description": "Alias for changed." },
+                        "since":              { "type": "string", "description": "Git ref to diff against for changed export." },
+                        "limit":              { "type": "integer", "description": "Maximum packets (default 50, max 200)." },
+                        "include_code_spans": { "type": "boolean", "description": "Include bounded source excerpts." },
+                        "include_callers":    { "type": "boolean", "description": "Include caller qualified names." },
+                        "include_callees":    { "type": "boolean", "description": "Include callee qualified names." },
+                        "include_tests":      { "type": "boolean", "description": "Include test-adjacency qualified names." },
+                        "max_tokens":         { "type": "integer", "description": "Approximate token budget per packet." },
+                        "output_format":      { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    }
+                }
+        }),
+        json!({
+                "name": "overview_ingest",
+                "description": "Ingest externally produced overview analysis JSON with the same validation as `atlas overview ingest`. Packet ids, canonical subject identity, commit SHA, line spans, redaction, and large-body routing are validated before persistence (ICM-G).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "analysis":      { "type": "object", "description": "Overview analysis object matching the documented ingest schema." },
+                        "path":          { "type": "string", "description": "Path to analysis JSON when analysis object is omitted." },
+                        "input":         { "type": "string", "description": "Alias for path." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    }
+                }
+        }),
+        json!({
+                "name": "overview_search",
+                "description": "Search overview memory with FTS plus explicit ranking (exact subject/title/tag, freshness, confidence, recency, subject specificity). Same filters and ranking evidence as `atlas overview search` (ICM-G).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query":        { "type": "string", "description": "Search query." },
+                        "subject_kind": { "type": "string", "description": "Restrict to one subject kind." },
+                        "freshness":    { "type": "string", "description": "Restrict to one freshness state." },
+                        "package":      { "type": "string", "description": "Restrict to one package name." },
+                        "module":       { "type": "string", "description": "Restrict to one module path." },
+                        "file":         { "type": "string", "description": "Restrict to one canonical file path." },
+                        "source_kind":  { "type": "string", "description": "external_llm, manual, or imported." },
+                        "limit":        { "type": "integer", "description": "Maximum results (default 20)." },
+                        "output_format":{ "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["query"]
+                }
+        }),
+        json!({
+                "name": "overview_show",
+                "description": "Show one overview record by subject id, qualified name, canonical file path, package, or module. Ambiguous matches fail with candidate list, matching `atlas overview show` (ICM-G).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "subject":       { "type": "string", "description": "Subject id, qualified name, canonical path, package, or module." },
+                        "target":        { "type": "string", "description": "Alias for subject." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    }
+                }
+        }),
+        json!({
+                "name": "overview_refresh_plan",
+                "description": "Plan overview freshness refresh after changes. Read-only unless apply=true. Reports directly stale, possibly stale, and orphaned subjects with suggested export commands, matching `atlas overview refresh-plan` (ICM-G).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "since":         { "type": "string", "description": "Git ref to diff against (default working tree)." },
+                        "apply":         { "type": "boolean", "description": "Apply freshness marking (default false)." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    }
+                }
+        }),
     ]
 }

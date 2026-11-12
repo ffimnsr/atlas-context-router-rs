@@ -4,6 +4,7 @@ pub mod context;
 mod decision_query;
 mod docs_section;
 mod explain_change;
+pub mod overview;
 pub mod query_parser;
 mod ranking;
 

@@ -319,6 +319,7 @@ pub(crate) fn get_review_context_output_schema() -> Value {
             "risk_summary": { "$ref": "#/$defs/review_risk_summary" },
             "boundary_summary": { "$ref": "#/$defs/boundary_summary" },
             "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_saved_context" } },
+            "overviews": { "type": "array", "items": { "type": "object" } },
             "intent": { "type": "string" },
             "node_count": { "type": "integer" },
             "nodes": { "type": "array", "items": { "$ref": "#/$defs/packaged_selected_node" } },

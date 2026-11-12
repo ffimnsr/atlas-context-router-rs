@@ -13,7 +13,8 @@ use crate::session_tools::{
     tool_compact_session, tool_cross_session_search, tool_feedback_record, tool_get_context_stats,
     tool_get_global_memory, tool_get_session_status, tool_memoir_add_concept, tool_memoir_create,
     tool_memoir_inspect, tool_memoir_link, tool_memory_recall, tool_memory_store,
-    tool_purge_saved_context, tool_read_saved_context, tool_resume_session,
+    tool_overview_export, tool_overview_ingest, tool_overview_refresh_plan, tool_overview_search,
+    tool_overview_show, tool_purge_saved_context, tool_read_saved_context, tool_resume_session,
     tool_save_context_artifact, tool_search_decisions, tool_search_saved_context,
 };
 use crate::tool_result::{
@@ -165,6 +166,11 @@ fn normalized_contract_tool(name: &str) -> bool {
             | "memoir_add_concept"
             | "memoir_link"
             | "memoir_inspect"
+            | "overview_export"
+            | "overview_ingest"
+            | "overview_search"
+            | "overview_show"
+            | "overview_refresh_plan"
             | "symbol_neighbors"
             | "cross_file_links"
             | "concept_clusters"
@@ -448,6 +454,11 @@ pub(crate) fn is_known_tool_name(name: &str) -> bool {
         | "memoir_add_concept"
         | "memoir_link"
         | "memoir_inspect"
+        | "overview_export"
+        | "overview_ingest"
+        | "overview_search"
+        | "overview_show"
+        | "overview_refresh_plan"
         | "symbol_neighbors"
         | "cross_file_links"
         | "concept_clusters"
@@ -648,6 +659,13 @@ fn call_inner(
         "memoir_add_concept" => tool_memoir_add_concept(args, repo_root, db_path, output_format),
         "memoir_link" => tool_memoir_link(args, repo_root, db_path, output_format),
         "memoir_inspect" => tool_memoir_inspect(args, repo_root, db_path, output_format),
+        "overview_export" => tool_overview_export(args, repo_root, db_path, output_format),
+        "overview_ingest" => tool_overview_ingest(args, repo_root, db_path, output_format),
+        "overview_search" => tool_overview_search(args, repo_root, db_path, output_format),
+        "overview_show" => tool_overview_show(args, repo_root, db_path, output_format),
+        "overview_refresh_plan" => {
+            tool_overview_refresh_plan(args, repo_root, db_path, output_format)
+        }
         "feedback_record" => tool_feedback_record(args, repo_root, db_path, output_format),
         "symbol_neighbors" => tool_symbol_neighbors(args, repo_root, db_path, output_format),
         "cross_file_links" => tool_cross_file_links(args, repo_root, db_path, output_format),

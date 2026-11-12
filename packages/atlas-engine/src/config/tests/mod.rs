@@ -13,6 +13,7 @@ mod auto;
 mod insights;
 mod load;
 mod mcp;
+mod overview;
 mod template;
 
 /// Minimal valid WordPiece tokenizer JSON used as a local fixture.

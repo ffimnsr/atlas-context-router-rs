@@ -6,7 +6,7 @@
 
 use serde_json::{Value, json};
 
-pub(super) fn parity_args(tool_name: &str, source_id: &str) -> Value {
+pub(super) fn parity_args(tool_name: &str, source_id: &str, repo_root: &str) -> Value {
     match tool_name {
         "list_graph_stats" => json!({}),
         "tool_list" => json!({}),
@@ -108,6 +108,38 @@ pub(super) fn parity_args(tool_name: &str, source_id: &str) -> Value {
         "memoir_inspect" => json!({
             "graph": "parity-graph",
             "concept": "parity-concept",
+            "output_format": "json"
+        }),
+        "overview_export" => json!({
+            "scope": "files",
+            "limit": 1,
+            "output_format": "json"
+        }),
+        "overview_ingest" => json!({
+            "analysis": {
+                "schema_version": 1,
+                "subject": {
+                    "kind": "project",
+                    "repo_root": repo_root,
+                    "commit_sha": "no-head"
+                },
+                "title": "Parity project overview",
+                "summary": "parity overview summary",
+                "description": "parity overview body",
+                "confidence": 0.5
+            },
+            "output_format": "json"
+        }),
+        "overview_search" => json!({
+            "query": "parity overview",
+            "output_format": "json"
+        }),
+        "overview_show" => json!({
+            "subject": "src/service.rs",
+            "output_format": "json"
+        }),
+        "overview_refresh_plan" => json!({
+            "apply": false,
             "output_format": "json"
         }),
         "feedback_record" => json!({

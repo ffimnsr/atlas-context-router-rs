@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "subject": {
+    "kind": "symbol",
+    "repo_root": "/repo",
+    "commit_sha": "abc123",
+    "canonical_file_path": "src/removed.rs",
+    "qualified_name": "src/removed.rs::struct::Gone",
+    "node_kind": "struct",
+    "line_start": 1,
+    "line_end": 5
+  },
+  "title": "Gone",
+  "summary": "Symbol that no longer resolves in the graph.",
+  "description": "This fixture demonstrates an orphaned ingest result.",
+  "tags": ["symbol", "orphaned"],
+  "confidence": 0.5,
+  "source_kind": "imported"
+}

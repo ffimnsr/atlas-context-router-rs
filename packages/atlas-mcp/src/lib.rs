@@ -54,6 +54,11 @@
 //! | `memoir_add_concept`      | ICM-F: add a concept to an existing memoir graph         |
 //! | `memoir_link`             | ICM-F: link concepts with a controlled relation type     |
 //! | `memoir_inspect`          | ICM-F: bounded inspection with direction and evidence    |
+//! | `overview_export`         | ICM-G: export bounded overview analysis packets          |
+//! | `overview_ingest`         | ICM-G: ingest external overview analysis with validation |
+//! | `overview_search`         | ICM-G: search overview memory with FTS and ranking       |
+//! | `overview_show`           | ICM-G: show one overview record with ambiguity handling  |
+//! | `overview_refresh_plan`   | ICM-G: read-only overview freshness refresh planning     |
 //! | `symbol_neighbors`        | Immediate callers, callees, tests, and nearby nodes      |
 //! | `cross_file_links`        | Files coupled through shared symbol references           |
 //! | `concept_clusters`        | Related file groups around seed files                    |

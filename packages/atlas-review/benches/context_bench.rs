@@ -169,6 +169,11 @@ fn bench_context_retrieval_latency(c: &mut Criterion) {
             token_budget: None,
             include_content_assets: false,
             max_content_assets: None,
+            include_overviews: false,
+            overview_limit: None,
+            overview_freshness: None,
+            overview_subject_kinds: None,
+            overview_max_bytes: None,
         };
 
         group.bench_with_input(

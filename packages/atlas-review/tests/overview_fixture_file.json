@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "subject": {
+    "kind": "file",
+    "repo_root": "/repo",
+    "commit_sha": "abc123",
+    "canonical_file_path": "src/lib.rs",
+    "content_hash": "hash-lib"
+  },
+  "title": "Library root",
+  "summary": "Crate root re-exporting public modules.",
+  "description": "File-level description for the crate root.",
+  "responsibilities": ["re-export public API"],
+  "tags": ["file"],
+  "confidence": 0.7,
+  "source_kind": "imported"
+}

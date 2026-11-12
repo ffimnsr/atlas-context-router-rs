@@ -28,6 +28,11 @@ pub(crate) fn tool_get_context(
     let agent_id = str_arg(args, "agent_id")?.map(str::to_owned);
     let merge_agent_partitions = bool_arg(args, "merge_agent_partitions").unwrap_or(false);
     let token_budget = u64_arg(args, "token_budget").map(|n| n as usize);
+    let include_overviews = bool_arg(args, "include_overviews").unwrap_or(false);
+    let overview_limit = u64_arg(args, "overview_limit").map(|n| n as usize);
+    let overview_max_bytes = u64_arg(args, "overview_max_bytes").map(|n| n as usize);
+    let overview_freshness = string_list_arg(args, "overview_freshness");
+    let overview_subject_kinds = string_list_arg(args, "overview_subject_kinds");
 
     let mut request = match target.kind {
         GetContextTargetKind::Files => {
@@ -96,6 +101,11 @@ pub(crate) fn tool_get_context(
     if token_budget.is_some() {
         request.token_budget = token_budget;
     }
+    request.include_overviews = include_overviews;
+    request.overview_limit = overview_limit;
+    request.overview_max_bytes = overview_max_bytes;
+    request.overview_freshness = overview_freshness;
+    request.overview_subject_kinds = overview_subject_kinds;
 
     let store = open_store(db_path)?;
     let policy = load_budget_policy(repo_root)?;
@@ -124,6 +134,16 @@ pub(crate) fn tool_get_context(
         .with_budget_policy(policy)
         .with_token_counter(token_counter.counter)
         .with_token_fallback(token_counter.fallback_used, token_counter.fallback_reason);
+    let overview_session = if include_overviews {
+        atlas_session::SessionStore::open(&atlas_adapters::derive_session_db_path(db_path)).ok()
+    } else {
+        None
+    };
+    let engine = if let Some(session) = overview_session.as_ref() {
+        engine.with_overview_store(repo_root, session)
+    } else {
+        engine
+    };
 
     let result = if include_saved_context {
         let content_db = derive_content_db_path(db_path);

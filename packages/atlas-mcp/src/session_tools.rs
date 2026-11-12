@@ -20,6 +20,7 @@ mod artifact_io;
 mod feedback;
 mod memoir;
 mod memory;
+mod overview;
 mod saved_context;
 mod session;
 
@@ -27,6 +28,8 @@ mod session;
 mod memoir_tests;
 #[cfg(test)]
 mod memory_tests;
+#[cfg(test)]
+mod overview_tests;
 #[cfg(test)]
 mod read_tests;
 #[cfg(test)]
@@ -55,6 +58,10 @@ pub use memoir::{
     tool_memoir_add_concept, tool_memoir_create, tool_memoir_inspect, tool_memoir_link,
 };
 pub use memory::{tool_get_global_memory, tool_memory_recall, tool_memory_store};
+pub use overview::{
+    tool_overview_export, tool_overview_ingest, tool_overview_refresh_plan, tool_overview_search,
+    tool_overview_show,
+};
 pub(crate) use saved_context::{
     decision_hits_json, record_mcp_decision_best_effort, search_decisions_best_effort,
 };

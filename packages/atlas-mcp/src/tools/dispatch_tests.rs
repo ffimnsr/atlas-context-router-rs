@@ -233,7 +233,7 @@ fn schema_test_artifact_content() -> String {
     "schema-test artifact payload ".repeat(32)
 }
 
-fn schema_test_args(name: &str, saved_source_id: &str) -> serde_json::Value {
+fn schema_test_args(name: &str, saved_source_id: &str, repo_root: &str) -> serde_json::Value {
     match name {
         "list_graph_stats" => json!({"output_format": "json"}),
         "tool_list" => json!({"output_format": "json"}),
@@ -333,6 +333,39 @@ fn schema_test_args(name: &str, saved_source_id: &str) -> serde_json::Value {
             "concept": "schema-test-concept",
             "output_format": "json"
         }),
+        "overview_export" => json!({
+            "scope": "files",
+            "limit": 1,
+            "output_format": "json"
+        }),
+        "overview_ingest" => json!({
+            "analysis": {
+                "schema_version": 1,
+                "subject": {
+                    "kind": "file",
+                    "repo_root": repo_root,
+                    "commit_sha": "no-head",
+                    "canonical_file_path": "src/lib.rs"
+                },
+                "title": "Schema test overview",
+                "summary": "schema test overview summary",
+                "description": "schema test overview body",
+                "confidence": 0.5
+            },
+            "output_format": "json"
+        }),
+        "overview_search" => json!({
+            "query": "schema test overview",
+            "output_format": "json"
+        }),
+        "overview_show" => json!({
+            "subject": "src/lib.rs",
+            "output_format": "json"
+        }),
+        "overview_refresh_plan" => json!({
+            "apply": false,
+            "output_format": "json"
+        }),
         "feedback_record" => json!({
             "predicted": "schema-test dead",
             "actual": "schema-test alive",
@@ -424,7 +457,7 @@ fn tools_with_output_schema_never_emit_array_or_scalar_structured_content() {
             continue;
         }
         let name = tool.name.as_ref();
-        let args = schema_test_args(name, saved_source_id);
+        let args = schema_test_args(name, saved_source_id, &repo_root);
         let value = call(name, Some(&args), &repo_root, &db_path)
             .unwrap_or_else(|error| panic!("{name} should succeed for shape test: {error}"));
         let structured = value
@@ -485,7 +518,7 @@ fn tools_with_output_schema_emit_schema_compatible_structured_content() {
         let schema = jsonschema::validator_for(&schema_value)
             .unwrap_or_else(|error| panic!("{} output schema should compile: {error}", tool.name));
         let name = tool.name.as_ref();
-        let args = schema_test_args(name, saved_source_id);
+        let args = schema_test_args(name, saved_source_id, &repo_root);
         let value = call(name, Some(&args), &repo_root, &db_path)
             .unwrap_or_else(|error| panic!("{name} should succeed for schema test: {error}"));
         assert_matches_output_schema(name, &value, &schema);

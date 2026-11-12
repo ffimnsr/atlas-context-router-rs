@@ -54,6 +54,11 @@ const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "memoir_link",
     "memory_recall",
     "memory_store",
+    "overview_export",
+    "overview_ingest",
+    "overview_refresh_plan",
+    "overview_search",
+    "overview_show",
     "postprocess_graph",
     "purge_saved_context",
     "query_graph",
@@ -645,12 +650,34 @@ fn every_listed_tool_dispatches_with_parity_fixture_args() {
         &fixture.db_path,
     )
     .expect("seed parity memoir graph");
+    call(
+        "overview_ingest",
+        Some(&json!({
+            "analysis": {
+                "schema_version": 1,
+                "subject": {
+                    "kind": "file",
+                    "repo_root": &fixture.repo_root,
+                    "commit_sha": "no-head",
+                    "canonical_file_path": "src/service.rs"
+                },
+                "title": "Parity file overview",
+                "summary": "parity overview seed summary",
+                "description": "parity overview seed body",
+                "confidence": 0.5
+            },
+            "output_format": "json"
+        })),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("seed parity overview record");
     let tool_list_value = tool_list();
     let tools = tool_list_value["tools"].as_array().expect("tools array");
 
     for tool in tools {
         let name = tool["name"].as_str().expect("tool name");
-        let args = super::parity_args::parity_args(name, &source_id);
+        let args = super::parity_args::parity_args(name, &source_id, &fixture.repo_root);
         let response = call(name, Some(&args), &fixture.repo_root, &fixture.db_path)
             .unwrap_or_else(|error| panic!("tool {name} failed to dispatch: {error}"));
 

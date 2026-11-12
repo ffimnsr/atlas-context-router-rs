@@ -1,0 +1,33 @@
+{
+  "schema_version": "atlas_cli.v1",
+  "command": "overview.stale",
+  "data": [
+    {
+      "id": "overview-stale",
+      "repo_root": "/repo",
+      "subject_id": "subject-stale",
+      "subject_kind": "function",
+      "qualified_name": "src/service.rs::fn::compute",
+      "canonical_file_path": "src/service.rs",
+      "title": "compute (stale)",
+      "summary": "Function overview written against an older commit.",
+      "description_preview": "This fixture demonstrates a possibly_stale ingest result.",
+      "responsibilities": [],
+      "flow": [],
+      "inputs": [],
+      "outputs": [],
+      "invariants": [],
+      "gotchas": [],
+      "examples": [],
+      "tags": ["stale"],
+      "source_kind": "external_llm",
+      "commit_sha": "oldcommit",
+      "freshness": "possibly_stale",
+      "confidence": 0.6,
+      "source_id": null,
+      "created_at": "2026-01-01T00:00:00Z",
+      "updated_at": "2026-01-01T00:00:00Z",
+      "metadata": { "freshness_reason": "commit_sha_differs" }
+    }
+  ]
+}

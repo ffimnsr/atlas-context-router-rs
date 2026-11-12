@@ -13,6 +13,7 @@ mod insights;
 mod maintenance;
 mod memoir;
 mod memory;
+mod overview;
 mod platform;
 mod postprocess;
 mod query;
@@ -39,6 +40,7 @@ pub use maintenance::{
 };
 pub use memoir::run_memoir;
 pub use memory::run_memory;
+pub use overview::run_overview;
 pub use platform::{run_completions, run_install, run_serve, run_serve_daemon, run_serve_http};
 pub use postprocess::run_postprocess;
 pub use query::{run_embed, run_explain_query, run_query};

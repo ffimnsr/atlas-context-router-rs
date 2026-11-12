@@ -1,0 +1,29 @@
+{
+  "schema_version": "atlas_cli.v1",
+  "command": "overview.refresh_plan",
+  "data": {
+    "schema_version": 1,
+    "repo_root": "/repo",
+    "since": "HEAD~1",
+    "changed_files": ["src/service.rs"],
+    "apply": false,
+    "applied_count": 0,
+    "direct_stale": [
+      {
+        "overview_id": "overview-file",
+        "subject_id": "subject-file",
+        "subject_kind": "file",
+        "subject_label": "src/service.rs",
+        "freshness": "fresh",
+        "stale_reason": "direct_file_change",
+        "suggested_export_command": "atlas overview export --subject src/service.rs --include-code-spans --json",
+        "affected_dependents": [],
+        "previous_record_id": null,
+        "priority": 106
+      }
+    ],
+    "possibly_stale": [],
+    "orphaned": [],
+    "unchanged_count": 3
+  }
+}

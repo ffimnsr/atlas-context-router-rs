@@ -599,6 +599,42 @@ impl Config {
                 .to_owned(),
         );
 
+        lines.extend(render_section(
+            "overview",
+            &[
+                ("enabled", active.overview.enabled.to_string()),
+                (
+                    "auto_export_on_commit",
+                    active.overview.auto_export_on_commit.to_string(),
+                ),
+                (
+                    "auto_mark_stale_on_commit",
+                    active.overview.auto_mark_stale_on_commit.to_string(),
+                ),
+                (
+                    "external_analyzer_command",
+                    render_optional_string(active.overview.external_analyzer_command.as_deref()),
+                ),
+                (
+                    "ingest_after_external_command",
+                    active.overview.ingest_after_external_command.to_string(),
+                ),
+                (
+                    "max_subjects_per_run",
+                    active.overview.max_subjects_per_run.to_string(),
+                ),
+                (
+                    "max_packet_bytes",
+                    active.overview.max_packet_bytes.to_string(),
+                ),
+            ],
+            active_mode,
+        ));
+        lines.push(
+            "# overview memory exports bounded packets; Atlas never runs a model provider"
+                .to_owned(),
+        );
+
         Ok(lines.join("\n"))
     }
 

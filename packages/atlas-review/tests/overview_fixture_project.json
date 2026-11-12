@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "subject": { "kind": "project", "repo_root": "/repo", "commit_sha": "abc123" },
+  "title": "Repository overview",
+  "summary": "Project-level summary tying packages and modules together.",
+  "description": "The project indexes code, persists a graph, and answers bounded context requests.",
+  "responsibilities": ["index source files", "persist graph state", "serve context"],
+  "flow": ["scan", "parse", "persist", "query"],
+  "tags": ["project", "architecture"],
+  "confidence": 0.9,
+  "source_kind": "external_llm",
+  "analyzer_name": "fixture",
+  "analyzer_version": "1"
+}

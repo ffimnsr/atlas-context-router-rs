@@ -43,6 +43,7 @@ impl Config {
         config.sanitization.validate(atlas_dir)?;
         config.context.tokenizer.validate()?;
         config.memory.validate()?;
+        config.overview.validate()?;
         Ok(config)
     }
 

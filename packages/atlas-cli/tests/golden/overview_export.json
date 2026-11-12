@@ -1,0 +1,55 @@
+{
+  "schema_version": "atlas_cli.v1",
+  "command": "overview.export",
+  "data": {
+    "schema_version": 1,
+    "repo_root": "/repo",
+    "commit_sha": "abc123",
+    "graph": {
+      "graph_db_path": "/repo/.atlas/worldtree.db",
+      "graph_state": "built",
+      "last_indexed_at": "2026-01-01T00:00:00Z",
+      "last_indexed_ref": "abc123",
+      "indexed_file_count": 42
+    },
+    "freshness": {
+      "state": "fresh",
+      "stale_reason": null,
+      "safe_to_answer": true
+    },
+    "packets": [
+      {
+        "schema_version": 1,
+        "packet_id": "packet-sha256",
+        "repo_root": "/repo",
+        "commit_sha": "abc123",
+        "subject": {
+          "kind": "function",
+          "repo_root": "/repo",
+          "commit_sha": "abc123",
+          "canonical_file_path": "src/service.rs",
+          "qualified_name": "src/service.rs::fn::compute",
+          "node_kind": "function",
+          "line_start": 10,
+          "line_end": 20
+        },
+        "subject_id": "subject-sha256",
+        "evidence": {
+          "node_count": 1,
+          "edge_count": 2,
+          "symbols": ["src/service.rs::fn::compute"],
+          "files": ["src/service.rs"]
+        },
+        "callers": ["src/handler.rs::fn::handle"],
+        "callees": ["src/service.rs::fn::helper"],
+        "evidence_ids": ["node:12", "edge:44", "edge:45"],
+        "safe_to_answer": true,
+        "omitted_subject_count": 0,
+        "budget": { "max_tokens": 2048, "budget_hit": false, "omitted_bytes": 0 }
+      }
+    ],
+    "subject_count": 1,
+    "omitted_subject_count": 0,
+    "budget": { "max_tokens": 2048, "budget_hit": false, "omitted_bytes": 0 }
+  }
+}

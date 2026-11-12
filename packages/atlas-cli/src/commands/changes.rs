@@ -1207,27 +1207,46 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
             }
         };
 
-        let (base, explicit_files, max_depth, max_nodes, format, allow_stale, allow_partial) =
-            match &cli.command {
-                Command::ReviewContext {
-                    base,
-                    files,
-                    max_depth,
-                    max_nodes,
-                    format,
-                    allow_stale,
-                    allow_partial,
-                } => (
-                    base.clone(),
-                    files.clone(),
-                    *max_depth,
-                    *max_nodes as usize,
-                    *format,
-                    *allow_stale,
-                    *allow_partial,
-                ),
-                _ => unreachable!(),
-            };
+        let (
+            base,
+            explicit_files,
+            max_depth,
+            max_nodes,
+            format,
+            allow_stale,
+            allow_partial,
+            include_overviews,
+            include_stale_overviews,
+            overview_limit,
+            overview_max_bytes,
+        ) = match &cli.command {
+            Command::ReviewContext {
+                base,
+                files,
+                max_depth,
+                max_nodes,
+                format,
+                allow_stale,
+                allow_partial,
+                include_overviews,
+                include_stale_overviews,
+                overview_limit,
+                overview_max_bytes,
+            } => (
+                base.clone(),
+                files.clone(),
+                *max_depth,
+                *max_nodes as usize,
+                *format,
+                *allow_stale,
+                *allow_partial,
+                *include_overviews,
+                *include_stale_overviews,
+                *overview_limit,
+                *overview_max_bytes,
+            ),
+            _ => unreachable!(),
+        };
 
         let readiness = derive_graph_readiness(&store, &repo, &db_path);
         if let Some(warning) = check_graph_readiness(
@@ -1311,13 +1330,36 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
             },
             max_nodes: Some(max_nodes),
             depth: Some(max_depth),
+            include_overviews,
+            overview_limit,
+            overview_max_bytes,
+            overview_freshness: include_stale_overviews.then(|| {
+                vec![
+                    "fresh".to_owned(),
+                    "possibly_stale".to_owned(),
+                    "stale".to_owned(),
+                ]
+            }),
             ..ContextRequest::default()
         };
         let token_counter = load_token_counter(repo_root.as_str())?;
-        let workflow_result = ContextEngine::new(&store)
+        let overview_session = if include_overviews {
+            let session_db = atlas_engine::paths::session_db_path(&db_path);
+            Some(
+                atlas_session::SessionStore::open(&session_db)
+                    .with_context(|| format!("cannot open session store at {session_db}"))?,
+            )
+        } else {
+            None
+        };
+        let mut engine = ContextEngine::new(&store)
             .with_budget_policy(load_budget_policy(repo_root.as_str())?)
             .with_token_counter(token_counter.counter)
-            .with_token_fallback(token_counter.fallback_used, token_counter.fallback_reason)
+            .with_token_fallback(token_counter.fallback_used, token_counter.fallback_reason);
+        if let Some(session) = overview_session.as_ref() {
+            engine = engine.with_overview_store(repo_root.as_str(), session);
+        }
+        let workflow_result = engine
             .build(&workflow_request)
             .context("context engine failed")?;
 

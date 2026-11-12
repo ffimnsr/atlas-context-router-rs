@@ -27,6 +27,7 @@ pub(super) use atlas_store_sqlite::Store;
 
 mod build;
 mod content;
+mod overview;
 mod payload;
 mod rank;
 mod resolve;
@@ -41,6 +42,7 @@ pub use self::build::build_context;
 pub use self::resolve::{ResolvedTarget, normalize_qn_kind_tokens, resolve_target};
 
 use self::content::retrieve_content_assets;
+use self::overview::overviews_for_context;
 use self::payload::apply_payload_budgets;
 use self::rank::{rank_context, trim_context};
 use self::saved::retrieve_saved_context;
@@ -75,6 +77,10 @@ pub struct ContextEngine<'a> {
     /// Optional content store for CM6 retrieval-backed restoration and
     /// graph/content companion content-asset lookup (Patch N2).
     content_store: Option<&'a ContentStore>,
+    /// Optional continuity store for ICM-G7 overview memory.
+    overview_store: Option<&'a atlas_session::SessionStore>,
+    /// Repo root used to scope overview lookups.
+    overview_repo_root: Option<String>,
     budget_policy: BudgetPolicy,
     /// Token accounting for serialized payload budgets; defaults to the
     /// byte heuristic (4 bytes per token) for behavior compatibility.
@@ -89,6 +95,8 @@ impl<'a> ContextEngine<'a> {
         Self {
             store,
             content_store: None,
+            overview_store: None,
+            overview_repo_root: None,
             budget_policy: BudgetPolicy::default(),
             token_counter: atlas_token_count::TokenCounter::heuristic(4)
                 .expect("bytes_per_token=4 is a valid heuristic"),
@@ -110,6 +118,18 @@ impl<'a> ContextEngine<'a> {
     /// policy (N2).
     pub fn with_content_store(mut self, cs: &'a ContentStore) -> Self {
         self.content_store = Some(cs);
+        self
+    }
+
+    /// Attach the continuity store so overview memory can be included when
+    /// `request.include_overviews` is true (ICM-G7).
+    pub fn with_overview_store(
+        mut self,
+        repo_root: impl Into<String>,
+        store: &'a atlas_session::SessionStore,
+    ) -> Self {
+        self.overview_store = Some(store);
+        self.overview_repo_root = Some(repo_root.into());
         self
     }
 
@@ -222,6 +242,15 @@ impl<'a> ContextEngine<'a> {
                 matched_count >= content_asset_limit,
             );
             result.content_assets = assets;
+        }
+        // ICM-G7: overview memory is supporting context. Fresh records are
+        // included by default; stale records only when the request allows them.
+        if effective_request.include_overviews
+            && let (Some(session), Some(repo_root)) =
+                (self.overview_store, self.overview_repo_root.as_deref())
+        {
+            result.overviews =
+                overviews_for_context(session, repo_root, &effective_request, &result)?;
         }
         apply_payload_budgets(
             &mut result,

@@ -86,6 +86,7 @@ pub(crate) fn get_context_output_schema() -> Value {
             "ranked_edges": { "type": "array", "items": { "$ref": "#/$defs/ranked_edge_summary" } },
             "ranked_files": { "type": "array", "items": { "$ref": "#/$defs/ranked_file_summary" } },
             "assets": { "type": "array", "items": { "$ref": "#/$defs/artifact_saved_context" } },
+            "overviews": { "type": "array", "items": { "type": "object" } },
             "ambiguity": { "$ref": "#/$defs/ambiguity" },
             "context_files": { "type": "array", "items": { "type": "string" } },
             "detail_controls": { "type": "object" },

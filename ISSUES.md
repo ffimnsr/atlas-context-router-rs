@@ -329,160 +329,160 @@ Implementation structure:
 
 ##### ICM-G1 — Overview domain model and subject identity
 
-- [ ] define `OverviewSubjectKind` enum with exact values `project`, `package`, `module`, `file`, `symbol`, `function`, and `method`
-- [ ] define `OverviewFreshness` enum with exact values `fresh`, `possibly_stale`, `stale`, `orphaned`, and `unverified`
-- [ ] define `OverviewSourceKind` enum with exact values `external_llm`, `manual`, and `imported`
-- [ ] define `OverviewSubject` with `kind`, `repo_root`, `commit_sha`, optional `package_name`, optional `module_path`, optional `canonical_file_path`, optional `qualified_name`, optional `node_kind`, optional `line_start`, optional `line_end`, and optional `content_hash`
-- [ ] validate `project` subjects require only `repo_root` and `commit_sha`
-- [ ] validate `package` subjects require `package_name`
-- [ ] validate `module` subjects require `module_path`
-- [ ] validate `file` subjects require `canonical_file_path`
-- [ ] validate `symbol`, `function`, and `method` subjects require `qualified_name`, `canonical_file_path`, `line_start`, and `line_end`
-- [ ] canonicalize every subject path through `atlas_repo::CanonicalRepoPath` before hashing, persistence, dedupe, lookup, or stale matching
-- [ ] define deterministic `subject_id` as versioned hash over `repo_root`, `kind`, canonical subject fields, and schema version
-- [ ] reject local path-normalization helpers and add tests proving `./src/lib.rs` and `src/lib.rs` resolve to same subject identity
-- [ ] define `OverviewRecord` with subject, title, summary, description, responsibilities, flow, inputs, outputs, invariants, gotchas, examples, tags, source metadata, freshness, confidence, source ids, and timestamps
-- [ ] represent list fields as typed vectors at service boundary and JSON arrays at storage boundary
-- [ ] bound title, summary, description, and each list field through central budget policy before storage
-- [ ] route oversized overview bodies through existing content-store artifact routing and store only preview plus `source_id` in overview table
-- [ ] add unit tests for subject validation, enum parsing, subject-id stability, path canonicalization, and budget truncation metadata
+- [x] define `OverviewSubjectKind` enum with exact values `project`, `package`, `module`, `file`, `symbol`, `function`, and `method`
+- [x] define `OverviewFreshness` enum with exact values `fresh`, `possibly_stale`, `stale`, `orphaned`, and `unverified`
+- [x] define `OverviewSourceKind` enum with exact values `external_llm`, `manual`, and `imported`
+- [x] define `OverviewSubject` with `kind`, `repo_root`, `commit_sha`, optional `package_name`, optional `module_path`, optional `canonical_file_path`, optional `qualified_name`, optional `node_kind`, optional `line_start`, optional `line_end`, and optional `content_hash`
+- [x] validate `project` subjects require only `repo_root` and `commit_sha`
+- [x] validate `package` subjects require `package_name`
+- [x] validate `module` subjects require `module_path`
+- [x] validate `file` subjects require `canonical_file_path`
+- [x] validate `symbol`, `function`, and `method` subjects require `qualified_name`, `canonical_file_path`, `line_start`, and `line_end`
+- [x] canonicalize every subject path through `atlas_repo::CanonicalRepoPath` before hashing, persistence, dedupe, lookup, or stale matching
+- [x] define deterministic `subject_id` as versioned hash over `repo_root`, `kind`, canonical subject fields, and schema version
+- [x] reject local path-normalization helpers and add tests proving `./src/lib.rs` and `src/lib.rs` resolve to same subject identity
+- [x] define `OverviewRecord` with subject, title, summary, description, responsibilities, flow, inputs, outputs, invariants, gotchas, examples, tags, source metadata, freshness, confidence, source ids, and timestamps
+- [x] represent list fields as typed vectors at service boundary and JSON arrays at storage boundary
+- [x] bound title, summary, description, and each list field through central budget policy before storage
+- [x] route oversized overview bodies through existing content-store artifact routing and store only preview plus `source_id` in overview table
+- [x] add unit tests for subject validation, enum parsing, subject-id stability, path canonicalization, and budget truncation metadata
 
 ##### ICM-G2 — Overview storage schema and migrations
 
-- [ ] add overview tables to continuity-owned storage, preferably the memory/session-side persistence used by ICM-A unless a dedicated continuity DB is justified in code comments
-- [ ] create `overview_records` table with `id`, `repo_root`, `subject_id`, `subject_kind`, `package_name`, `module_path`, `canonical_file_path`, `qualified_name`, `node_kind`, `line_start`, `line_end`, `content_hash`, `title`, `summary`, `description_preview`, `responsibilities_json`, `flow_json`, `inputs_json`, `outputs_json`, `invariants_json`, `gotchas_json`, `examples_json`, `tags_json`, `source_kind`, `analyzer_name`, `analyzer_version`, `model_name`, `commit_sha`, `graph_last_indexed_at`, `freshness`, `confidence`, `source_id`, `supersedes_id`, `created_at`, `updated_at`, and `metadata_json`
-- [ ] create `overview_record_fts` over `title`, `summary`, `description_preview`, `responsibilities_json`, `flow_json`, `invariants_json`, `gotchas_json`, and `tags_json`
-- [ ] add indexes for `repo_root`, `subject_id`, `subject_kind`, `canonical_file_path`, `qualified_name`, `commit_sha`, `freshness`, `source_kind`, and `updated_at`
-- [ ] add uniqueness rule for active records by `repo_root`, `subject_id`, `commit_sha`, and `source_kind` unless `supersedes_id` is set
-- [ ] add supersession support so re-ingest creates a new active record and points to previous active record through `supersedes_id`
-- [ ] preserve old overview records for audit unless user later adds explicit prune command
-- [ ] add storage API methods `insert_overview_record`, `get_overview_record`, `search_overview_records`, `list_stale_overview_records`, `supersede_overview_record`, and `mark_overview_freshness`
-- [ ] make storage API reject invalid enum strings and malformed JSON arrays before writing
-- [ ] update `atlas db check` to validate overview schema, FTS integrity, orphan `source_id` references, invalid enum values, and noncanonical path rows
-- [ ] add migration golden tests, in-memory storage tests, FTS search tests, and db-check failure fixture tests
+- [x] add overview tables to continuity-owned storage, preferably the memory/session-side persistence used by ICM-A unless a dedicated continuity DB is justified in code comments
+- [x] create `overview_records` table with `id`, `repo_root`, `subject_id`, `subject_kind`, `package_name`, `module_path`, `canonical_file_path`, `qualified_name`, `node_kind`, `line_start`, `line_end`, `content_hash`, `title`, `summary`, `description_preview`, `responsibilities_json`, `flow_json`, `inputs_json`, `outputs_json`, `invariants_json`, `gotchas_json`, `examples_json`, `tags_json`, `source_kind`, `analyzer_name`, `analyzer_version`, `model_name`, `commit_sha`, `graph_last_indexed_at`, `freshness`, `confidence`, `source_id`, `supersedes_id`, `created_at`, `updated_at`, and `metadata_json`
+- [x] create `overview_record_fts` over `title`, `summary`, `description_preview`, `responsibilities_json`, `flow_json`, `invariants_json`, `gotchas_json`, and `tags_json`
+- [x] add indexes for `repo_root`, `subject_id`, `subject_kind`, `canonical_file_path`, `qualified_name`, `commit_sha`, `freshness`, `source_kind`, and `updated_at`
+- [x] add uniqueness rule for active records by `repo_root`, `subject_id`, `commit_sha`, and `source_kind` unless `supersedes_id` is set
+- [x] add supersession support so re-ingest creates a new active record and points to previous active record through `supersedes_id`
+- [x] preserve old overview records for audit unless user later adds explicit prune command
+- [x] add storage API methods `insert_overview_record`, `get_overview_record`, `search_overview_records`, `list_stale_overview_records`, `supersede_overview_record`, and `mark_overview_freshness`
+- [x] make storage API reject invalid enum strings and malformed JSON arrays before writing
+- [x] update `atlas db check` to validate overview schema, FTS integrity, orphan `source_id` references, invalid enum values, and noncanonical path rows
+- [x] add migration golden tests, in-memory storage tests, FTS search tests, and db-check failure fixture tests
 
 ##### ICM-G3 — Analysis packet export contract
 
-- [ ] add `OverviewExportRequest` with `scope`, `subjects`, `changed_only`, `since`, `limit`, `include_code_spans`, `include_callers`, `include_callees`, `include_tests`, `max_tokens`, and `json` fields
-- [ ] add `OverviewAnalysisPacket` with `schema_version`, `repo_root`, `commit_sha`, graph provenance, freshness metadata, subject, concise graph evidence, bounded code excerpt, callers, callees, related files, test adjacency, and retrieval hints
-- [ ] support export scopes `project`, `packages`, `modules`, `files`, `symbols`, `functions`, `methods`, and `changed`
-- [ ] implement `atlas overview export --scope <scope> --json`
-- [ ] implement `atlas overview export --subject <qualified_name_or_path> --json`
-- [ ] implement `atlas overview export --changed --since <rev> --json`
-- [ ] use graph-backed context resolution first for symbols and functions, then companion content lookup only for docs/config/assets surfaced by graph/context evidence
-- [ ] include canonical subject identity in every packet so ingest can validate exact target later
-- [ ] include stable packet id as hash over subject id, commit SHA, selected evidence ids, and export schema version
-- [ ] include `safe_to_answer`, graph freshness, omitted counts, and budget-hit metadata in every packet
-- [ ] fail export clearly when graph readiness is `corrupt`; allow stale export only with explicit stale metadata
-- [ ] add tests for project export, package export, changed-only export, function export, ambiguous subject failure, stale graph metadata, and budget truncation
+- [x] add `OverviewExportRequest` with `scope`, `subjects`, `changed_only`, `since`, `limit`, `include_code_spans`, `include_callers`, `include_callees`, `include_tests`, `max_tokens`, and `json` fields
+- [x] add `OverviewAnalysisPacket` with `schema_version`, `repo_root`, `commit_sha`, graph provenance, freshness metadata, subject, concise graph evidence, bounded code excerpt, callers, callees, related files, test adjacency, and retrieval hints
+- [x] support export scopes `project`, `packages`, `modules`, `files`, `symbols`, `functions`, `methods`, and `changed`
+- [x] implement `atlas overview export --scope <scope> --json`
+- [x] implement `atlas overview export --subject <qualified_name_or_path> --json`
+- [x] implement `atlas overview export --changed --since <rev> --json`
+- [x] use graph-backed context resolution first for symbols and functions, then companion content lookup only for docs/config/assets surfaced by graph/context evidence
+- [x] include canonical subject identity in every packet so ingest can validate exact target later
+- [x] include stable packet id as hash over subject id, commit SHA, selected evidence ids, and export schema version
+- [x] include `safe_to_answer`, graph freshness, omitted counts, and budget-hit metadata in every packet
+- [x] fail export clearly when graph readiness is `corrupt`; allow stale export only with explicit stale metadata
+- [x] add tests for project export, package export, changed-only export, function export, ambiguous subject failure, stale graph metadata, and budget truncation
 
 ##### ICM-G4 — External analysis ingest contract
 
-- [ ] define `OverviewAnalysisInput` JSON schema with `schema_version`, `packet_id`, subject identity, title, summary, description, responsibilities, flow, inputs, outputs, invariants, gotchas, examples, tags, confidence, analyzer metadata, and optional source artifact ids
-- [ ] implement `atlas overview ingest <path>` for JSON file input
-- [ ] implement `atlas overview ingest -` for stdin input
-- [ ] validate input `schema_version` exactly before field validation
-- [ ] validate `packet_id` when present and return clear mismatch error when packet id does not match exported packet metadata
-- [ ] validate subject exists in current or indexed graph by canonical file path and qualified name where applicable
-- [ ] validate line ranges still overlap same graph node before marking ingested record `fresh`
-- [ ] mark record `possibly_stale` when commit SHA differs but subject identity still resolves
-- [ ] mark record `orphaned` when canonical path or qualified name no longer resolves
-- [ ] mark record `unverified` for manual/imported records without packet id
-- [ ] enforce confidence range `0.0..=1.0`
-- [ ] require `summary` for all records and require either `description` or at least one non-empty detail array
-- [ ] reject unknown top-level fields unless `metadata_json.extra` explicitly captures them through a controlled importer path
-- [ ] run overview text through central redaction policy before persistence
-- [ ] route large descriptions and examples through content-store when over inline budget
-- [ ] add JSON schema fixture tests for valid external LLM result, valid manual import, missing summary, bad confidence, subject mismatch, stale commit, orphan subject, and secret redaction
+- [x] define `OverviewAnalysisInput` JSON schema with `schema_version`, `packet_id`, subject identity, title, summary, description, responsibilities, flow, inputs, outputs, invariants, gotchas, examples, tags, confidence, analyzer metadata, and optional source artifact ids
+- [x] implement `atlas overview ingest <path>` for JSON file input
+- [x] implement `atlas overview ingest -` for stdin input
+- [x] validate input `schema_version` exactly before field validation
+- [x] validate `packet_id` when present and return clear mismatch error when packet id does not match exported packet metadata
+- [x] validate subject exists in current or indexed graph by canonical file path and qualified name where applicable
+- [x] validate line ranges still overlap same graph node before marking ingested record `fresh`
+- [x] mark record `possibly_stale` when commit SHA differs but subject identity still resolves
+- [x] mark record `orphaned` when canonical path or qualified name no longer resolves
+- [x] mark record `unverified` for manual/imported records without packet id
+- [x] enforce confidence range `0.0..=1.0`
+- [x] require `summary` for all records and require either `description` or at least one non-empty detail array
+- [x] reject unknown top-level fields unless `metadata_json.extra` explicitly captures them through a controlled importer path
+- [x] run overview text through central redaction policy before persistence
+- [x] route large descriptions and examples through content-store when over inline budget
+- [x] add JSON schema fixture tests for valid external LLM result, valid manual import, missing summary, bad confidence, subject mismatch, stale commit, orphan subject, and secret redaction
 
 ##### ICM-G5 — Freshness, commit update, and refresh planning
 
-- [ ] add `OverviewFreshnessService` that compares overview records against current graph readiness, current commit SHA, changed files, content hashes, and line-span overlap
-- [ ] implement direct stale marking when record canonical file path changed since stored commit
-- [ ] implement direct stale marking when record content hash differs from current file hash
-- [ ] implement direct stale marking when record qualified name no longer resolves
-- [ ] implement `possibly_stale` marking for callers, containing modules, containing packages, and project records when dependent files changed
-- [ ] implement orphan marking for deleted files, removed symbols, and renamed subjects without confident canonical target
-- [ ] use `detect_changes`/history data when available; fall back to git diff only through existing repo/change services, not ad hoc shell parsing in service code
-- [ ] implement `atlas overview stale` with filters `--subject-kind`, `--file`, `--package`, `--module`, `--since`, `--limit`, and `--json`
-- [ ] implement `atlas overview refresh-plan --changed --since <rev> --json`
-- [ ] make refresh plan output include subject id, stale reason, suggested export command, affected dependents, previous record id, and priority
-- [ ] rank refresh plan priority by direct change before dependent change, subject kind specificity, current context relevance, confidence, and updated_at age
-- [ ] keep refresh planning read-only unless caller passes explicit apply flag for freshness marking
-- [ ] add tests for changed function, changed file, deleted file, renamed file, caller possibly stale, package possibly stale, and no-op unchanged commit
+- [x] add `OverviewFreshnessService` that compares overview records against current graph readiness, current commit SHA, changed files, content hashes, and line-span overlap
+- [x] implement direct stale marking when record canonical file path changed since stored commit
+- [x] implement direct stale marking when record content hash differs from current file hash
+- [x] implement direct stale marking when record qualified name no longer resolves
+- [x] implement `possibly_stale` marking for callers, containing modules, containing packages, and project records when dependent files changed
+- [x] implement orphan marking for deleted files, removed symbols, and renamed subjects without confident canonical target
+- [x] use `detect_changes`/history data when available; fall back to git diff only through existing repo/change services, not ad hoc shell parsing in service code
+- [x] implement `atlas overview stale` with filters `--subject-kind`, `--file`, `--package`, `--module`, `--since`, `--limit`, and `--json`
+- [x] implement `atlas overview refresh-plan --changed --since <rev> --json`
+- [x] make refresh plan output include subject id, stale reason, suggested export command, affected dependents, previous record id, and priority
+- [x] rank refresh plan priority by direct change before dependent change, subject kind specificity, current context relevance, confidence, and updated_at age
+- [x] keep refresh planning read-only unless caller passes explicit apply flag for freshness marking
+- [x] add tests for changed function, changed file, deleted file, renamed file, caller possibly stale, package possibly stale, and no-op unchanged commit
 
 ##### ICM-G6 — Overview CLI read and maintenance surfaces
 
-- [ ] implement `atlas overview show <subject>` resolving exact subject id, qualified name, canonical file path, package name, or module path
-- [ ] make ambiguous `show` results fail with candidate list and required disambiguation fields
-- [ ] implement `atlas overview search <query>` with filters `--subject-kind`, `--freshness`, `--package`, `--module`, `--file`, `--source-kind`, `--limit`, and `--json`
-- [ ] rank search by exact subject match, exact title/tag match, FTS score, freshness, confidence, recency, and subject specificity
-- [ ] implement `atlas overview list` with filters `--subject-kind`, `--freshness`, `--source-kind`, `--older-than`, `--newer-than`, and `--json`
-- [ ] implement `atlas overview delete <overview_id> --dry-run --json`
-- [ ] require exact overview id for delete and keep routed content-store artifacts unless explicit artifact-delete behavior is added later
-- [ ] implement `atlas overview export-docs --format markdown --output <path>` for readable project/package/module specs
-- [ ] make exported docs group by project, package, module, file, then symbol, with stale records labeled visibly
-- [ ] make human output use `println!`/`eprintln!`; reserve tracing macros for diagnostics
-- [ ] add CLI smoke tests and JSON snapshot tests for show, search, list, stale, refresh-plan, delete dry-run, and markdown export
+- [x] implement `atlas overview show <subject>` resolving exact subject id, qualified name, canonical file path, package name, or module path
+- [x] make ambiguous `show` results fail with candidate list and required disambiguation fields
+- [x] implement `atlas overview search <query>` with filters `--subject-kind`, `--freshness`, `--package`, `--module`, `--file`, `--source-kind`, `--limit`, and `--json`
+- [x] rank search by exact subject match, exact title/tag match, FTS score, freshness, confidence, recency, and subject specificity
+- [x] implement `atlas overview list` with filters `--subject-kind`, `--freshness`, `--source-kind`, `--older-than`, `--newer-than`, and `--json`
+- [x] implement `atlas overview delete <overview_id> --dry-run --json`
+- [x] require exact overview id for delete and keep routed content-store artifacts unless explicit artifact-delete behavior is added later
+- [x] implement `atlas overview export-docs --format markdown --output <path>` for readable project/package/module specs
+- [x] make exported docs group by project, package, module, file, then symbol, with stale records labeled visibly
+- [x] make human output use `println!`/`eprintln!`; reserve tracing macros for diagnostics
+- [x] add CLI smoke tests and JSON snapshot tests for show, search, list, stale, refresh-plan, delete dry-run, and markdown export
 
 ##### ICM-G7 — Context engine and retrieval integration
 
-- [ ] extend context request controls with `include_overviews`, `overview_limit`, `overview_freshness`, `overview_subject_kinds`, and `overview_max_bytes`
-- [ ] include fresh overview records in `atlas context`, `atlas review-context`, MCP `get_context`, and MCP `get_review_context` when they match selected symbols, files, modules, packages, or changed files
-- [ ] include stale records only when request allows stale overviews and always emit stale reason
-- [ ] rank overview context by exact symbol match, exact file match, containing module/package, changed-file relevance, freshness, confidence, and recency
-- [ ] emit overview selection reasons such as `same_symbol`, `same_file`, `containing_module`, `package_summary`, `project_summary`, and `changed_dependency`
-- [ ] keep overview payload preview-only by default and expose `source_id` for full body retrieval
-- [ ] merge overview records under existing graph/content/session budget policy instead of adding separate truncation rules
-- [ ] ensure overview text cannot override graph facts in risk, impact, dead-code, or refactor analysis
-- [ ] add tests for graph-only context, overview-only companion context, mixed graph/overview context, stale overview exclusion, stale overview explicit inclusion, and budget trimming
+- [x] extend context request controls with `include_overviews`, `overview_limit`, `overview_freshness`, `overview_subject_kinds`, and `overview_max_bytes`
+- [x] include fresh overview records in `atlas context`, `atlas review-context`, MCP `get_context`, and MCP `get_review_context` when they match selected symbols, files, modules, packages, or changed files
+- [x] include stale records only when request allows stale overviews and always emit stale reason
+- [x] rank overview context by exact symbol match, exact file match, containing module/package, changed-file relevance, freshness, confidence, and recency
+- [x] emit overview selection reasons such as `same_symbol`, `same_file`, `containing_module`, `package_summary`, `project_summary`, and `changed_dependency`
+- [x] keep overview payload preview-only by default and expose `source_id` for full body retrieval
+- [x] merge overview records under existing graph/content/session budget policy instead of adding separate truncation rules
+- [x] ensure overview text cannot override graph facts in risk, impact, dead-code, or refactor analysis
+- [x] add tests for graph-only context, overview-only companion context, mixed graph/overview context, stale overview exclusion, stale overview explicit inclusion, and budget trimming
 
 ##### ICM-G8 — MCP parity and external analyzer handoff
 
-- [ ] add MCP `overview_export` with same request fields, defaults, and JSON shape as CLI export
-- [ ] add MCP `overview_ingest` with same validation and error shape as CLI ingest
-- [ ] add MCP `overview_search` with same filters and ranking evidence as CLI search
-- [ ] add MCP `overview_show` with same ambiguity behavior as CLI show
-- [ ] add MCP `overview_refresh_plan` with same read-only default behavior as CLI refresh-plan
-- [ ] keep MCP default output compact and include `source_id`, freshness, selection reason, and next export command where relevant
-- [ ] add parity tests proving CLI and MCP record shapes, validation failures, freshness states, and default limits match
-- [ ] expose optional external analyzer handoff only as packet generation plus documented command contract, not as built-in model execution
+- [x] add MCP `overview_export` with same request fields, defaults, and JSON shape as CLI export
+- [x] add MCP `overview_ingest` with same validation and error shape as CLI ingest
+- [x] add MCP `overview_search` with same filters and ranking evidence as CLI search
+- [x] add MCP `overview_show` with same ambiguity behavior as CLI show
+- [x] add MCP `overview_refresh_plan` with same read-only default behavior as CLI refresh-plan
+- [x] keep MCP default output compact and include `source_id`, freshness, selection reason, and next export command where relevant
+- [x] add parity tests proving CLI and MCP record shapes, validation failures, freshness states, and default limits match
+- [x] expose optional external analyzer handoff only as packet generation plus documented command contract, not as built-in model execution
 
 ##### ICM-G9 — Hook and manual trigger integration
 
-- [ ] add config section `overview` with `enabled`, `auto_export_on_commit`, `auto_mark_stale_on_commit`, `external_analyzer_command`, `ingest_after_external_command`, `max_subjects_per_run`, and `max_packet_bytes`
-- [ ] default `overview.enabled = true`, `auto_export_on_commit = false`, `auto_mark_stale_on_commit = true`, and `ingest_after_external_command = false`
-- [ ] validate external analyzer command is absent or explicit string path/command; never infer model provider from environment variables
-- [ ] add hook integration that can run `overview refresh-plan` after commit or manual hook trigger
-- [ ] keep hook failures best-effort and non-blocking for git/host flow
-- [ ] store hook-generated packet exports in content-store when oversized and reference them by `source_id`
-- [ ] record hook outcome as session event with command, status, packet count, ingested count, stale count, and source ids
-- [ ] add manual command `atlas overview run-external --dry-run --json` that prints exact external command invocations without executing them
-- [ ] add apply mode for `run-external` that executes configured command, requires JSON output, validates ingest, and reports per-subject success/failure
-- [ ] add tests for default config, invalid config, dry-run command generation, nonblocking hook failure, successful external ingest, malformed external output, and max-subject cap
+- [x] add config section `overview` with `enabled`, `auto_export_on_commit`, `auto_mark_stale_on_commit`, `external_analyzer_command`, `ingest_after_external_command`, `max_subjects_per_run`, and `max_packet_bytes`
+- [x] default `overview.enabled = true`, `auto_export_on_commit = false`, `auto_mark_stale_on_commit = true`, and `ingest_after_external_command = false`
+- [x] validate external analyzer command is absent or explicit string path/command; never infer model provider from environment variables
+- [x] add hook integration that can run `overview refresh-plan` after commit or manual hook trigger
+- [x] keep hook failures best-effort and non-blocking for git/host flow
+- [x] store hook-generated packet exports in content-store when oversized and reference them by `source_id`
+- [x] record hook outcome as session event with command, status, packet count, ingested count, stale count, and source ids
+- [x] add manual command `atlas overview run-external --dry-run --json` that prints exact external command invocations without executing them
+- [x] add apply mode for `run-external` that executes configured command, requires JSON output, validates ingest, and reports per-subject success/failure
+- [x] add tests for default config, invalid config, dry-run command generation, nonblocking hook failure, successful external ingest, malformed external output, and max-subject cap
 
 ##### ICM-G10 — Overview docs, fixtures, and release gate
 
-- [ ] add `wiki/overview-memory.md` documenting storage ownership, external analyzer contract, JSON schemas, freshness states, context integration, hook behavior, and CLI/MCP parity
-- [ ] add reusable fixtures for project overview, package overview, module overview, file overview, function overview, stale function overview, orphaned symbol overview, manual overview, and oversized overview body
-- [ ] add JSON snapshots for `overview export`, `overview ingest --json`, `overview show --json`, `overview search --json`, `overview stale --json`, `overview refresh-plan --json`, and MCP overview tools
-- [ ] add markdown snapshot for `overview export-docs --format markdown`
-- [ ] add schema evolution note that first stable schema is `schema_version = 1` and later breaking changes must ship migration or explicit import rejection
-- [ ] update `wiki/memory-architecture.md` to explain overview memory as evidence-linked code documentation separate from generic memories, feedback records, and memoir concepts
-- [ ] define release gate `ICM Overview Memory Complete`
-- [ ] require for release gate: storage schema, export/ingest contracts, freshness planner, CLI read surfaces, context integration, MCP parity, hook/manual trigger path, docs, fixtures, and JSON snapshots
-- [ ] require for release gate: no overview body writes to `worldtree.db`, no built-in LLM provider, no stale overview emitted as fresh, and no path-derived identity without `CanonicalRepoPath`
+- [x] add `wiki/overview-memory.md` documenting storage ownership, external analyzer contract, JSON schemas, freshness states, context integration, hook behavior, and CLI/MCP parity
+- [x] add reusable fixtures for project overview, package overview, module overview, file overview, function overview, stale function overview, orphaned symbol overview, manual overview, and oversized overview body
+- [x] add JSON snapshots for `overview export`, `overview ingest --json`, `overview show --json`, `overview search --json`, `overview stale --json`, `overview refresh-plan --json`, and MCP overview tools
+- [x] add markdown snapshot for `overview export-docs --format markdown`
+- [x] add schema evolution note that first stable schema is `schema_version = 1` and later breaking changes must ship migration or explicit import rejection
+- [x] update `wiki/memory-architecture.md` to explain overview memory as evidence-linked code documentation separate from generic memories, feedback records, and memoir concepts
+- [x] define release gate `ICM Overview Memory Complete`
+- [x] require for release gate: storage schema, export/ingest contracts, freshness planner, CLI read surfaces, context integration, MCP parity, hook/manual trigger path, docs, fixtures, and JSON snapshots
+- [x] require for release gate: no overview body writes to `worldtree.db`, no built-in LLM provider, no stale overview emitted as fresh, and no path-derived identity without `CanonicalRepoPath`
 
 ##### ICM-G completion criteria
 
-- [ ] `atlas overview export --scope functions --json` emits bounded packets with subject ids, commit SHA, graph freshness, and budget metadata
-- [ ] `atlas overview ingest analysis.json` stores a fresh record when packet id, commit SHA, canonical path, qualified name, and line span match current graph
-- [ ] `atlas overview ingest analysis.json` marks record `possibly_stale` when commit SHA differs but subject still resolves
-- [ ] `atlas overview ingest analysis.json` marks record `orphaned` when subject no longer resolves
-- [ ] `atlas overview refresh-plan --changed --since HEAD~1 --json` reports directly stale and possibly stale subjects with suggested export commands
-- [ ] `atlas context --include-overviews` includes fresh overview records with selection reasons and source ids
-- [ ] MCP overview tools match CLI JSON defaults and validation behavior
-- [ ] `atlas db check` reports invalid overview schema, invalid enum values, orphan source ids, and noncanonical overview paths
+- [x] `atlas overview export --scope functions --json` emits bounded packets with subject ids, commit SHA, graph freshness, and budget metadata
+- [x] `atlas overview ingest analysis.json` stores a fresh record when packet id, commit SHA, canonical path, qualified name, and line span match current graph
+- [x] `atlas overview ingest analysis.json` marks record `possibly_stale` when commit SHA differs but subject still resolves
+- [x] `atlas overview ingest analysis.json` marks record `orphaned` when subject no longer resolves
+- [x] `atlas overview refresh-plan --changed --since HEAD~1 --json` reports directly stale and possibly stale subjects with suggested export commands
+- [x] `atlas context --include-overviews` includes fresh overview records with selection reasons and source ids
+- [x] MCP overview tools match CLI JSON defaults and validation behavior
+- [x] `atlas db check` reports invalid overview schema, invalid enum values, orphan source ids, and noncanonical overview paths
 
 #### ICM-H — Shell-First Install Modes, TUI, Docs, and Release Gates
 

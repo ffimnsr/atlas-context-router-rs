@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "subject": {
+    "kind": "function",
+    "repo_root": "/repo",
+    "commit_sha": "oldcommit",
+    "canonical_file_path": "src/service.rs",
+    "qualified_name": "src/service.rs::fn::compute",
+    "node_kind": "function",
+    "line_start": 10,
+    "line_end": 20
+  },
+  "title": "compute (stale)",
+  "summary": "Function overview written against an older commit.",
+  "description": "This fixture demonstrates a possibly_stale ingest result.",
+  "tags": ["function", "stale"],
+  "confidence": 0.6,
+  "source_kind": "external_llm"
+}

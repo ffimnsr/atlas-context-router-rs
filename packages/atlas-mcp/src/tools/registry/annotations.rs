@@ -16,6 +16,7 @@ pub(crate) fn tool_annotations(name: &str) -> ToolDescriptorAnnotations {
             | "memoir_create"
             | "memoir_add_concept"
             | "memoir_link"
+            | "overview_ingest"
     );
     ToolDescriptorAnnotations::new()
         .read_only(!state_changing)
@@ -44,7 +45,12 @@ pub(crate) fn tool_category(name: &str) -> &'static str {
         | "memoir_create"
         | "memoir_add_concept"
         | "memoir_link"
-        | "memoir_inspect" => "memory",
+        | "memoir_inspect"
+        | "overview_export"
+        | "overview_ingest"
+        | "overview_search"
+        | "overview_show"
+        | "overview_refresh_plan" => "memory",
         "tool_list" | "tool_search" | "tool_help" | "man" | "repo_registry" => "introspection",
         "status" | "doctor" | "db_check" | "debug_graph" | "broker_status" | "get_metrics" => {
             "health"

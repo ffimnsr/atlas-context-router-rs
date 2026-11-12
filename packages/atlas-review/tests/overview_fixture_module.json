@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "subject": { "kind": "module", "repo_root": "/repo", "commit_sha": "abc123", "module_path": "src/context" },
+  "title": "Context module",
+  "summary": "Builds bounded context payloads from graph evidence.",
+  "description": "Module-level description for src/context.",
+  "responsibilities": ["resolve targets", "rank context", "trim payloads"],
+  "tags": ["module", "context"],
+  "confidence": 0.75,
+  "source_kind": "manual"
+}

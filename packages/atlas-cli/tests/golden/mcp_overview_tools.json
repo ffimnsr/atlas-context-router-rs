@@ -1,0 +1,67 @@
+{
+  "overview_export": {
+    "tool": "overview_export",
+    "repo_root": "/repo",
+    "result": { "schema_version": 1, "packets": [] },
+    "summary": {
+      "packet_count": 0,
+      "subject_count": 0,
+      "omitted_subject_count": 0,
+      "graph_freshness": "fresh",
+      "safe_to_answer": true,
+      "budget_hit": false
+    },
+    "warnings": []
+  },
+  "overview_ingest": {
+    "tool": "overview_ingest",
+    "repo_root": "/repo",
+    "record": { "id": "overview-sha256", "freshness": "fresh" },
+    "summary": {
+      "overview_id": "overview-sha256",
+      "subject_id": "subject-sha256",
+      "status": "fresh",
+      "subject_resolved": true,
+      "packet_validated": true,
+      "redacted": false,
+      "body_routed": false
+    },
+    "warnings": []
+  },
+  "overview_search": {
+    "tool": "overview_search",
+    "repo_root": "/repo",
+    "query": "compute",
+    "hits": [],
+    "summary": { "hit_count": 0, "limit": 20 },
+    "warnings": []
+  },
+  "overview_show": {
+    "tool": "overview_show",
+    "repo_root": "/repo",
+    "record": { "id": "overview-sha256", "freshness": "fresh" },
+    "summary": {
+      "overview_id": "overview-sha256",
+      "subject_id": "subject-sha256",
+      "subject_kind": "function",
+      "freshness": "fresh",
+      "confidence": 0.85
+    },
+    "warnings": []
+  },
+  "overview_refresh_plan": {
+    "tool": "overview_refresh_plan",
+    "repo_root": "/repo",
+    "plan": { "changed_files": [], "apply": false },
+    "summary": {
+      "changed_file_count": 0,
+      "direct_stale_count": 0,
+      "possibly_stale_count": 0,
+      "orphaned_count": 0,
+      "unchanged_count": 0,
+      "apply": false,
+      "applied_count": 0
+    },
+    "warnings": []
+  }
+}

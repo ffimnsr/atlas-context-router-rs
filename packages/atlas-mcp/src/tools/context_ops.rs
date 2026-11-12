@@ -32,6 +32,26 @@ fn context_ranking_evidence_legend_json() -> serde_json::Value {
     atlas_core::context_ranking_evidence_legend()
 }
 
+/// Parse a comma-separated string or JSON array into a string list.
+fn string_list_arg(args: Option<&Value>, key: &str) -> Option<Vec<String>> {
+    let value = args?.get(key)?;
+    if let Some(text) = value.as_str() {
+        return Some(
+            text.split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .collect(),
+        );
+    }
+    value.as_array().map(|values| {
+        values
+            .iter()
+            .filter_map(|value| value.as_str().map(str::to_owned))
+            .collect()
+    })
+}
+
 mod build;
 mod changes;
 mod explain;

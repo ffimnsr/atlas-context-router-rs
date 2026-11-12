@@ -7,8 +7,8 @@
 
 use atlas_core::BudgetReport;
 use atlas_core::model::{
-    ContextRankingEvidence, ContextResult, ContextSourceMix, Edge, ImpactResult, Node,
-    PayloadTruncationMeta, SavedContextSource, SeedBudgetMeta, SelectedEdge, SelectedNode,
+    ContextOverview, ContextRankingEvidence, ContextResult, ContextSourceMix, Edge, ImpactResult,
+    Node, PayloadTruncationMeta, SavedContextSource, SeedBudgetMeta, SelectedEdge, SelectedNode,
     TraversalBudgetMeta,
 };
 use serde::Serialize;
@@ -162,6 +162,9 @@ pub struct PackagedContextResult<'a> {
     /// Only present when `include_saved_context` was `true` in the request.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub saved_context_sources: Vec<PackagedSavedSource<'a>>,
+    /// ICM-G7 overview memory records (preview-only).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub overviews: Vec<ContextOverview>,
     #[serde(skip_serializing_if = "<[SeedBudgetMeta]>::is_empty")]
     pub seed_budgets: &'a [SeedBudgetMeta],
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -326,6 +329,7 @@ pub fn package_context_result(
                     .flatten(),
             })
             .collect(),
+        overviews: result.overviews.clone(),
         seed_budgets: &result.seed_budgets,
         traversal_budget: result.traversal_budget.as_ref(),
         payload_truncation: result.truncation.payload.as_ref(),
@@ -420,6 +424,17 @@ fn trim_packaged_context_once(value: &mut Value) -> bool {
             0_u8,
             score_value(entry.get("relevance_score")),
             string_key(entry, "source_id"),
+            "",
+        )
+    }) {
+        increment_u64(value, "payload_truncation", "omitted_source_count", 1);
+        return true;
+    }
+    if drop_array_entry(value, "overviews", |entry| {
+        (
+            0_u8,
+            score_value(entry.get("confidence")),
+            string_key(entry, "overview_id"),
             "",
         )
     }) {

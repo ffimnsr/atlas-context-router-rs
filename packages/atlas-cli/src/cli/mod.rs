@@ -2,12 +2,14 @@ use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 
 mod memoir;
+mod overview;
 mod subcommands;
 
 #[cfg(test)]
 mod tests;
 
 pub use memoir::MemoirCommand;
+pub use overview::OverviewCommand;
 pub use subcommands::{
     AnalyzeCommand, CommunitiesCommand, ConfigCommand, DocsCommand, FeedbackCommand, FlowsCommand,
     HistoryCommand, InsightsCommand, InstallMode, MemoryCommand, RefactorCommand, RepoCommand,
@@ -367,6 +369,22 @@ pub enum Command {
         /// Allow review context assembly on a partial (degraded) graph.
         #[arg(long)]
         allow_partial: bool,
+
+        /// Include fresh overview memory records matching changed symbols/files.
+        #[arg(long)]
+        include_overviews: bool,
+
+        /// Include stale overview records explicitly.
+        #[arg(long)]
+        include_stale_overviews: bool,
+
+        /// Maximum overview records to include.
+        #[arg(long)]
+        overview_limit: Option<usize>,
+
+        /// Byte cap for overview previews.
+        #[arg(long)]
+        overview_max_bytes: Option<usize>,
     },
 
     /// Generate and store embeddings for all un-embedded chunks.
@@ -642,6 +660,26 @@ pub enum Command {
         /// policy ceiling set in atlas.toml.
         #[arg(long)]
         token_budget: Option<usize>,
+
+        /// Include fresh overview memory records matching selected symbols/files.
+        #[arg(long)]
+        include_overviews: bool,
+
+        /// Include stale overview records explicitly (freshness filter).
+        #[arg(long)]
+        include_stale_overviews: bool,
+
+        /// Maximum overview records to include (default: 10).
+        #[arg(long)]
+        overview_limit: Option<usize>,
+
+        /// Byte cap for overview previews (default: 4096).
+        #[arg(long)]
+        overview_max_bytes: Option<usize>,
+
+        /// Restrict overview subject kinds (comma-separated: file,function,...).
+        #[arg(long)]
+        overview_subject_kinds: Option<String>,
     },
 
     /// Manage named ordered sequences of graph nodes (flows).
@@ -730,6 +768,12 @@ pub enum Command {
     Memoir {
         #[command(subcommand)]
         subcommand: MemoirCommand,
+    },
+
+    /// Manage evidence-linked code overview memory and external analysis handoff.
+    Overview {
+        #[command(subcommand)]
+        subcommand: OverviewCommand,
     },
 
     /// Record corrections on wrong analysis predictions and search past mistakes.

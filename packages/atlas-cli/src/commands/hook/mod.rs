@@ -44,6 +44,17 @@ pub fn run_hook(cli: &Cli) -> Result<()> {
         }
     }
 
+    // ICM-G9: best-effort overview refresh after a commit hook or explicit
+    // manual trigger. Failures never block the host git/hook flow.
+    if let Some(overview_meta) = overview_hook_metadata(&repo, &graph_db_path, &payload) {
+        match payload.as_object_mut() {
+            Some(object) => {
+                object.insert("overview".to_owned(), overview_meta);
+            }
+            None => payload = json!({ "overview": overview_meta }),
+        }
+    }
+
     let result = record_agent_event(AgentEventRequest {
         repo_root: repo.clone(),
         graph_db_path,
@@ -93,6 +104,62 @@ fn generate_wake_up_metadata(repo: &str, graph_db_path: &str, frontend: &str) ->
         },
         "error": null,
     })
+}
+
+fn overview_hook_metadata(repo: &str, graph_db_path: &str, payload: &Value) -> Option<Value> {
+    let config =
+        atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo)).unwrap_or_default();
+    if !config.overview.enabled {
+        return None;
+    }
+    if !overview_triggered(payload) {
+        return None;
+    }
+    let store = match atlas_store_sqlite::Store::open(graph_db_path) {
+        Ok(store) => store,
+        Err(error) => {
+            return Some(json!({ "status": "failed", "error": error.to_string() }));
+        }
+    };
+    let session_db = atlas_engine::paths::session_db_path(graph_db_path);
+    let mut session = match atlas_session::SessionStore::open(&session_db) {
+        Ok(session) => session,
+        Err(error) => {
+            return Some(json!({ "status": "failed", "error": error.to_string() }));
+        }
+    };
+    match atlas_review::overview::refresh_overview_plan(
+        repo,
+        &store,
+        &mut session,
+        None,
+        config.overview.auto_mark_stale_on_commit,
+    ) {
+        Ok(plan) => Some(json!({
+            "status": "ok",
+            "apply": plan.apply,
+            "changed_files": plan.changed_files.len(),
+            "direct_stale": plan.direct_stale.len(),
+            "possibly_stale": plan.possibly_stale.len(),
+            "orphaned": plan.orphaned.len(),
+            "unchanged": plan.unchanged_count,
+        })),
+        Err(error) => Some(json!({ "status": "failed", "error": error.to_string() })),
+    }
+}
+
+fn overview_triggered(payload: &Value) -> bool {
+    if payload
+        .get("overview")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    payload
+        .get("command")
+        .and_then(Value::as_str)
+        .is_some_and(|command| command.contains("git commit") || command.contains("git merge"))
 }
 
 /// Build the stable `atlas hook --json` output shape.
