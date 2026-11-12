@@ -294,6 +294,18 @@ pub(super) fn tools() -> Vec<Value> {
                 }
         }),
         json!({
+                "name": "memory_ops",
+                "description": "Return the bounded typed-operator history for one memory row (VM1). Read-only parity surface for `atlas memory ops`; unknown ids return found=false instead of an error.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "memory_id":     { "type": "string", "description": "Exact memory id to inspect." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["memory_id"]
+                }
+        }),
+        json!({
                 "name": "feedback_record",
                 "description": "Record a correction when an analysis prediction was wrong (same fields, defaults, and validation as `atlas feedback record`). Stored as first-class deterministic correction memory; records where actual differs from predicted can lower matching analysis confidence (ICM-C3).",
                 "inputSchema": {

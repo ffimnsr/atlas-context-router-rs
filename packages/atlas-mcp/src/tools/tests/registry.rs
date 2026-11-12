@@ -52,6 +52,7 @@ const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "memoir_create",
     "memoir_inspect",
     "memoir_link",
+    "memory_ops",
     "memory_recall",
     "memory_store",
     "overview_export",

@@ -443,6 +443,12 @@ pub enum MemoryCommand {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// Show the bounded typed-operator history for one memory row (VM1).
+    Ops {
+        /// Exact memory id to inspect.
+        memory_id: String,
+    },
 }
 
 /// Sub-commands for `atlas feedback` (ICM-C).

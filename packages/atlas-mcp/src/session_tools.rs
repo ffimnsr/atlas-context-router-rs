@@ -57,7 +57,7 @@ pub use feedback::tool_feedback_record;
 pub use memoir::{
     tool_memoir_add_concept, tool_memoir_create, tool_memoir_inspect, tool_memoir_link,
 };
-pub use memory::{tool_get_global_memory, tool_memory_recall, tool_memory_store};
+pub use memory::{tool_get_global_memory, tool_memory_ops, tool_memory_recall, tool_memory_store};
 pub use overview::{
     tool_overview_export, tool_overview_ingest, tool_overview_refresh_plan, tool_overview_search,
     tool_overview_show,

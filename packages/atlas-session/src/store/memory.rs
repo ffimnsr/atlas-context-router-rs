@@ -41,6 +41,8 @@ pub(super) const MEMORY_COLUMNS: &[&str] = &[
     "source_id",
     "metadata_json",
     "superseded_by",
+    "op_history_json",
+    "numeric_value",
 ];
 
 /// Exact index set of the `memories` table (migrations 007 + 009).
@@ -180,6 +182,8 @@ pub(super) fn memory_schema_issues(conn: &Connection) -> Vec<String> {
             }
         }
     }
+
+    issues.extend(super::memory_ops::schema_issues(conn));
 
     issues
 }

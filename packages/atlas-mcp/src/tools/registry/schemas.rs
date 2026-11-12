@@ -870,6 +870,14 @@ pub(crate) struct MemoryRecallArgsSchema {
 #[allow(dead_code)]
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct MemoryOpsArgsSchema {
+    memory_id: String,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct FeedbackRecordArgsSchema {
     predicted: String,
     actual: String,

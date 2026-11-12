@@ -261,3 +261,49 @@ pub(crate) fn feedback_record_output_schema() -> Value {
         })),
     )
 }
+
+pub(crate) fn memory_ops_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "repo_root": { "type": "string" },
+            "memory_id": { "type": "string" },
+            "found": { "type": "boolean" },
+            "numeric_value": { "type": ["number", "null"] },
+            "op_history": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "op": { "type": "string" },
+                        "at": { "type": "string" },
+                        "fields": { "type": "array", "items": { "type": "string" } }
+                    },
+                    "required": ["op", "at", "fields"]
+                }
+            },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "entry_count": { "type": "integer" }
+                },
+                "required": ["entry_count"]
+            },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "repo_root",
+            "memory_id",
+            "found",
+            "numeric_value",
+            "op_history",
+            "summary",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}

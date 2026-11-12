@@ -40,6 +40,7 @@ pub(crate) fn tool_category(name: &str) -> &'static str {
         | "cross_session_search"
         | "get_global_memory"
         | "memory_store"
+        | "memory_ops"
         | "memory_recall"
         | "feedback_record"
         | "memoir_create"
@@ -145,6 +146,7 @@ pub(crate) const TYPED_SESSION_MEMORY_SCHEMA_TOOLS: &[&str] = &[
     "cross_session_search",
     "get_global_memory",
     "memory_store",
+    "memory_ops",
     "memory_recall",
     "feedback_record",
     "record_session_event",

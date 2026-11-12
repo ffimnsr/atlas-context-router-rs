@@ -376,6 +376,10 @@ pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
             ),
             ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
         ])),
+        "memory_ops" => Some(typed_schema_with_descriptions::<MemoryOpsArgsSchema>(&[
+            ("properties/memory_id", "Exact memory id to inspect."),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
         "feedback_record" => Some(typed_schema_with_descriptions::<FeedbackRecordArgsSchema>(
             &[
                 (

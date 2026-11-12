@@ -24,6 +24,7 @@ mod feedback;
 mod global_memory;
 mod memoir;
 mod memory;
+mod memory_ops;
 mod memory_recall;
 mod overview;
 mod resume;
@@ -64,6 +65,11 @@ pub use self::types::{
     MemorySearchHit, MemorySupersessionLink, MemoryViewer, NOISY_TOPIC_ENTRIES, NewDurableTask,
     NewFeedback, NewMemory, NewSessionEvent, OVERSIZED_BODY_CHARS, ResumeSnapshot, SessionEventRow,
     SessionEventType, SessionMeta, SessionStats, SessionStoreConfig,
+};
+
+pub use self::memory_ops::{
+    FAILURE_SIGNATURE_CAP, FAILURE_TOPIC_BUILD, FAILURE_TOPIC_TESTS, MAX_OP_HISTORY_ENTRIES,
+    MemoryEntity, MemoryOp, MemoryOpHistory, MemoryOpHistoryEntry, OpOutcome, apply_memory_op,
 };
 
 use self::agent_memory::{summarize_agent_memory, summarize_agent_memory_from_events};

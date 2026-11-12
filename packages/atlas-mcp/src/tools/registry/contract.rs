@@ -87,6 +87,7 @@ pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
         | "cross_file_links"
         | "concept_clusters"
         | "memory_store"
+        | "memory_ops"
         | "memory_recall"
         | "feedback_record"
         | "memoir_create"

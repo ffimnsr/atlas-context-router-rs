@@ -122,6 +122,8 @@ mod durable;
 mod feedback;
 mod memoir;
 mod memory_curation;
+mod memory_ops;
+mod memory_ops_operators;
 mod memory_query;
 mod memory_recall;
 mod memory_schema;

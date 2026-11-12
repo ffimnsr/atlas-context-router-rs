@@ -48,6 +48,7 @@
 //! | `cross_session_search`    | CM11: search saved context across all sessions for repo  |
 //! | `get_global_memory`       | CM11: frequent symbols/files/workflows; related sessions |
 //! | `memory_store`            | ICM-A: store a memory record through the shared service  |
+//! | `memory_ops`              | VM1: typed operator history for one memory row           |
 //! | `memory_recall`           | ICM-A: recall memories with visibility rules and hints   |
 //! | `feedback_record`         | ICM-C: record a correction when a prediction was wrong    |
 //! | `memoir_create`           | ICM-F: create a memoir concept graph                     |

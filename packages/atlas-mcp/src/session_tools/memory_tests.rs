@@ -315,3 +315,55 @@ fn memory_recall_without_session_db_returns_empty() {
     assert_eq!(body["summary"]["match_count"], 0);
     assert_eq!(body["retrieval_hints"], serde_json::json!([]));
 }
+
+#[test]
+fn memory_ops_returns_history_and_handles_unknown_ids() {
+    let dir = TempDir::new().unwrap();
+    let db_path = setup_db_path(&dir);
+    std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+    let repo_root = dir.path().to_string_lossy().into_owned();
+
+    let stored = store_via_tool(
+        &repo_root,
+        &db_path,
+        &serde_json::json!({ "text": "operator history target", "topic": "ops" }),
+    );
+    let memory_id = stored["memory"]["id"].as_str().unwrap().to_owned();
+
+    let mut store = open_session_store(&db_path);
+    store
+        .apply_memory_op(
+            &repo_root,
+            &memory_id,
+            &atlas_session::MemoryOp::Count {
+                field: "runs".to_owned(),
+            },
+        )
+        .unwrap();
+    drop(store);
+
+    let result = tool_memory_ops(
+        Some(&serde_json::json!({ "memory_id": memory_id })),
+        &repo_root,
+        &db_path,
+        OutputFormat::Json,
+    )
+    .unwrap();
+    let body = tool_body(&result);
+    assert_eq!(body["found"], true);
+    assert_eq!(body["summary"]["entry_count"], 1);
+    assert_eq!(body["op_history"][0]["op"], "count");
+    assert!(body["warnings"].as_array().unwrap().is_empty());
+
+    let missing = tool_memory_ops(
+        Some(&serde_json::json!({ "memory_id": "missing-memory" })),
+        &repo_root,
+        &db_path,
+        OutputFormat::Json,
+    )
+    .unwrap();
+    let body = tool_body(&missing);
+    assert_eq!(body["found"], false);
+    assert_eq!(body["summary"]["entry_count"], 0);
+    assert_eq!(body["warnings"].as_array().unwrap().len(), 1);
+}

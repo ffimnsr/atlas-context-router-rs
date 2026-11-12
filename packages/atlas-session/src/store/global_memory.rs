@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 
 use atlas_core::{AtlasError, Result};
 
+use super::memory_ops::record_failure_events;
 use super::types::{
     GlobalAccessEntry, GlobalWorkflowPattern, SessionEventRow, SessionEventType, SessionMeta,
 };
@@ -391,6 +392,10 @@ pub(super) fn update_global_memory_from_events(
             upsert_workflow_pattern(conn, repo_root, window, now)?;
         }
     }
+
+    // VM1: route failing command events through the typed memory operator
+    // pipeline so topic entities keep deterministic counts and signatures.
+    record_failure_events(conn, repo_root, events, now)?;
 
     Ok(())
 }

@@ -63,9 +63,14 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "012_overview_memory",
         up_sql: include_str!("migrations/012_overview_memory.sql"),
     },
+    Migration {
+        version: 13,
+        name: "013_memory_ops_and_fts",
+        up_sql: include_str!("migrations/013_memory_ops_and_fts.sql"),
+    },
 ];
 
-pub const LATEST_VERSION: i32 = 12;
+pub const LATEST_VERSION: i32 = 13;
 
 pub const MIGRATION_SET: MigrationSet = MigrationSet {
     db_kind: "session",

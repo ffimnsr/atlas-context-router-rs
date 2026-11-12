@@ -26,6 +26,8 @@ fn memories_table_schema_matches_golden() {
             "source_id",
             "metadata_json",
             "superseded_by",
+            "op_history_json",
+            "numeric_value",
         ]
     );
 
@@ -128,6 +130,8 @@ fn memory_schema_issues_detect_missing_table_and_indexes() {
     assert_eq!(
         issues,
         vec![
+            "missing column: memories.op_history_json",
+            "missing column: memories.numeric_value",
             "missing index: idx_memories_repo_topic",
             "missing index: idx_memories_repo_importance",
             "missing index: idx_memories_repo_scope",
@@ -135,6 +139,9 @@ fn memory_schema_issues_detect_missing_table_and_indexes() {
             "missing index: idx_memories_repo_accessed",
             "missing index: idx_memories_superseded",
             "missing table: memory_supersessions",
+            "missing trigger: memories_ai",
+            "missing trigger: memories_ad",
+            "missing trigger: memories_au",
         ]
     );
 }

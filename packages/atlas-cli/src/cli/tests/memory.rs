@@ -444,3 +444,14 @@ fn parse_memory_consolidate_command() {
         }
     ));
 }
+
+#[test]
+fn parse_memory_ops_command() {
+    let cli = parse(&["atlas", "memory", "ops", "abc123"]);
+    assert!(matches!(
+        cli.command,
+        Command::Memory {
+            subcommand: MemoryCommand::Ops { ref memory_id }
+        } if memory_id == "abc123"
+    ));
+}

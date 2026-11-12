@@ -12,7 +12,7 @@ use crate::session_events::tool_record_session_event;
 use crate::session_tools::{
     tool_compact_session, tool_cross_session_search, tool_feedback_record, tool_get_context_stats,
     tool_get_global_memory, tool_get_session_status, tool_memoir_add_concept, tool_memoir_create,
-    tool_memoir_inspect, tool_memoir_link, tool_memory_recall, tool_memory_store,
+    tool_memoir_inspect, tool_memoir_link, tool_memory_ops, tool_memory_recall, tool_memory_store,
     tool_overview_export, tool_overview_ingest, tool_overview_refresh_plan, tool_overview_search,
     tool_overview_show, tool_purge_saved_context, tool_read_saved_context, tool_resume_session,
     tool_save_context_artifact, tool_search_decisions, tool_search_saved_context,
@@ -160,6 +160,7 @@ fn normalized_contract_tool(name: &str) -> bool {
             | "cross_session_search"
             | "get_global_memory"
             | "memory_store"
+            | "memory_ops"
             | "memory_recall"
             | "feedback_record"
             | "memoir_create"
@@ -448,6 +449,7 @@ pub(crate) fn is_known_tool_name(name: &str) -> bool {
         | "cross_session_search"
         | "get_global_memory"
         | "memory_store"
+        | "memory_ops"
         | "memory_recall"
         | "feedback_record"
         | "memoir_create"
@@ -654,6 +656,7 @@ fn call_inner(
         }
         "get_global_memory" => tool_get_global_memory(args, repo_root, db_path, output_format),
         "memory_store" => tool_memory_store(args, repo_root, db_path, output_format),
+        "memory_ops" => tool_memory_ops(args, repo_root, db_path, output_format),
         "memory_recall" => tool_memory_recall(args, repo_root, db_path, output_format),
         "memoir_create" => tool_memoir_create(args, repo_root, db_path, output_format),
         "memoir_add_concept" => tool_memoir_add_concept(args, repo_root, db_path, output_format),

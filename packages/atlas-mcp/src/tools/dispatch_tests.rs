@@ -308,6 +308,7 @@ fn schema_test_args(name: &str, saved_source_id: &str, repo_root: &str) -> serde
         "cross_session_search" => json!({"query": "schema-test", "output_format": "json"}),
         "get_global_memory" => json!({"output_format": "json"}),
         "memory_store" => json!({"text": "schema-test memory", "output_format": "json"}),
+        "memory_ops" => json!({"memory_id": "missing-memory", "output_format": "json"}),
         "memory_recall" => json!({"query": "schema-test", "output_format": "json"}),
         "memoir_create" => json!({
             "name": "schema-test-created-graph",

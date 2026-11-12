@@ -42,6 +42,7 @@
     "list_graph_stats",
     "list_symbols",
     "man",
+    "memory_ops",
     "memory_recall",
     "memory_store",
     "postprocess_graph",

@@ -278,6 +278,7 @@ fn tool_output_schema_for(name: &str) -> Option<Value> {
         "cross_session_search" => Some(cross_session_search_output_schema()),
         "get_global_memory" => Some(get_global_memory_output_schema()),
         "memory_store" => Some(memory_store_output_schema()),
+        "memory_ops" => Some(memory_ops_output_schema()),
         "memory_recall" => Some(memory_recall_output_schema()),
         "memoir_create" => Some(memoir_create_output_schema()),
         "memoir_add_concept" => Some(memoir_add_concept_output_schema()),

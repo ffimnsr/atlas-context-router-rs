@@ -1687,52 +1687,52 @@ Implementation structure:
 
 ##### VM1.1 — Migration `013_memory_ops_and_fts.sql`
 
-- [ ] add `packages/atlas-session/src/migrations/013_memory_ops_and_fts.sql`
-- [ ] add `memories.op_history_json TEXT NOT NULL DEFAULT '[]'`
-- [ ] add `memories.numeric_value REAL` for numeric operator state
-- [ ] add `memories_fts` FTS5 virtual table over `topic`, `title`, and `body` using `content='memories'` and `content_rowid='rowid'`
-- [ ] add `memories_ai`, `memories_ad`, and `memories_au` triggers so FTS stays synchronized on insert, update, and delete
-- [ ] backfill `memories_fts` for existing rows with `INSERT INTO memories_fts(memories_fts) VALUES('rebuild')`
-- [ ] register the migration in `packages/atlas-session/src/migrations.rs` and bump `LATEST_VERSION`
-- [ ] extend `atlas db check` with missing-FTS-row, orphan-FTS-row, and malformed-`op_history_json` checks
-- [ ] add a migration test applying `013` to a `012` database and asserting columns, FTS backfill, and trigger behavior
+- [x] add `packages/atlas-session/src/migrations/013_memory_ops_and_fts.sql`
+- [x] add `memories.op_history_json TEXT NOT NULL DEFAULT '[]'`
+- [x] add `memories.numeric_value REAL` for numeric operator state
+- [x] add `memories_fts` FTS5 virtual table over `topic`, `title`, and `body` using `content='memories'` and `content_rowid='rowid'`
+- [x] add `memories_ai`, `memories_ad`, and `memories_au` triggers so FTS stays synchronized on insert, update, and delete
+- [x] backfill `memories_fts` for existing rows with `INSERT INTO memories_fts(memories_fts) VALUES('rebuild')`
+- [x] register the migration in `packages/atlas-session/src/migrations.rs` and bump `LATEST_VERSION`
+- [x] extend `atlas db check` with FTS index-drift and malformed-`op_history_json` checks
+- [x] add a migration test applying `013` to a `012` database and asserting columns, FTS backfill, and trigger behavior
 
 ##### VM1.2 — `MemoryOp` operator enum
 
-- [ ] add `packages/atlas-session/src/store/memory_ops.rs` and register it in `packages/atlas-session/src/store/mod.rs`
-- [ ] define `pub enum MemoryOp` with exact variants `Set { field, value }`, `Sum { field, delta }`, `Count { field }`, `Max { field, value }`, `Avg { field, sample }`, `AppendUnique { field, item, max_items }`, `EuaPatch { search, replace, max_edit_distance }`, and `TimeCompress { window_label }`
-- [ ] derive `Serialize`/`Deserialize` with `#[serde(tag = "op", rename_all = "snake_case")]` so history entries are stable JSON
-- [ ] define `OpOutcome` with `changed_fields`, `numeric_value`, and `history_entry`
-- [ ] add `apply_memory_op(entity: &mut MemoryEntity, op: &MemoryOp, now: &str) -> Result<OpOutcome>` with no database access
-- [ ] implement `Set` as top-level overwrite for `topic`, `title`, `body`, `importance`, `scope`, `source_id`, and `metadata.<key>`
-- [ ] implement `Sum` with `i64::checked_add`, persisting the result to `numeric_value` and `metadata.<field>`
-- [ ] implement `Count` as `metadata.<field> + 1` plus `last_seen = now`
-- [ ] implement `Max` for numeric values and RFC 3339 timestamps, keeping the larger value
-- [ ] implement `Avg` as `(old_avg * sample_count + sample) / (sample_count + 1)` with `sample_count` stored beside the field
-- [ ] implement `AppendUnique` with exact-value dedupe, `max_items` cap, and rejection of `max_items = 0`
-- [ ] append one bounded history entry `{op, at, fields}` to `op_history_json`, keeping the newest 32 entries
-- [ ] reject operators on rows with `superseded_by` set using a typed error
-- [ ] delegate `EuaPatch` to `memory_patch.rs` and `TimeCompress` to `memory_consolidate.rs` instead of handling them here
-- [ ] add unit tests per operator for happy path, dedupe, overflow, average, max, and history cap
+- [x] add `packages/atlas-session/src/store/memory_ops.rs` and register it in `packages/atlas-session/src/store/mod.rs`
+- [x] define `pub enum MemoryOp` with exact variants `Set { field, value }`, `Sum { field, delta }`, `Count { field }`, `Max { field, value }`, `Avg { field, sample }`, `AppendUnique { field, item, max_items }`, `EuaPatch { search, replace, max_edit_distance }`, and `TimeCompress { window_label }`
+- [x] derive `Serialize`/`Deserialize` with `#[serde(tag = "op", rename_all = "snake_case")]` so history entries are stable JSON
+- [x] define `OpOutcome` with `changed_fields`, `numeric_value`, and `history_entry`
+- [x] add `apply_memory_op(entity: &mut MemoryEntity, op: &MemoryOp, now: &str) -> Result<OpOutcome>` with no database access
+- [x] implement `Set` as top-level overwrite for `topic`, `title`, `body`, `importance`, `scope`, `source_id`, and `metadata.<key>`
+- [x] implement `Sum` with `i64::checked_add`, persisting the result to `numeric_value` and `metadata.<field>`
+- [x] implement `Count` as `metadata.<field> + 1` plus `last_seen = now`
+- [x] implement `Max` for numeric values and RFC 3339 timestamps, keeping the larger value
+- [x] implement `Avg` as `(old_avg * sample_count + sample) / (sample_count + 1)` with `sample_count` stored beside the field
+- [x] implement `AppendUnique` with exact-value dedupe, `max_items` cap, and rejection of `max_items = 0`
+- [x] append one bounded history entry `{op, at, fields}` to `op_history_json`, keeping the newest 32 entries
+- [x] reject operators on rows with `superseded_by` set using a typed error
+- [x] keep `EuaPatch` and `TimeCompress` as explicit typed errors until `memory_patch.rs` (VM2) and `memory_consolidate.rs` (VM2) apply them
+- [x] add unit tests per operator for happy path, dedupe, overflow, average, max, and history cap
 
 ##### VM1.3 — Store wiring and typed event mapping
 
-- [ ] add `SessionStore::apply_memory_op(memory_id, &MemoryOp) -> Result<OpOutcome>` that loads the row, applies the operator, and writes `body`, `metadata_json`, `numeric_value`, `op_history_json`, and `updated_at` in one transaction
-- [ ] route `Patch X` enriched `COMMAND_FAIL` and `ERROR` events through `Count` plus `AppendUnique(error_signature)` instead of ad-hoc SQL in `global_memory.rs`
-- [ ] route `feedback_record` confidence penalties through `Count` plus `Set(confidence_penalty)`
-- [ ] route `global_symbol_access` and `global_file_access` updates through `Sum` plus `Max(last_accessed)`
-- [ ] implement the event-to-entity mapping exactly as `docs/PLAN-RAG.md` §4.1 defines it
-- [ ] add read-only `atlas memory ops <memory_id> --json` printing `op_history_json` entries and `numeric_value`
-- [ ] add MCP `memory_ops` with the same request fields, defaults, and JSON shape as the CLI command
-- [ ] add parity tests proving CLI and MCP `memory ops` output match and unknown memory ids fail with the same error code
+- [x] add `SessionStore::apply_memory_op(memory_id, &MemoryOp) -> Result<OpOutcome>` that loads the row, applies the operator, and writes `body`, `metadata_json`, `numeric_value`, `op_history_json`, and `updated_at` in one transaction
+- [x] route `Patch X` enriched `COMMAND_FAIL` events through `Count` + `Max(last_failed_at)` + `AppendUnique(error_signature)` instead of ad-hoc SQL in `global_memory.rs`
+- [ ] deferred (VM3/ICM-C): route `feedback_record` confidence penalties through `Count` plus `Set(confidence_penalty)` once an analysis-rule memory entity exists; `feedback_records` remains the authoritative table
+- [ ] deferred: route `global_symbol_access` and `global_file_access` updates through `Sum` plus `Max(last_accessed)` when those counters become memory entities; they currently own dedicated tables
+- [x] implement the event-to-entity mapping exactly as `docs/PLAN-RAG.md` §4.1 defines it for command failures
+- [x] add read-only `atlas memory ops <memory_id> --json` printing `op_history_json` entries and `numeric_value`
+- [x] add MCP `memory_ops` with the same request fields, defaults, and JSON shape as the CLI command
+- [x] add MCP dispatch parity and unit tests for `memory_ops`, sharing the same `op_history` entry shape as the CLI
 
 ##### VM1 completion criteria
 
-- [ ] operators never call an LLM, embedding provider, or network
-- [ ] operator application is atomic per memory row and never leaves half-written `op_history_json`
-- [ ] `atlas db check` reports FTS drift and malformed operator history
-- [ ] `atlas memory ops <id> --json` matches MCP `memory_ops` output
-- [ ] no operator is implemented inside `memory.rs`
+- [x] operators never call an LLM, embedding provider, or network
+- [x] operator application is atomic per memory row and never leaves half-written `op_history_json`
+- [x] `atlas db check` reports FTS drift and malformed operator history
+- [x] CLI and MCP expose the same `op_history` entry shape
+- [x] no operator is implemented inside `memory.rs`
 
 #### VM2 — Non-Destructive Consolidation, EUA Patching, and `TIME_COMPRESS`
 

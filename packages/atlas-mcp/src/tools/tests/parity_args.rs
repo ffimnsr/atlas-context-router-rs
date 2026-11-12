@@ -85,6 +85,7 @@ pub(super) fn parity_args(tool_name: &str, source_id: &str, repo_root: &str) -> 
         "cross_session_search" => json!({ "query": "parity-seed", "output_format": "json" }),
         "get_global_memory" => json!({ "limit": 5, "output_format": "json" }),
         "memory_store" => json!({ "text": "parity memory body", "output_format": "json" }),
+        "memory_ops" => json!({ "memory_id": "missing-memory", "output_format": "json" }),
         "memory_recall" => json!({ "query": "parity", "output_format": "json" }),
         "memoir_create" => json!({
             "name": "parity-created-graph",

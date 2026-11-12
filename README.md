@@ -786,6 +786,7 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `cross_session_search` | CM11: search saved context across all sessions for this repo |
 | `get_global_memory` | CM11: frequent symbols/files/workflows and related past sessions |
 | `memory_store` | ICM-A: store a memory record through the shared memory service |
+| `memory_ops` | VM1: show the bounded typed-operator history for one memory row |
 | `memory_recall` | ICM-A: recall memories with visibility rules and retrieval hints |
 | `feedback_record` | ICM-C: record a correction when an analysis prediction was wrong |
 | `memoir_create` | ICM-F: create a memoir concept graph in the separate knowledge layer |

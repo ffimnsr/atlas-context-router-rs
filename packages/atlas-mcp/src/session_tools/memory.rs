@@ -401,3 +401,53 @@ pub fn tool_memory_recall(
     );
     Ok(response)
 }
+
+// ---------------------------------------------------------------------------
+// memory_ops  (VM1 typed operator history)
+// ---------------------------------------------------------------------------
+
+/// Return the bounded typed-operator history for one memory row. This is a
+/// read-only parity surface for `atlas memory ops`; an unknown id returns
+/// `found = false` instead of an error so agents can probe safely.
+pub fn tool_memory_ops(
+    args: Option<&Value>,
+    repo_root: &str,
+    db_path: &str,
+    output_format: OutputFormat,
+) -> Result<Value> {
+    let memory_id = args
+        .and_then(|a| a.get("memory_id"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing required argument: memory_id"))?;
+
+    let session_db = derive_session_db_path(db_path);
+    let store = SessionStore::open(&session_db)?;
+    let history = store.memory_op_history(repo_root, memory_id)?;
+
+    let (found, numeric_value, entries, warnings) = match history {
+        Some(history) => (true, history.numeric_value, history.entries, Vec::new()),
+        None => (
+            false,
+            None,
+            Vec::new(),
+            vec![format!("no memory with id {memory_id} in {repo_root}")],
+        ),
+    };
+    let entry_count = entries.len();
+
+    build_normalized_tool_result_value(
+        &serde_json::json!({
+            "tool": "memory_ops",
+            "repo_root": repo_root,
+            "memory_id": memory_id,
+            "found": found,
+            "numeric_value": numeric_value,
+            "op_history": entries,
+            "summary": {
+                "entry_count": entry_count,
+            },
+            "warnings": warnings,
+        }),
+        output_format,
+    )
+}

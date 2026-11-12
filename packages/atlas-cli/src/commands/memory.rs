@@ -455,6 +455,39 @@ pub fn run_memory(cli: &Cli) -> Result<()> {
                 }
             }
         }
+
+        MemoryCommand::Ops { memory_id } => {
+            let Some(history) = store.memory_op_history(&repo, memory_id)? else {
+                bail!("no memory with id {memory_id} in {repo}");
+            };
+
+            if cli.json {
+                print_json(
+                    "memory.ops",
+                    serde_json::json!({
+                        "memory_id": history.memory_id,
+                        "numeric_value": history.numeric_value,
+                        "count": history.entries.len(),
+                        "history": history.entries,
+                    }),
+                )?;
+            } else if history.entries.is_empty() {
+                println!("No operators recorded for memory {memory_id}");
+            } else {
+                println!("Operator history for memory {}:", history.memory_id);
+                for entry in &history.entries {
+                    println!(
+                        "  {}  {:<14} fields={}",
+                        entry.at,
+                        entry.op,
+                        entry.fields.join(",")
+                    );
+                }
+                if let Some(value) = history.numeric_value {
+                    println!("numeric_value : {value}");
+                }
+            }
+        }
     }
 
     Ok(())

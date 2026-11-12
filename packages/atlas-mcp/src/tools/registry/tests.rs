@@ -644,6 +644,7 @@ fn typed_session_memory_schemas_preserve_required_fields_and_descriptions() {
                 .map(ToOwned::to_owned)
                 .collect(),
             "memory_store" => ["text"].into_iter().map(ToOwned::to_owned).collect(),
+            "memory_ops" => ["memory_id"].into_iter().map(ToOwned::to_owned).collect(),
             "feedback_record" => ["predicted", "actual"]
                 .into_iter()
                 .map(ToOwned::to_owned)
