@@ -258,19 +258,19 @@ Implementation structure:
 
 ##### ICM-E2 — Optional semantic and vector recall
 
-- [ ] add config `memory.embedding.enabled`, `memory.embedding.provider`, `memory.embedding.model`, `memory.embedding.dimension`, `memory.search.hybrid_weight_fts`, and `memory.search.hybrid_weight_vector`
-- [ ] keep embeddings disabled by default and require explicit opt-in
-- [ ] add `memory_embeddings` table with `memory_id`, `embedding_model`, `dimension`, `vector_blob`, and `created_at`
-- [ ] reject vector inserts when configured dimension does not match stored dimension
-- [ ] add `atlas memory recall <query> --hybrid` using reciprocal-rank fusion only after lexical evaluation and budget metrics exist
-- [ ] keep graph-backed and exact lexical evidence stronger than vector-only matches by default
+- [x] add config `memory.embedding.enabled`, `memory.embedding.provider`, `memory.embedding.model`, `memory.embedding.dimension`, `memory.search.hybrid_weight_fts`, and `memory.search.hybrid_weight_vector`
+- [x] keep embeddings disabled by default and require explicit opt-in
+- [x] add `memory_embeddings` table with `memory_id`, `embedding_model`, `dimension`, `vector_blob`, and `created_at`
+- [x] reject vector inserts when configured dimension does not match stored dimension
+- [x] add `atlas memory recall <query> --hybrid` using reciprocal-rank fusion only after lexical evaluation and budget metrics exist
+- [x] keep graph-backed and exact lexical evidence stronger than vector-only matches by default
 
 ##### ICM-E completion criteria
 
-- [ ] baseline memory recall works lexically with no embedding provider configured
-- [ ] enabling embeddings without provider or valid dimension fails clearly
-- [ ] hybrid recall returns ranking explanation fields without burying exact keyword hits
-- [ ] cross-session recall respects `global`, `project`, `session`, and `frontend` visibility boundaries
+- [x] baseline memory recall works lexically with no embedding provider configured
+- [x] enabling embeddings without provider or valid dimension fails clearly
+- [x] hybrid recall returns ranking explanation fields without burying exact keyword hits
+- [x] cross-session recall respects `global`, `project`, `session`, and `frontend` visibility boundaries
 
 #### ICM-F — Memoir Concept Graph as Separate Knowledge Layer
 
@@ -503,33 +503,33 @@ Implementation structure:
 
 ##### ICM-H1 — Shell-first install and init modes
 
-- [ ] add supported `atlas init --mode` values `mcp`, `hook`, `cli`, and `all`
-- [ ] make each mode idempotent and emit files to be created during `--dry-run`
-- [ ] ensure `--mode all` installs only MCP config, hooks, and CLI config relevant to shell-first memory workflows
+- [x] add supported `atlas init --mode` values `mcp`, `hook`, `cli`, and `all`
+- [x] make each mode idempotent and emit files to be created during `--dry-run`
+- [x] ensure `--mode all` installs only MCP config, hooks, and CLI config relevant to shell-first memory workflows
 
 ##### ICM-H2 — TUI only, read-only first
 
-- [ ] add `atlas memory tui` with read-only browsing for memories, topics, feedback, memoir concepts, overview records, health findings, and saved artifacts
-- [ ] add filters for topic, scope, importance, and frontend
-- [ ] add overview filters for subject kind, freshness, package, module, file, source kind, and updated time
-- [ ] keep first version non-mutating and smoke-testable without panic
+- [x] add `atlas memory tui` with read-only browsing for memories, topics, feedback, memoir concepts, overview records, health findings, and saved artifacts
+- [x] add filters for topic, scope, importance, and frontend
+- [x] add overview filters for subject kind, freshness, package, module, file, source kind, and updated time
+- [x] keep first version non-mutating and smoke-testable without panic
 
 ##### ICM-H3 — Tests, docs, and release gates
 
-- [ ] create reusable fixtures for critical decision memory, low-priority stale memory, dead-code false-positive feedback, memoir dependency graph, overview memory records, wake-up pack with saved artifact references, and frontend-private memory
-- [ ] snapshot JSON output for `atlas memory store --json`, `atlas memory recall --json`, `atlas memory health --json`, `atlas feedback record --json`, `atlas feedback search --json`, `atlas memoir inspect --json`, `atlas overview show --json`, `atlas overview search --json`, and `atlas wake-up --json`
-- [ ] add `wiki/memory-architecture.md` documenting memory DB ownership, importance and decay policy, scope and visibility rules, feedback integration, memoir graph separation, overview memory separation, wake-up behavior, and CLI/MCP mapping
-- [ ] define release gate `ICM Memory Layer Complete`
-- [ ] require for release gate: CLI and MCP memory store/recall parity, importance and decay policies, feedback-adjusted analysis, memoir typed relations, overview memory export/ingest/context parity, wake-up packs without raw large content, health audit coverage, shared/private visibility rules, complete docs, and JSON snapshot coverage
+- [x] create reusable fixtures for critical decision memory, low-priority stale memory, dead-code false-positive feedback, memoir dependency graph, overview memory records, wake-up pack with saved artifact references, and frontend-private memory
+- [x] snapshot JSON output for `atlas memory store --json`, `atlas memory recall --json`, `atlas memory health --json`, `atlas feedback record --json`, `atlas feedback search --json`, `atlas memoir inspect --json`, `atlas overview show --json`, `atlas overview search --json`, and `atlas wake-up --json`
+- [x] add `wiki/memory-architecture.md` documenting memory DB ownership, importance and decay policy, scope and visibility rules, feedback integration, memoir graph separation, overview memory separation, wake-up behavior, and CLI/MCP mapping
+- [x] define release gate `ICM Memory Layer Complete`
+- [x] require for release gate: CLI and MCP memory store/recall parity, importance and decay policies, feedback-adjusted analysis, memoir typed relations, overview memory export/ingest/context parity, wake-up packs without raw large content, health audit coverage, shared/private visibility rules, complete docs, and JSON snapshot coverage
 
 ##### ICM-H completion criteria
 
-- [ ] every new shell-first memory command has CLI smoke coverage
-- [ ] every MCP memory tool has handler tests and parity assertions where applicable
-- [ ] `cargo test --workspace` passes with fixtures and JSON snapshots committed
-- [ ] no memory feature writes directly to graph DB
-- [ ] no large artifact is inlined into wake-up or resume output by default
-- [ ] no overview memory feature treats external analysis text as authoritative graph fact
+- [x] every new shell-first memory command has CLI smoke coverage
+- [x] every MCP memory tool has handler tests and parity assertions where applicable
+- [x] `cargo test --workspace` passes with fixtures and JSON snapshots committed
+- [x] no memory feature writes directly to graph DB
+- [x] no large artifact is inlined into wake-up or resume output by default
+- [x] no overview memory feature treats external analysis text as authoritative graph fact
 
 ---
 

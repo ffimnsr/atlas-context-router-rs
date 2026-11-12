@@ -15,8 +15,8 @@ pub use memoir::MemoirCommand;
 pub use overview::OverviewCommand;
 pub use subcommands::{
     AnalyzeCommand, CommunitiesCommand, ConfigCommand, DocsCommand, FeedbackCommand, FlowsCommand,
-    HistoryCommand, InsightsCommand, InstallMode, MemoryCommand, RefactorCommand, RepoCommand,
-    SessionCommand,
+    HistoryCommand, InitMode, InsightsCommand, InstallMode, MemoryCommand, RefactorCommand,
+    RepoCommand, SessionCommand,
 };
 pub use uri::UriCommand;
 
@@ -64,6 +64,19 @@ pub enum Command {
         /// search/mcp/context values from hardware and repo size.
         #[arg(long, default_value = "auto", value_parser = ["minimal", "standard", "full", "auto"])]
         profile: String,
+
+        /// Shell-first install mode: mcp config asset (default), hooks,
+        /// AGENTS.md instructions, or all.
+        #[arg(long, default_value = "mcp", value_enum)]
+        mode: InitMode,
+
+        /// Show every file the mode would create or refresh without writing.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Overwrite existing non-Atlas hooks and user-edited init assets.
+        #[arg(long)]
+        force: bool,
     },
 
     /// Run repo-local database migrations without building graph state.

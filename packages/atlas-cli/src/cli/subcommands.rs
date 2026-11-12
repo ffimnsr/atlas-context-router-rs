@@ -22,6 +22,51 @@ impl InstallMode {
     }
 }
 
+/// Shell-first install surfaces written by `atlas init --mode` (ICM-H1).
+///
+/// `mcp` is the default so a plain `atlas init` stays non-invasive: it writes a
+/// copyable stdio server entry under `.atlas/agent/` and never touches tracked
+/// repository files. Hooks and `AGENTS.md` instructions require an explicit
+/// `hook`, `cli`, or `all` mode.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum)]
+pub enum InitMode {
+    /// Generic MCP server registration asset only (default).
+    #[default]
+    Mcp,
+    /// Git hooks and the tool-agnostic Atlas agent hook runner only.
+    Hook,
+    /// Managed `AGENTS.md` CLI/agent instruction block only.
+    Cli,
+    /// MCP asset, hooks, and CLI instructions.
+    All,
+}
+
+impl InitMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Mcp => "mcp",
+            Self::Hook => "hook",
+            Self::Cli => "cli",
+            Self::All => "all",
+        }
+    }
+
+    /// Whether this mode writes the generic MCP registration asset.
+    pub const fn includes_mcp(self) -> bool {
+        matches!(self, Self::Mcp | Self::All)
+    }
+
+    /// Whether this mode installs git hooks and the hook runner.
+    pub const fn includes_hooks(self) -> bool {
+        matches!(self, Self::Hook | Self::All)
+    }
+
+    /// Whether this mode injects the managed `AGENTS.md` instruction block.
+    pub const fn includes_cli(self) -> bool {
+        matches!(self, Self::Cli | Self::All)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
 pub enum InsightsLargeFunctionMode {
     Large,
@@ -349,6 +394,88 @@ pub enum MemoryCommand {
 
         /// Maximum memories to return.
         #[arg(long, default_value_t = 20)]
+        limit: usize,
+
+        /// Fuse optional memory embeddings with lexical recall (ICM-E2).
+        #[arg(long)]
+        hybrid: bool,
+    },
+
+    /// Compute and store embeddings for memories that do not have one (ICM-E2).
+    Embed {
+        /// Restrict to one topic (case-insensitive exact match).
+        #[arg(long)]
+        topic: Option<String>,
+
+        /// Restrict to one importance level.
+        #[arg(long)]
+        importance: Option<String>,
+
+        /// Restrict to one scope.
+        #[arg(long)]
+        scope: Option<String>,
+
+        /// Maximum memories to embed in this run.
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+
+        /// List memories that would be embedded without calling the provider.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Browse memory, feedback, memoir, overview, health, and artifacts (read-only).
+    Tui {
+        /// Filter memories by topic (case-insensitive exact match).
+        #[arg(long)]
+        topic: Option<String>,
+
+        /// Filter memories by scope.
+        #[arg(long)]
+        scope: Option<String>,
+
+        /// Filter memories by importance level.
+        #[arg(long)]
+        importance: Option<String>,
+
+        /// Filter memories by frontend identity.
+        #[arg(long)]
+        frontend: Option<String>,
+
+        /// Filter overview records by subject kind.
+        #[arg(long)]
+        subject_kind: Option<String>,
+
+        /// Filter overview records by freshness.
+        #[arg(long)]
+        freshness: Option<String>,
+
+        /// Filter overview records by package name.
+        #[arg(long)]
+        package: Option<String>,
+
+        /// Filter overview records by module path.
+        #[arg(long)]
+        module: Option<String>,
+
+        /// Filter overview records by canonical file path.
+        #[arg(long)]
+        file: Option<String>,
+
+        /// Filter overview records by source kind.
+        #[arg(long)]
+        source_kind: Option<String>,
+
+        /// Only overview records updated after this date (YYYY-MM-DD or RFC 3339).
+        #[arg(long)]
+        newer_than: Option<String>,
+
+        /// Only overview records updated before this date (YYYY-MM-DD or RFC 3339).
+        #[arg(long)]
+        older_than: Option<String>,
+
+        /// Maximum rows rendered per section.
+        #[arg(long, default_value_t = 50)]
         limit: usize,
     },
 

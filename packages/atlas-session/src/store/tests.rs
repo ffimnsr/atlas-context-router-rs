@@ -124,6 +124,7 @@ mod feedback;
 mod memoir;
 mod memory_consolidate;
 mod memory_curation;
+mod memory_embeddings;
 mod memory_ops;
 mod memory_ops_operators;
 mod memory_patch;

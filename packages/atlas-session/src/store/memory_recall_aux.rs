@@ -134,6 +134,8 @@ pub(super) fn auxiliary_recall(
             time_score: time_score(age_days, policy.freshness_window_days),
             importance_score: importance_score(hit.memory.importance),
             recall_path: "auxiliary".to_owned(),
+            vector_score: None,
+            hybrid_score: None,
         };
     }
     hits.sort_by(|left, right| {
@@ -369,6 +371,8 @@ fn load_auxiliary_memories(
                     time_score: 0.0,
                     importance_score: 0.0,
                     recall_path: "auxiliary".to_owned(),
+                    vector_score: None,
+                    hybrid_score: None,
                 },
             })
         })

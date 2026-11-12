@@ -26,6 +26,7 @@ mod global_memory;
 mod memoir;
 mod memory;
 mod memory_consolidate;
+mod memory_embeddings;
 mod memory_ops;
 mod memory_patch;
 mod memory_recall;
@@ -67,14 +68,16 @@ pub use self::overview::{
 };
 pub use self::types::{
     AgentMemorySummary, AgentPartitionSummary, AgentResponsibilitySummary, CurationResult,
-    DEFAULT_DEDUP_WINDOW_SECS, DEFAULT_MAX_SNAPSHOT_BYTES, DEFAULT_RECALL_AUX_MAX_HOPS,
+    DEFAULT_DEDUP_WINDOW_SECS, DEFAULT_HYBRID_WEIGHT_FTS, DEFAULT_HYBRID_WEIGHT_VECTOR,
+    DEFAULT_MAX_SNAPSHOT_BYTES, DEFAULT_MEMORY_VECTOR_MIN_SIMILARITY, DEFAULT_RECALL_AUX_MAX_HOPS,
     DEFAULT_RECALL_FRESHNESS_WINDOW_DAYS, DEFAULT_RECALL_PRIMARY_QUOTA_RATIO,
     DEFAULT_RECALL_WEIGHT_BUSINESS, DEFAULT_RECALL_WEIGHT_TIME, DEFAULT_SESSION_DB,
     DEFAULT_SESSION_MAX_EVENTS, DecisionRecord, DecisionSearchHit, DelegatedTaskSummary,
     DurableTaskListPage, DurableTaskRecord, DurableTaskStatus, DurableTaskUpdate, EventCategory,
     FeedbackRecord, FeedbackSearchFilter, FeedbackSearchHit, FeedbackStats, GlobalAccessEntry,
-    GlobalWorkflowPattern, MAX_INLINE_EVENT_PAYLOAD_BYTES, MemoryConsolidationGroup,
-    MemoryConsolidationPlan, MemoryDecayPolicy, MemoryDecayReport, MemoryDeleteResult,
+    GlobalWorkflowPattern, MAX_INLINE_EVENT_PAYLOAD_BYTES, MEMORY_HYBRID_RRF_K,
+    MEMORY_VECTOR_SCAN_LIMIT, MemoryConsolidationGroup, MemoryConsolidationPlan, MemoryDecayPolicy,
+    MemoryDecayReport, MemoryDeleteResult, MemoryEmbeddingCoverage, MemoryEmbeddingPolicy,
     MemoryHealthCategory, MemoryHealthFinding, MemoryHealthReport, MemoryImportance,
     MemoryListFilter, MemoryPruneResult, MemoryRecallPolicy, MemoryRecallRanking, MemoryRecord,
     MemoryScope, MemorySearchHit, MemorySupersessionLink, MemoryViewer, NOISY_TOPIC_ENTRIES,
@@ -324,6 +327,96 @@ impl SessionStore {
     /// Fetch one memory row by exact id within a repo.
     pub fn get_memory(&self, repo_root: &str, memory_id: &str) -> Result<Option<MemoryRecord>> {
         get_memory(&self.conn, repo_root, memory_id)
+    }
+
+    /// Hybrid recall (ICM-E2): lexical hits reranked by reciprocal-rank fusion,
+    /// then vector-only matches appended after every lexical tier.
+    ///
+    /// `query_vector` must be produced upstream by the configured embedding
+    /// model; this layer never calls a provider, so recall stays deterministic
+    /// and works with no embedding backend configured.
+    #[allow(clippy::too_many_arguments)]
+    pub fn recall_memories_hybrid_with_policy(
+        &self,
+        repo_root: &str,
+        query: &str,
+        query_vector: &[f32],
+        filter: &MemoryListFilter,
+        shared_only: bool,
+        viewer: &MemoryViewer,
+        limit: usize,
+        recall_policy: &MemoryRecallPolicy,
+        embedding_policy: &MemoryEmbeddingPolicy,
+    ) -> Result<Vec<MemorySearchHit>> {
+        memory_embeddings::hybrid_recall_with_policy(
+            &self.conn,
+            repo_root,
+            query,
+            query_vector,
+            filter,
+            shared_only,
+            viewer,
+            limit,
+            recall_policy,
+            embedding_policy,
+        )
+    }
+
+    /// Store or replace the embedding vector for one memory (ICM-E2).
+    pub fn store_memory_embedding(
+        &mut self,
+        memory_id: &str,
+        embedding_model: &str,
+        dimension: usize,
+        vector: &[f32],
+    ) -> Result<()> {
+        memory_embeddings::upsert_memory_embedding(
+            &self.conn,
+            memory_id,
+            embedding_model,
+            dimension,
+            vector,
+            &util::format_now(),
+        )
+    }
+
+    /// Stored `(model, dimension, vector)` for one memory, if any.
+    pub fn memory_embedding(&self, memory_id: &str) -> Result<Option<(String, usize, Vec<f32>)>> {
+        memory_embeddings::get_memory_embedding(&self.conn, memory_id)
+    }
+
+    /// Embedding coverage for one model across recallable memories in a repo.
+    pub fn memory_embedding_coverage(
+        &self,
+        repo_root: &str,
+        embedding_model: &str,
+        dimension: usize,
+    ) -> Result<MemoryEmbeddingCoverage> {
+        memory_embeddings::memory_embedding_coverage(
+            &self.conn,
+            repo_root,
+            embedding_model,
+            dimension,
+        )
+    }
+
+    /// Recallable memories that still need an embedding for `model`.
+    pub fn memories_missing_embeddings(
+        &self,
+        repo_root: &str,
+        embedding_model: &str,
+        dimension: usize,
+        filter: &MemoryListFilter,
+        limit: usize,
+    ) -> Result<Vec<MemoryRecord>> {
+        memory_embeddings::memories_missing_embeddings(
+            &self.conn,
+            repo_root,
+            embedding_model,
+            dimension,
+            filter,
+            limit,
+        )
     }
 
     /// Record one query-conditioned experience edge (VR4).

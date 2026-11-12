@@ -14,6 +14,8 @@ mod insights;
 mod maintenance;
 mod memoir;
 mod memory;
+mod memory_embed;
+mod memory_tui;
 mod overview;
 mod platform;
 mod postprocess;

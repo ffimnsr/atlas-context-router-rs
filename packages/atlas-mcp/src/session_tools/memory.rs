@@ -328,6 +328,10 @@ pub fn tool_memory_recall(
         .and_then(|a| a.get("shared"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let hybrid = args
+        .and_then(|a| a.get("hybrid"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let requested_limit = args
         .and_then(|a| a.get("limit"))
         .and_then(|v| v.as_u64())
@@ -357,16 +361,43 @@ pub fn tool_memory_recall(
         Some(store) => {
             let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root))
                 .unwrap_or_default();
-            let policy = atlas_session::MemoryRecallPolicy {
+            let recall_policy = atlas_session::MemoryRecallPolicy {
                 freshness_window_days: config.memory.recall.freshness_window_days,
                 weight_time: config.memory.recall.weight_time,
                 weight_business: config.memory.recall.weight_business,
                 primary_quota_ratio: config.memory.recall.primary_quota_ratio,
                 aux_max_hops: config.memory.recall.aux_max_hops,
             };
-            store.recall_memories_with_policy(
-                repo_root, query, &filter, shared, &viewer, limit, &policy,
-            )?
+            if hybrid {
+                let query_vector = memory_query_embedding(&config, query)?;
+                let embedding_policy = atlas_session::MemoryEmbeddingPolicy {
+                    weight_fts: config.memory.search.hybrid_weight_fts,
+                    weight_vector: config.memory.search.hybrid_weight_vector,
+                    rrf_k: atlas_session::MEMORY_HYBRID_RRF_K,
+                    min_similarity: config.memory.search.min_vector_similarity,
+                };
+                store.recall_memories_hybrid_with_policy(
+                    repo_root,
+                    query,
+                    &query_vector,
+                    &filter,
+                    shared,
+                    &viewer,
+                    limit,
+                    &recall_policy,
+                    &embedding_policy,
+                )?
+            } else {
+                store.recall_memories_with_policy(
+                    repo_root,
+                    query,
+                    &filter,
+                    shared,
+                    &viewer,
+                    limit,
+                    &recall_policy,
+                )?
+            }
         }
         None => Vec::new(),
     };
@@ -433,6 +464,7 @@ pub fn tool_memory_recall(
                 "importance": importance,
                 "scope": scope,
                 "shared": shared,
+                "hybrid": hybrid,
                 "requested_limit": requested_limit,
                 "applied_limit": limit,
             },
@@ -457,6 +489,35 @@ pub fn tool_memory_recall(
         ),
     );
     Ok(response)
+}
+
+/// Resolve the opt-in memory embedding backend and embed one recall query.
+///
+/// Mirrors the CLI rule: `--hybrid` behavior fails clearly when embeddings are
+/// disabled or when the configured dimension disagrees with the provider.
+fn memory_query_embedding(config: &atlas_engine::Config, query: &str) -> Result<Vec<f32>> {
+    let Some(backend) = config.memory_embedding_backend()? else {
+        anyhow::bail!(
+            "memory.embedding.enabled is false; enable [memory.embedding] with provider = \"search\" to use hybrid recall"
+        );
+    };
+    let dimension = config.memory.embedding.dimension;
+    let client = atlas_search::embed::EmbeddingConfig::new(
+        backend.url.clone(),
+        backend.model.clone(),
+        backend.timeout_secs,
+        backend.max_retries,
+        backend.retry_backoff_ms,
+    );
+    let vector = atlas_search::embed::embed_text_blocking(&client, query)
+        .map_err(|error| anyhow::anyhow!("cannot embed recall query: {error}"))?;
+    if vector.len() != dimension {
+        anyhow::bail!(
+            "memory.embedding.dimension is {dimension} but the provider returned {} values",
+            vector.len()
+        );
+    }
+    Ok(vector)
 }
 
 /// Read an EUA patch body from inline text or a file (1 MiB ceiling).

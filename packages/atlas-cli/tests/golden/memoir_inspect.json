@@ -1,0 +1,45 @@
+{
+  "inspection": {
+    "graph": {
+      "id": "<id>",
+      "repo_root": "<repo_root>",
+      "scope": "project",
+      "name": "memory-arch",
+      "description": "Memory layer relations",
+      "created_at": "<timestamp>",
+      "updated_at": "<timestamp>",
+      "metadata": {}
+    },
+    "root": {
+      "id": "<id>",
+      "graph_id": "<id>",
+      "repo_root": "<repo_root>",
+      "name": "wake_up_pack",
+      "description": "Bounded session-start context pack.",
+      "kind": "concept",
+      "source_id": null,
+      "created_at": "<timestamp>",
+      "updated_at": "<timestamp>",
+      "metadata": {}
+    },
+    "depth": 1,
+    "relation": null,
+    "edges": [
+      {
+        "relation_id": "<id>",
+        "relation_type": "depends_on",
+        "direction": "outgoing",
+        "depth": 1,
+        "from_concept_id": "<id>",
+        "from_concept": "wake_up_pack",
+        "to_concept_id": "<id>",
+        "to_concept": "memory_recall",
+        "confidence": 0.9,
+        "source_id": null,
+        "created_at": "<timestamp>",
+        "metadata": {}
+      }
+    ],
+    "truncated": false
+  }
+}

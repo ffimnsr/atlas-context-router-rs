@@ -1,0 +1,22 @@
+{
+  "record": {
+    "id": "<id>",
+    "repo_root": "<repo_root>",
+    "session_id": null,
+    "tool_name": "cli",
+    "analysis_kind": "dead_code",
+    "predicted": "session_store is unused",
+    "actual": "session_store is used by memory recall",
+    "correction": "",
+    "related_symbol": "src/lib.rs::fn::helper",
+    "related_file": "src/lib.rs",
+    "source_id": null,
+    "created_at": "<timestamp>",
+    "metadata": {}
+  },
+  "summary": {
+    "record_id": "<id>",
+    "analysis_kind": "dead_code",
+    "is_false_positive_evidence": true
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "total_memories": 3,
+  "finding_count": 3,
+  "by_category": {
+    "noisy": 2,
+    "stale": 1
+  },
+  "findings": [
+    {
+      "category": "stale",
+      "kind": "stale_memory",
+      "memory_id": "<id>",
+      "topic": "cleanup",
+      "detail": "memory <id> in topic 'cleanup' is past its retention window",
+      "suggestion": "refresh the fact or prune the row",
+      "command": "atlas memory prune --topic cleanup --dry-run"
+    },
+    {
+      "category": "noisy",
+      "kind": "topic_without_critical",
+      "memory_id": null,
+      "topic": "cleanup",
+      "detail": "topic 'cleanup' has 1 memories but no critical decision memory",
+      "suggestion": "record the key decision with critical importance",
+      "command": "atlas memory store \"<decision>\" --topic cleanup --importance critical"
+    },
+    {
+      "category": "noisy",
+      "kind": "topic_without_critical",
+      "memory_id": null,
+      "topic": "preferences",
+      "detail": "topic 'preferences' has 1 memories but no critical decision memory",
+      "suggestion": "record the key decision with critical importance",
+      "command": "atlas memory store \"<decision>\" --topic preferences --importance critical"
+    }
+  ]
+}

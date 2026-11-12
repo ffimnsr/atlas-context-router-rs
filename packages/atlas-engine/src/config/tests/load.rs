@@ -247,6 +247,73 @@ fn memory_recall_defaults_and_validation() {
 }
 
 #[test]
+fn memory_embedding_defaults_and_validation() {
+    let dir = tempdir().expect("tempdir");
+    fs::write(dir.path().join(crate::paths::ATLAS_CONFIG), "[build]\n").expect("write config");
+    let config = Config::load(dir.path()).expect("load config");
+    assert!(!config.memory.embedding.enabled, "embeddings stay opt-in");
+    assert!(config.memory.embedding.provider.is_none());
+    assert_eq!(config.memory.embedding.model, "nomic-embed-text");
+    assert_eq!(config.memory.embedding.dimension, 768);
+    assert_eq!(config.memory.search.hybrid_weight_fts, 0.7);
+    assert_eq!(config.memory.search.hybrid_weight_vector, 0.3);
+    assert!(
+        config
+            .memory_embedding_backend()
+            .expect("no backend")
+            .is_none()
+    );
+
+    for (body, expected) in [
+        (
+            "[memory.embedding]\nenabled = true\n",
+            "memory.embedding.provider is required",
+        ),
+        (
+            "[memory.embedding]\nprovider = \"custom\"\n",
+            "unsupported memory.embedding.provider",
+        ),
+        (
+            "[memory.embedding]\ndimension = 0\n",
+            "memory.embedding.dimension",
+        ),
+        (
+            "[memory.embedding]\nenabled = true\nprovider = \"search\"\n",
+            "search.embedding.url",
+        ),
+        (
+            "[memory.search]\nhybrid_weight_fts = 0.0\nhybrid_weight_vector = 0.0\n",
+            "memory.search",
+        ),
+    ] {
+        let dir = tempdir().expect("tempdir");
+        fs::write(dir.path().join(crate::paths::ATLAS_CONFIG), body).expect("write config");
+        let error = Config::load(dir.path()).expect_err("invalid embedding config must fail");
+        assert!(
+            error.to_string().contains(expected),
+            "unexpected error for {body:?}: {error}"
+        );
+    }
+}
+
+#[test]
+fn memory_embedding_backend_reuses_search_embedding_settings() {
+    let dir = tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join(crate::paths::ATLAS_CONFIG),
+        "[memory.embedding]\nenabled = true\nprovider = \"search\"\nmodel = \"memory-embed\"\ndimension = 1024\n\n[search.embedding]\nurl = \"http://127.0.0.1:11434\"\nmodel = \"nomic-embed-text\"\n",
+    )
+    .expect("write config");
+    let config = Config::load(dir.path()).expect("load config");
+    let backend = config
+        .memory_embedding_backend()
+        .expect("backend resolve")
+        .expect("backend configured");
+    assert_eq!(backend.url, "http://127.0.0.1:11434");
+    assert_eq!(backend.model, "memory-embed");
+}
+
+#[test]
 fn memory_decay_rejects_non_positive_retention_days() {
     for (key, value, expected) in [
         ("low_days", "0", "memory.decay.low_days"),

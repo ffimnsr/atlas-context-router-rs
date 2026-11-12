@@ -45,6 +45,7 @@ impl Config {
         config.context.tokenizer.validate()?;
         config.context.escalation.validate()?;
         config.memory.validate()?;
+        config.memory_embedding_backend()?;
         config.overview.validate()?;
         Ok(config)
     }

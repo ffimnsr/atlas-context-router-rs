@@ -119,10 +119,11 @@ pub(crate) fn memory_recall_output_schema() -> Value {
                     "importance": { "type": ["string", "null"] },
                     "scope": { "type": ["string", "null"] },
                     "shared": { "type": "boolean" },
+                    "hybrid": { "type": "boolean" },
                     "requested_limit": { "type": "integer" },
                     "applied_limit": { "type": "integer" }
                 },
-                "required": ["text", "topic", "importance", "scope", "shared", "requested_limit", "applied_limit"]
+                "required": ["text", "topic", "importance", "scope", "shared", "hybrid", "requested_limit", "applied_limit"]
             },
             "results": {
                 "type": "array",
@@ -143,7 +144,13 @@ pub(crate) fn memory_recall_output_schema() -> Value {
                                 "scope_rank": { "type": "integer" },
                                 "source_backed": { "type": "boolean" },
                                 "superseded": { "type": "boolean" },
-                                "age_days": { "type": "integer" }
+                                "age_days": { "type": "integer" },
+                                "origin_score": { "type": "number" },
+                                "time_score": { "type": "number" },
+                                "importance_score": { "type": "number" },
+                                "recall_path": { "type": "string" },
+                                "vector_score": { "type": ["number", "null"] },
+                                "hybrid_score": { "type": ["number", "null"] }
                             },
                             "required": [
                                 "topic_match",

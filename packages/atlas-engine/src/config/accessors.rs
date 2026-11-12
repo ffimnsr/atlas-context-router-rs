@@ -73,6 +73,36 @@ impl Config {
         self.mcp.worker_threads.clamp(1, 64)
     }
 
+    /// Resolve the optional memory embedding backend (ICM-E2).
+    ///
+    /// Returns `None` when `memory.embedding.enabled = false`, so lexical
+    /// recall never requires an embedding provider. When enabled, the
+    /// `search` provider reuses `[search.embedding]` with the memory model
+    /// name, and a missing `search.embedding.url` fails clearly.
+    pub fn memory_embedding_backend(&self) -> Result<Option<EmbeddingBackendConfig>> {
+        let embedding = &self.memory.embedding;
+        if !embedding.enabled {
+            return Ok(None);
+        }
+        embedding.validate()?;
+        let provider = embedding.provider.as_deref().unwrap_or_default().trim();
+        match provider {
+            "search" => match self.embedding_backend()? {
+                Some(mut backend) => {
+                    backend.model = embedding.model.trim().to_owned();
+                    Ok(Some(backend))
+                }
+                None => anyhow::bail!(
+                    "invalid config: memory.embedding.provider = \"search\" requires search.embedding.url"
+                ),
+            },
+            other => anyhow::bail!(
+                "invalid config: unsupported memory.embedding.provider {other:?}; supported providers: {}",
+                super::MEMORY_EMBEDDING_PROVIDERS.join(", ")
+            ),
+        }
+    }
+
     /// Whether memory surfaces accept frontend identities beyond the known set.
     pub fn allow_custom_frontends(&self) -> bool {
         self.memory.allow_custom_frontends

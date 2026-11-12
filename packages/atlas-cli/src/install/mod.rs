@@ -5,6 +5,7 @@ use serde::Serialize;
 
 mod git_hooks;
 mod hook_runner;
+mod init_modes;
 mod instructions;
 mod validation;
 
@@ -13,6 +14,7 @@ mod tests;
 
 pub use git_hooks::install_git_hooks;
 pub use hook_runner::install_hook_runner;
+pub use init_modes::{apply_init_mode, plan_init_mode};
 pub use instructions::{AGENTS_FILE, GENERIC_MCP_SETUP, InstructionsMode, inject_instructions};
 
 use validation::validate_install;

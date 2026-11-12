@@ -1,0 +1,71 @@
+{
+  "hits": [
+    {
+      "score": 0.0,
+      "ranking": {
+        "exact_subject_match": false,
+        "exact_title_match": false,
+        "exact_tag_match": false,
+        "fts_score": 1.375e-6,
+        "freshness_rank": 3,
+        "confidence": 0.8,
+        "recency_rank": 0.0,
+        "subject_specificity": 5
+      },
+      "record": {
+        "id": "<id>",
+        "repo_root": "<repo_root>",
+        "subject_id": "<id>",
+        "subject_kind": "function",
+        "package_name": "sample",
+        "module_path": "src",
+        "canonical_file_path": "src/lib.rs",
+        "qualified_name": "src/lib.rs::fn::helper",
+        "node_kind": "function",
+        "line_start": 1,
+        "line_end": 3,
+        "title": "helper",
+        "summary": "Formats a greeting with a suffix.",
+        "description_preview": "Builds the greeting through Greeter::greet_twice.",
+        "responsibilities": [
+          "format greetings"
+        ],
+        "flow": [],
+        "inputs": [
+          "name: &str"
+        ],
+        "outputs": [
+          "String"
+        ],
+        "invariants": [],
+        "gotchas": [],
+        "examples": [],
+        "tags": [
+          "fixture"
+        ],
+        "source_kind": "manual",
+        "commit_sha": "fixture-sha",
+        "freshness": "fresh",
+        "confidence": 0.8,
+        "created_at": "<timestamp>",
+        "updated_at": "<timestamp>",
+        "metadata": {
+          "budget": {
+            "title_truncated": false,
+            "summary_truncated": false,
+            "description_preview_truncated": false,
+            "omitted_list_items": 0,
+            "source_body_routed": false
+          }
+        }
+      },
+      "view": {
+        "level": "l0",
+        "freshness": "fresh",
+        "title": "helper",
+        "summary": "Formats a greeting with a suffix.",
+        "truncated": false
+      }
+    }
+  ]
+}

@@ -278,7 +278,7 @@ pub(super) fn tools() -> Vec<Value> {
         }),
         json!({
                 "name": "memory_recall",
-                "description": "Recall memories for this repo with the same lexical ranking, defaults, and visibility rules as `atlas memory recall`. Exact topic matches rank first; the viewer is the derived mcp session. Use shared=true for project + global memories only.",
+                "description": "Recall memories for this repo with the same lexical ranking, defaults, and visibility rules as `atlas memory recall`. Exact topic matches rank first; the viewer is the derived mcp session. Use shared=true for project + global memories only, and hybrid=true to fuse opt-in memory embeddings with the lexical path.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -287,6 +287,7 @@ pub(super) fn tools() -> Vec<Value> {
                         "importance":   { "type": "string",  "description": "Restrict recall to one importance level." },
                         "scope":        { "type": "string",  "description": "Restrict recall to one scope." },
                         "shared":       { "type": "boolean", "description": "Only return memories visible to every frontend (project + global)." },
+                        "hybrid":       { "type": "boolean", "description": "Fuse optional memory embeddings with lexical recall (requires memory.embedding.enabled). Lexical hits always outrank vector-only matches." },
                         "limit":        { "type": "integer", "description": "Maximum memories to return (default 20)." },
                         "output_format":{ "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },

@@ -178,6 +178,13 @@ pub struct MemoryConfig {
     /// when the section is absent.
     #[serde(default)]
     pub recall: MemoryRecallConfig,
+    /// Optional embedding provider for semantic recall (ICM-E2). Disabled by
+    /// default; lexical recall never requires it.
+    #[serde(default)]
+    pub embedding: MemoryEmbeddingConfig,
+    /// Hybrid recall fusion weights (ICM-E2).
+    #[serde(default)]
+    pub search: MemorySearchConfig,
 }
 
 /// `[memory.decay]` retention policy for `atlas memory decay|stale|prune`.
@@ -323,7 +330,162 @@ impl MemoryConfig {
     pub fn validate(&self) -> Result<()> {
         self.decay.validate()?;
         self.wake_up.validate()?;
-        self.recall.validate()
+        self.recall.validate()?;
+        self.embedding.validate()?;
+        self.search.validate()
+    }
+}
+
+/// `[memory.embedding]` optional semantic recall configuration (ICM-E2).
+///
+/// Embeddings are opt-in: `enabled = false` (the default) keeps recall fully
+/// lexical. When enabled, `provider` must name a supported backend and
+/// `dimension` must match the vectors that backend returns.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryEmbeddingConfig {
+    /// Master switch; `false` keeps recall lexical-only.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Backend identifier. Supported value: `search` (reuse `[search.embedding]`).
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// Embedding model name recorded next to stored vectors.
+    #[serde(default = "default_memory_embedding_model")]
+    pub model: String,
+    /// Expected vector dimension; mismatches are rejected on write and read.
+    #[serde(default = "default_memory_embedding_dimension")]
+    pub dimension: usize,
+}
+
+impl Default for MemoryEmbeddingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider: None,
+            model: default_memory_embedding_model(),
+            dimension: default_memory_embedding_dimension(),
+        }
+    }
+}
+
+fn default_memory_embedding_model() -> String {
+    "nomic-embed-text".to_owned()
+}
+
+fn default_memory_embedding_dimension() -> usize {
+    768
+}
+
+/// Supported `memory.embedding.provider` values.
+pub const MEMORY_EMBEDDING_PROVIDERS: &[&str] = &["search"];
+/// Upper bound accepted for `memory.embedding.dimension`.
+pub const MEMORY_EMBEDDING_MAX_DIMENSION: usize = 8192;
+
+impl MemoryEmbeddingConfig {
+    /// Validates the opt-in shape; fails `atlas doctor` clearly through
+    /// `Config::load` on invalid config.
+    pub fn validate(&self) -> Result<()> {
+        if self.dimension == 0 || self.dimension > MEMORY_EMBEDDING_MAX_DIMENSION {
+            anyhow::bail!(
+                "invalid config: memory.embedding.dimension must be between 1 and {MEMORY_EMBEDDING_MAX_DIMENSION}"
+            );
+        }
+        if let Some(provider) = self.provider.as_deref() {
+            let provider = provider.trim();
+            if provider.is_empty() {
+                anyhow::bail!(
+                    "invalid config: memory.embedding.provider must not be empty when set"
+                );
+            }
+            if !MEMORY_EMBEDDING_PROVIDERS.contains(&provider) {
+                anyhow::bail!(
+                    "invalid config: unsupported memory.embedding.provider {provider:?}; supported providers: {}",
+                    MEMORY_EMBEDDING_PROVIDERS.join(", ")
+                );
+            }
+        }
+        if self.enabled {
+            if self.provider.is_none() {
+                anyhow::bail!(
+                    "invalid config: memory.embedding.provider is required when memory.embedding.enabled = true"
+                );
+            }
+            if self.model.trim().is_empty() {
+                anyhow::bail!(
+                    "invalid config: memory.embedding.model must not be empty when memory.embedding.enabled = true"
+                );
+            }
+        } else if self.model.trim().is_empty() {
+            anyhow::bail!("invalid config: memory.embedding.model must not be empty");
+        }
+        Ok(())
+    }
+}
+
+/// `[memory.search]` hybrid fusion weights (ICM-E2).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemorySearchConfig {
+    /// RRF weight for the lexical ranking (`0..=1`).
+    #[serde(default = "default_hybrid_weight_fts")]
+    pub hybrid_weight_fts: f64,
+    /// RRF weight for the vector ranking (`0..=1`).
+    #[serde(default = "default_hybrid_weight_vector")]
+    pub hybrid_weight_vector: f64,
+    /// Minimum cosine similarity for a vector-only hit.
+    #[serde(default = "default_min_vector_similarity")]
+    pub min_vector_similarity: f64,
+}
+
+impl Default for MemorySearchConfig {
+    fn default() -> Self {
+        Self {
+            hybrid_weight_fts: default_hybrid_weight_fts(),
+            hybrid_weight_vector: default_hybrid_weight_vector(),
+            min_vector_similarity: default_min_vector_similarity(),
+        }
+    }
+}
+
+fn default_hybrid_weight_fts() -> f64 {
+    0.7
+}
+
+fn default_hybrid_weight_vector() -> f64 {
+    0.3
+}
+
+fn default_min_vector_similarity() -> f64 {
+    0.30
+}
+
+impl MemorySearchConfig {
+    /// Validates fusion weights; fails `atlas doctor` clearly on invalid config.
+    pub fn validate(&self) -> Result<()> {
+        if !self.hybrid_weight_fts.is_finite() || !(0.0..=1.0).contains(&self.hybrid_weight_fts) {
+            anyhow::bail!(
+                "invalid config: memory.search.hybrid_weight_fts must be between 0.0 and 1.0"
+            );
+        }
+        if !self.hybrid_weight_vector.is_finite()
+            || !(0.0..=1.0).contains(&self.hybrid_weight_vector)
+        {
+            anyhow::bail!(
+                "invalid config: memory.search.hybrid_weight_vector must be between 0.0 and 1.0"
+            );
+        }
+        if self.hybrid_weight_fts + self.hybrid_weight_vector <= 0.0 {
+            anyhow::bail!(
+                "invalid config: memory.search.hybrid_weight_fts + memory.search.hybrid_weight_vector must be greater than 0.0"
+            );
+        }
+        if !self.min_vector_similarity.is_finite()
+            || !(0.0..=1.0).contains(&self.min_vector_similarity)
+        {
+            anyhow::bail!(
+                "invalid config: memory.search.min_vector_similarity must be between 0.0 and 1.0"
+            );
+        }
+        Ok(())
     }
 }
 

@@ -624,9 +624,10 @@ impl NewMemory {
 /// cross-session ranking evidence.
 ///
 /// Lower `relevance_score` ranks higher: `0` = exact topic match, `1` =
-/// topic/title contains match, `2` = body-only match. `recall_score` is the
-/// higher-is-better composite score described by [`MemoryRecallRanking`]; the
-/// lexical tier always dominates so exact keyword evidence is never buried.
+/// topic/title contains match, `2` = body-only match, `3` = vector-only match
+/// added by hybrid recall (ICM-E2). `recall_score` is the higher-is-better
+/// composite score described by [`MemoryRecallRanking`]; the lexical tier
+/// always dominates so exact keyword evidence is never buried.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MemorySearchHit {
     pub memory: MemoryRecord,
@@ -671,9 +672,18 @@ pub struct MemoryRecallRanking {
     /// `normal = 0.5`, `low = 0.25`).
     #[serde(default)]
     pub importance_score: f64,
-    /// Which recall path produced this hit: `primary` or `auxiliary`.
+    /// Which recall path produced this hit: `primary`, `auxiliary`, or
+    /// `vector` (ICM-E2 hybrid recall only).
     #[serde(default)]
     pub recall_path: String,
+    /// Cosine similarity against the configured embedding model when the
+    /// hybrid path scored this memory; `None` for lexical-only recall.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vector_score: Option<f64>,
+    /// Reciprocal-rank-fusion score for hybrid recall; `None` for lexical-only
+    /// recall. Exact lexical tiers still outrank vector-only hits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hybrid_score: Option<f64>,
 }
 
 /// Filters shared by memory recall and list surfaces.
@@ -793,6 +803,89 @@ pub const DEFAULT_RECALL_WEIGHT_BUSINESS: f64 = 0.15;
 pub const DEFAULT_RECALL_PRIMARY_QUOTA_RATIO: f64 = 0.75;
 /// Default maximum memoir hops for the auxiliary path.
 pub const DEFAULT_RECALL_AUX_MAX_HOPS: u32 = 2;
+/// Default reciprocal-rank-fusion weight for the lexical path.
+pub const DEFAULT_HYBRID_WEIGHT_FTS: f64 = 0.7;
+/// Default reciprocal-rank-fusion weight for the vector path.
+pub const DEFAULT_HYBRID_WEIGHT_VECTOR: f64 = 0.3;
+/// RRF k constant shared with hybrid graph retrieval.
+pub const MEMORY_HYBRID_RRF_K: u32 = 60;
+/// Minimum cosine similarity for a vector-only recall candidate.
+pub const DEFAULT_MEMORY_VECTOR_MIN_SIMILARITY: f64 = 0.30;
+/// Upper bound on memories scanned by the vector path per recall call.
+pub const MEMORY_VECTOR_SCAN_LIMIT: usize = 4096;
+
+/// Hybrid recall fusion policy mirrored from `[memory.search]` (ICM-E2).
+///
+/// The lexical path stays authoritative: fusion only reranks lexical hits and
+/// appends vector-only matches after them. Raw lexical and vector scores are
+/// never pooled into one number.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MemoryEmbeddingPolicy {
+    /// RRF weight for the lexical ranking (`0..=1`).
+    pub weight_fts: f64,
+    /// RRF weight for the vector ranking (`0..=1`).
+    pub weight_vector: f64,
+    /// RRF k constant; higher values flatten rank-position sensitivity.
+    pub rrf_k: u32,
+    /// Minimum cosine similarity before a vector-only hit is emitted.
+    pub min_similarity: f64,
+}
+
+impl Default for MemoryEmbeddingPolicy {
+    fn default() -> Self {
+        Self {
+            weight_fts: DEFAULT_HYBRID_WEIGHT_FTS,
+            weight_vector: DEFAULT_HYBRID_WEIGHT_VECTOR,
+            rrf_k: MEMORY_HYBRID_RRF_K,
+            min_similarity: DEFAULT_MEMORY_VECTOR_MIN_SIMILARITY,
+        }
+    }
+}
+
+impl MemoryEmbeddingPolicy {
+    /// Validates weights and the RRF constant.
+    pub fn validate(&self) -> atlas_core::Result<()> {
+        if !self.weight_fts.is_finite() || !(0.0..=1.0).contains(&self.weight_fts) {
+            return Err(AtlasError::Other(
+                "memory.search.hybrid_weight_fts must be between 0.0 and 1.0".to_owned(),
+            ));
+        }
+        if !self.weight_vector.is_finite() || !(0.0..=1.0).contains(&self.weight_vector) {
+            return Err(AtlasError::Other(
+                "memory.search.hybrid_weight_vector must be between 0.0 and 1.0".to_owned(),
+            ));
+        }
+        if self.weight_fts + self.weight_vector <= 0.0 {
+            return Err(AtlasError::Other(
+                "memory.search.hybrid_weight_fts + memory.search.hybrid_weight_vector must be greater than 0.0".to_owned(),
+            ));
+        }
+        if self.rrf_k == 0 {
+            return Err(AtlasError::Other(
+                "memory.search.rrf_k must be greater than 0".to_owned(),
+            ));
+        }
+        if !self.min_similarity.is_finite() || !(0.0..=1.0).contains(&self.min_similarity) {
+            return Err(AtlasError::Other(
+                "memory.search.min_vector_similarity must be between 0.0 and 1.0".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Embedding coverage for one repo and model (ICM-E2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryEmbeddingCoverage {
+    /// Embedding model the coverage was measured for.
+    pub embedding_model: String,
+    /// Vector dimension stored for that model.
+    pub dimension: usize,
+    /// Number of recallable memories with a compatible stored vector.
+    pub embedded: usize,
+    /// Number of recallable memories without a compatible stored vector.
+    pub missing: usize,
+}
 
 // ── ICM-B — memory curation (decay, stale, prune, health, consolidation) ──────
 

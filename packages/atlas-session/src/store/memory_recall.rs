@@ -193,17 +193,7 @@ fn run_primary_query(
     );
     let mut params = vec![repo_root.to_owned(), query.to_owned(), fts_query];
     append_filter_clauses(&mut sql, &mut params, filter, "m.");
-    if shared_only {
-        sql.push_str(" AND m.scope IN ('project', 'global')");
-    } else {
-        sql.push_str(
-            " AND (m.scope IN ('project', 'global')
-                  OR (m.scope = 'session' AND m.session_id = ?)
-                  OR (m.scope = 'frontend' AND m.frontend = ?))",
-        );
-        params.push(viewer.session_id.clone());
-        params.push(viewer.frontend.clone());
-    }
+    append_visibility_clause(&mut sql, &mut params, shared_only, viewer);
     sql.push_str(concat!(
         " ORDER BY match_tier ASC,",
         " CASE m.importance WHEN 'critical' THEN 0 WHEN 'high' THEN 1",
@@ -242,6 +232,8 @@ fn run_primary_query(
                     time_score: 0.0,
                     importance_score: 0.0,
                     recall_path: String::new(),
+                    vector_score: None,
+                    hybrid_score: None,
                 },
             })
         })
@@ -294,6 +286,29 @@ pub(super) fn candidate_limit(limit: usize) -> usize {
     }
 }
 
+/// Append the scope-visibility predicate for `viewer` (ICM-A3).
+///
+/// Callers must alias `memories` as `m` and push the two visibility params in
+/// the same order as the placeholders when `shared_only` is false.
+pub(super) fn append_visibility_clause(
+    sql: &mut String,
+    params: &mut Vec<String>,
+    shared_only: bool,
+    viewer: &MemoryViewer,
+) {
+    if shared_only {
+        sql.push_str(" AND m.scope IN ('project', 'global')");
+    } else {
+        sql.push_str(
+            " AND (m.scope IN ('project', 'global')
+                  OR (m.scope = 'session' AND m.session_id = ?)
+                  OR (m.scope = 'frontend' AND m.frontend = ?))",
+        );
+        params.push(viewer.session_id.clone());
+        params.push(viewer.frontend.clone());
+    }
+}
+
 /// Primary quota: `ceil(ratio * limit)`, leaving at least one slot for the
 /// auxiliary path when the ratio allows it.
 fn primary_quota_limit(limit: usize, ratio: f64) -> usize {
@@ -328,7 +343,7 @@ pub(super) fn rank_hits(
     hits.truncate(limit);
 }
 
-fn ranking_for(
+pub(super) fn ranking_for(
     hit: &MemorySearchHit,
     now: OffsetDateTime,
     policy: &MemoryRecallPolicy,
@@ -366,6 +381,8 @@ fn ranking_for(
         time_score,
         importance_score,
         recall_path: "primary".to_owned(),
+        vector_score: None,
+        hybrid_score: None,
     }
 }
 

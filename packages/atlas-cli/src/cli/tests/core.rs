@@ -7,7 +7,7 @@ fn parse_init_command() {
     let cli = parse(&["atlas", "init"]);
     assert!(matches!(
         cli.command,
-        Command::Init { ref profile } if profile == "auto"
+        Command::Init { ref profile, mode: InitMode::Mcp, dry_run: false, force: false } if profile == "auto"
     ));
 }
 #[test]
@@ -15,7 +15,7 @@ fn parse_init_full_profile() {
     let cli = parse(&["atlas", "init", "--profile", "full"]);
     assert!(matches!(
         cli.command,
-        Command::Init { ref profile } if profile == "full"
+        Command::Init { ref profile, .. } if profile == "full"
     ));
 }
 #[test]
@@ -23,7 +23,31 @@ fn parse_init_auto_profile() {
     let cli = parse(&["atlas", "init", "--profile", "auto"]);
     assert!(matches!(
         cli.command,
-        Command::Init { ref profile } if profile == "auto"
+        Command::Init { ref profile, .. } if profile == "auto"
+    ));
+}
+#[test]
+fn parse_init_mode_flags() {
+    let cli = parse(&["atlas", "init", "--mode", "mcp", "--dry-run"]);
+    assert!(matches!(
+        cli.command,
+        Command::Init {
+            mode: InitMode::Mcp,
+            dry_run: true,
+            force: false,
+            ..
+        }
+    ));
+
+    let cli = parse(&["atlas", "init", "--mode", "hook", "--force"]);
+    assert!(matches!(
+        cli.command,
+        Command::Init {
+            mode: InitMode::Hook,
+            dry_run: false,
+            force: true,
+            ..
+        }
     ));
 }
 #[test]

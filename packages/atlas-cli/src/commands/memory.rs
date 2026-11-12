@@ -115,6 +115,7 @@ pub fn run_memory(cli: &Cli) -> Result<()> {
             scope,
             shared,
             limit,
+            hybrid,
         } => {
             let filter = MemoryListFilter {
                 topic: topic.clone(),
@@ -126,15 +127,33 @@ pub fn run_memory(cli: &Cli) -> Result<()> {
                 frontend: "cli".to_owned(),
                 session_id: SessionId::derive(&repo, "", "cli").as_str().to_owned(),
             };
-            let hits = store.recall_memories_with_policy(
-                &repo,
-                query,
-                &filter,
-                *shared,
-                &viewer,
-                *limit,
-                &recall_policy(&config),
-            )?;
+            let recall_policy = recall_policy(&config);
+            // ICM-E2: `--hybrid` fuses stored memory embeddings with the
+            // lexical path. Lexical hits always outrank vector-only matches.
+            let hits = if *hybrid {
+                let query_vector = super::memory_embed::query_embedding(&config, query)?;
+                store.recall_memories_hybrid_with_policy(
+                    &repo,
+                    query,
+                    &query_vector,
+                    &filter,
+                    *shared,
+                    &viewer,
+                    *limit,
+                    &recall_policy,
+                    &super::memory_embed::embedding_policy(&config),
+                )?
+            } else {
+                store.recall_memories_with_policy(
+                    &repo,
+                    query,
+                    &filter,
+                    *shared,
+                    &viewer,
+                    *limit,
+                    &recall_policy,
+                )?
+            };
 
             if cli.json {
                 let results = hits
@@ -152,6 +171,7 @@ pub fn run_memory(cli: &Cli) -> Result<()> {
                     "memory.recall",
                     serde_json::json!({
                         "query": query,
+                        "mode": if *hybrid { "hybrid" } else { "lexical" },
                         "count": hits.len(),
                         "results": results,
                     }),
@@ -170,9 +190,73 @@ pub fn run_memory(cli: &Cli) -> Result<()> {
                         memory.scope
                     );
                     println!("   {}", body_preview(&memory.body));
-                    println!("   id: {}", memory.id);
+                    println!("   id: {} · path: {}", memory.id, hit.ranking.recall_path);
                 }
             }
+        }
+
+        MemoryCommand::Embed {
+            topic,
+            importance,
+            scope,
+            limit,
+            dry_run,
+        } => {
+            let filter = MemoryListFilter {
+                topic: topic.clone(),
+                importance: parse_optional_importance(importance.as_deref())?,
+                scope: parse_optional_scope(scope.as_deref())?,
+                ..Default::default()
+            };
+            super::memory_embed::run_embed(
+                &repo, &mut store, &config, &filter, *limit, *dry_run, cli.json,
+            )?;
+        }
+
+        MemoryCommand::Tui {
+            topic,
+            scope,
+            importance,
+            frontend,
+            subject_kind,
+            freshness,
+            package,
+            module,
+            file,
+            source_kind,
+            newer_than,
+            older_than,
+            limit,
+        } => {
+            super::memory_tui::run_memory_tui(
+                &repo,
+                &store,
+                cli.json,
+                super::memory_tui::TuiFilters {
+                    memory: MemoryListFilter {
+                        topic: topic.clone(),
+                        importance: parse_optional_importance(importance.as_deref())?,
+                        scope: parse_optional_scope(scope.as_deref())?,
+                        ..Default::default()
+                    },
+                    frontend: frontend.clone(),
+                    subject_kind: subject_kind.clone(),
+                    freshness: freshness.clone(),
+                    package: package.clone(),
+                    module: module.clone(),
+                    file: file.clone(),
+                    source_kind: source_kind.clone(),
+                    overview_newer_than: newer_than
+                        .as_deref()
+                        .map(parse_memory_timestamp)
+                        .transpose()?,
+                    overview_older_than: older_than
+                        .as_deref()
+                        .map(parse_memory_timestamp)
+                        .transpose()?,
+                    limit: *limit,
+                },
+            )?;
         }
 
         MemoryCommand::List {

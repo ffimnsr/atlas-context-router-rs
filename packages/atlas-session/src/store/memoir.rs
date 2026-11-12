@@ -411,6 +411,29 @@ fn memoir_concept_select() -> &'static str {
     )
 }
 
+/// Read-only concept listing ordered by name, used by the memory TUI.
+fn list_memoir_concepts(
+    conn: &Connection,
+    repo_root: &str,
+    limit: usize,
+) -> Result<Vec<MemoirConcept>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let sql = format!(
+        "{} WHERE repo_root = ?1 ORDER BY name ASC, id ASC LIMIT ?2",
+        memoir_concept_select()
+    );
+    let mut statement = conn
+        .prepare(&sql)
+        .map_err(|e| AtlasError::Db(e.to_string()))?;
+    statement
+        .query_map(params![repo_root, limit as i64], row_to_memoir_concept)
+        .map_err(|e| AtlasError::Db(e.to_string()))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| AtlasError::Db(e.to_string()))
+}
+
 fn is_unique_violation(error: &AtlasError) -> bool {
     error
         .to_string()
@@ -983,6 +1006,15 @@ impl super::SessionStore {
     /// evidence ids on every edge.
     pub fn inspect_memoir_concept(&self, query: &MemoirInspectQuery) -> Result<MemoirInspection> {
         inspect_memoir_concept(&self.conn, query)
+    }
+
+    /// Read-only concept listing for the memory TUI (ICM-H2).
+    pub fn list_memoir_concepts(
+        &self,
+        repo_root: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoirConcept>> {
+        list_memoir_concepts(&self.conn, repo_root, limit)
     }
 
     /// Validates the memoir schema (`memoir_graphs`, `memoir_concepts`, and

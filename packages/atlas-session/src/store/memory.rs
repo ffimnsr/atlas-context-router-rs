@@ -184,6 +184,7 @@ pub(super) fn memory_schema_issues(conn: &Connection) -> Vec<String> {
     }
 
     issues.extend(super::memory_ops::schema_issues(conn));
+    issues.extend(super::memory_embeddings::schema_issues(conn));
 
     issues
 }

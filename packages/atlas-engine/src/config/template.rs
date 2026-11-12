@@ -628,6 +628,47 @@ impl Config {
         );
 
         lines.extend(render_section(
+            "memory.embedding",
+            &[
+                ("enabled", active.memory.embedding.enabled.to_string()),
+                (
+                    "provider",
+                    render_optional_string(active.memory.embedding.provider.as_deref()),
+                ),
+                ("model", format!("\"{}\"", active.memory.embedding.model)),
+                ("dimension", active.memory.embedding.dimension.to_string()),
+            ],
+            active_mode,
+        ));
+        lines.push(
+            "# embeddings stay opt-in; enabled = true requires provider = \"search\" and search.embedding.url"
+                .to_owned(),
+        );
+
+        lines.extend(render_section(
+            "memory.search",
+            &[
+                (
+                    "hybrid_weight_fts",
+                    active.memory.search.hybrid_weight_fts.to_string(),
+                ),
+                (
+                    "hybrid_weight_vector",
+                    active.memory.search.hybrid_weight_vector.to_string(),
+                ),
+                (
+                    "min_vector_similarity",
+                    active.memory.search.min_vector_similarity.to_string(),
+                ),
+            ],
+            active_mode,
+        ));
+        lines.push(
+            "# hybrid weights are reciprocal-rank-fusion weights; lexical hits always outrank vector-only hits"
+                .to_owned(),
+        );
+
+        lines.extend(render_section(
             "overview",
             &[
                 ("enabled", active.overview.enabled.to_string()),

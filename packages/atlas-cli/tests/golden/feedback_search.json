@@ -1,0 +1,24 @@
+{
+  "query": "dead code",
+  "count": 1,
+  "results": [
+    {
+      "feedback": {
+        "id": "<id>",
+        "repo_root": "<repo_root>",
+        "session_id": null,
+        "tool_name": "analyze_dead_code",
+        "analysis_kind": "dead_code",
+        "predicted": "helper is dead code",
+        "actual": "helper is called by greet_twice",
+        "correction": "helper stays; it is reachable from greet_twice",
+        "related_symbol": "src/lib.rs::fn::helper",
+        "related_file": "src/lib.rs",
+        "source_id": null,
+        "created_at": "<timestamp>",
+        "metadata": {}
+      },
+      "relevance_score": 3.7687366329919314e-6
+    }
+  ]
+}

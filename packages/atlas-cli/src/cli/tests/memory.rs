@@ -278,6 +278,7 @@ fn parse_memory_recall_command() {
                     ref scope,
                     shared: false,
                     limit: 5,
+                    hybrid: false,
                 }
         } if query == "deploy"
             && topic.as_deref() == Some("hooks")

@@ -189,6 +189,46 @@ fn memory_store_persists_frontend_normalization_and_source_id() {
 }
 
 #[test]
+fn memory_recall_hybrid_requires_embedding_opt_in() {
+    let dir = TempDir::new().unwrap();
+    let db_path = setup_db_path(&dir);
+    std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+    let repo_root = dir.path().to_string_lossy().into_owned();
+
+    store_via_tool(
+        &repo_root,
+        &db_path,
+        &serde_json::json!({ "text": "deploy pipeline runs weekly", "topic": "hooks" }),
+    );
+
+    let error = tool_memory_recall(
+        Some(&serde_json::json!({ "query": "deploy", "hybrid": true })),
+        &repo_root,
+        &db_path,
+        OutputFormat::Json,
+    )
+    .expect_err("hybrid recall without opt-in must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("memory.embedding.enabled is false"),
+        "unexpected error: {error}"
+    );
+
+    // The lexical path keeps working with no provider configured.
+    let result = tool_memory_recall(
+        Some(&serde_json::json!({ "query": "deploy" })),
+        &repo_root,
+        &db_path,
+        OutputFormat::Json,
+    )
+    .unwrap();
+    let body = tool_body(&result);
+    assert_eq!(body["query"]["hybrid"], false);
+    assert_eq!(body["summary"]["match_count"], 1);
+}
+
+#[test]
 fn memory_recall_applies_visibility_and_retrieval_hints() {
     let dir = TempDir::new().unwrap();
     let db_path = setup_db_path(&dir);

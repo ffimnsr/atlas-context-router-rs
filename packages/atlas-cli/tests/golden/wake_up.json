@@ -1,0 +1,77 @@
+{
+  "tool": "wake-up",
+  "repo_root": "<repo_root>",
+  "session_id": "<id>",
+  "frontend": "cli",
+  "current_focus": {
+    "intent": "decisions",
+    "reasoning": []
+  },
+  "recent_decisions": [],
+  "critical_memories": [
+    {
+      "kind": "memory",
+      "memory_id": "<id>",
+      "topic": "decisions",
+      "title": "memory recall policy",
+      "importance": "critical",
+      "scope": "project",
+      "created_at": "<timestamp>",
+      "updated_at": "<timestamp>",
+      "source_id": null
+    },
+    {
+      "kind": "artifact",
+      "source_id": "<artifact_source_id>",
+      "label": "memory layer review context",
+      "source_type": "review_context",
+      "agent_id": null,
+      "created_at": "<timestamp>",
+      "chunk_count": 1
+    }
+  ],
+  "recent_feedback": [
+    {
+      "record_id": "<id>",
+      "tool_name": "analyze_dead_code",
+      "analysis_kind": "dead_code",
+      "predicted": "helper is dead code",
+      "actual": "helper is called by greet_twice",
+      "correction": "helper stays; it is reachable from greet_twice",
+      "related_symbol": "src/lib.rs::fn::helper",
+      "related_file": "src/lib.rs",
+      "source_id": null,
+      "created_at": "<timestamp>"
+    }
+  ],
+  "active_memoir_concepts": [],
+  "changed_files": [],
+  "graph_readiness": {
+    "graph_built": false,
+    "graph_queryable": false,
+    "graph_current": false,
+    "stale_index": false,
+    "execution_state": "missing",
+    "pending_graph_change_count": 0,
+    "pending_graph_changes": [],
+    "indexed_file_count": 0,
+    "last_indexed_at": null,
+    "message": "Graph is healthy and up-to-date."
+  },
+  "retrieval_hints": [],
+  "generated_at": "<timestamp>",
+  "summary": {
+    "status": "no_session",
+    "pending_resume": false,
+    "event_count": 0,
+    "decision_count": 0,
+    "critical_memory_count": 2,
+    "feedback_count": 1,
+    "concept_count": 0,
+    "changed_file_count": 0,
+    "retrieval_hint_count": 0
+  },
+  "warnings": [
+    "graph has not been built yet; call build_graph with {} before graph-backed queries"
+  ]
+}
