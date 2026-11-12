@@ -309,6 +309,30 @@ fn schema_test_args(name: &str, saved_source_id: &str) -> serde_json::Value {
         "get_global_memory" => json!({"output_format": "json"}),
         "memory_store" => json!({"text": "schema-test memory", "output_format": "json"}),
         "memory_recall" => json!({"query": "schema-test", "output_format": "json"}),
+        "memoir_create" => json!({
+            "name": "schema-test-created-graph",
+            "description": "schema test graph",
+            "output_format": "json"
+        }),
+        "memoir_add_concept" => json!({
+            "graph": "schema-test-graph",
+            "name": "schema-test-concept",
+            "description": "schema test concept",
+            "output_format": "json"
+        }),
+        "memoir_link" => json!({
+            "graph": "schema-test-graph",
+            "source": "schema-test-concept",
+            "target": "schema-test-concept-2",
+            "relation": "depends_on",
+            "create_missing": true,
+            "output_format": "json"
+        }),
+        "memoir_inspect" => json!({
+            "graph": "schema-test-graph",
+            "concept": "schema-test-concept",
+            "output_format": "json"
+        }),
         "feedback_record" => json!({
             "predicted": "schema-test dead",
             "actual": "schema-test alive",
@@ -387,6 +411,14 @@ fn tools_with_output_schema_never_emit_array_or_scalar_structured_content() {
         .as_str()
         .expect("saved source id");
 
+    call(
+        "memoir_create",
+        Some(&json!({ "name": "schema-test-graph", "output_format": "json" })),
+        &repo_root,
+        &db_path,
+    )
+    .expect("seed memoir graph");
+
     for tool in super::super::registry::tool_descriptors() {
         if tool.output_schema.is_none() {
             continue;
@@ -436,6 +468,14 @@ fn tools_with_output_schema_emit_schema_compatible_structured_content() {
     let saved_source_id = saved["structuredContent"]["source_id"]
         .as_str()
         .expect("saved source id");
+
+    call(
+        "memoir_create",
+        Some(&json!({ "name": "schema-test-graph", "output_format": "json" })),
+        &repo_root,
+        &db_path,
+    )
+    .expect("seed memoir graph");
 
     for tool in super::super::registry::tool_descriptors() {
         let Some(output_schema) = tool.output_schema.as_ref() else {

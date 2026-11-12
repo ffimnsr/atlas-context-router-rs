@@ -11,6 +11,7 @@ mod hook;
 mod init_wizard;
 mod insights;
 mod maintenance;
+mod memoir;
 mod memory;
 mod platform;
 mod postprocess;
@@ -36,6 +37,7 @@ pub use maintenance::{
     run_db_check, run_debug_config, run_debug_graph, run_doctor, run_embedding_config, run_migrate,
     run_purge_noncanonical, run_selfupdate,
 };
+pub use memoir::run_memoir;
 pub use memory::run_memory;
 pub use platform::{run_completions, run_install, run_serve, run_serve_daemon, run_serve_http};
 pub use postprocess::run_postprocess;

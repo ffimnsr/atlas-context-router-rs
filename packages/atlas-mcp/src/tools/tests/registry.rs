@@ -48,6 +48,10 @@ const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "list_graph_stats",
     "list_symbols",
     "man",
+    "memoir_add_concept",
+    "memoir_create",
+    "memoir_inspect",
+    "memoir_link",
     "memory_recall",
     "memory_store",
     "postprocess_graph",
@@ -634,6 +638,13 @@ fn tool_list_includes_analysis_and_insight_tools() {
 fn every_listed_tool_dispatches_with_parity_fixture_args() {
     let fixture = setup_git_mcp_fixture();
     let source_id = parity_seed_source_id(&fixture.repo_root, &fixture.db_path);
+    call(
+        "memoir_create",
+        Some(&json!({ "name": "parity-graph", "output_format": "json" })),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("seed parity memoir graph");
     let tool_list_value = tool_list();
     let tools = tool_list_value["tools"].as_array().expect("tools array");
 

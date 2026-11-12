@@ -13,6 +13,9 @@ pub(crate) fn tool_annotations(name: &str) -> ToolDescriptorAnnotations {
             | "record_session_event"
             | "wake_up"
             | "purge_saved_context"
+            | "memoir_create"
+            | "memoir_add_concept"
+            | "memoir_link"
     );
     ToolDescriptorAnnotations::new()
         .read_only(!state_changing)
@@ -37,7 +40,11 @@ pub(crate) fn tool_category(name: &str) -> &'static str {
         | "get_global_memory"
         | "memory_store"
         | "memory_recall"
-        | "feedback_record" => "memory",
+        | "feedback_record"
+        | "memoir_create"
+        | "memoir_add_concept"
+        | "memoir_link"
+        | "memoir_inspect" => "memory",
         "tool_list" | "tool_search" | "tool_help" | "man" | "repo_registry" => "introspection",
         "status" | "doctor" | "db_check" | "debug_graph" | "broker_status" | "get_metrics" => {
             "health"

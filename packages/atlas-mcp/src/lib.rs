@@ -50,6 +50,10 @@
 //! | `memory_store`            | ICM-A: store a memory record through the shared service  |
 //! | `memory_recall`           | ICM-A: recall memories with visibility rules and hints   |
 //! | `feedback_record`         | ICM-C: record a correction when a prediction was wrong    |
+//! | `memoir_create`           | ICM-F: create a memoir concept graph                     |
+//! | `memoir_add_concept`      | ICM-F: add a concept to an existing memoir graph         |
+//! | `memoir_link`             | ICM-F: link concepts with a controlled relation type     |
+//! | `memoir_inspect`          | ICM-F: bounded inspection with direction and evidence    |
 //! | `symbol_neighbors`        | Immediate callers, callees, tests, and nearby nodes      |
 //! | `cross_file_links`        | Files coupled through shared symbol references           |
 //! | `concept_clusters`        | Related file groups around seed files                    |

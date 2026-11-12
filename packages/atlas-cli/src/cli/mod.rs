@@ -1,11 +1,13 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 
+mod memoir;
 mod subcommands;
 
 #[cfg(test)]
 mod tests;
 
+pub use memoir::MemoirCommand;
 pub use subcommands::{
     AnalyzeCommand, CommunitiesCommand, ConfigCommand, DocsCommand, FeedbackCommand, FlowsCommand,
     HistoryCommand, InsightsCommand, InstallMode, MemoryCommand, RefactorCommand, RepoCommand,
@@ -722,6 +724,12 @@ pub enum Command {
     Memory {
         #[command(subcommand)]
         subcommand: MemoryCommand,
+    },
+
+    /// Manage memoir concept graphs (separate knowledge layer from the code graph).
+    Memoir {
+        #[command(subcommand)]
+        subcommand: MemoirCommand,
     },
 
     /// Record corrections on wrong analysis predictions and search past mistakes.

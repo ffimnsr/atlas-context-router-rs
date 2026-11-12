@@ -22,6 +22,7 @@ mod curation;
 mod decision_memory;
 mod feedback;
 mod global_memory;
+mod memoir;
 mod memory;
 mod memory_recall;
 mod resume;
@@ -32,6 +33,11 @@ mod util;
 
 use feedback::recent_feedback;
 
+pub use self::memoir::{
+    MEMOIR_RELATION_TYPES, MemoirConcept, MemoirGraph, MemoirInspectQuery, MemoirInspection,
+    MemoirInspectionEdge, MemoirRelation, MemoirRelationDirection, NewMemoirConcept,
+    NewMemoirGraph, NewMemoirRelation, normalize_memoir_relation,
+};
 pub use self::types::{
     AgentMemorySummary, AgentPartitionSummary, AgentResponsibilitySummary, CurationResult,
     DEFAULT_DEDUP_WINDOW_SECS, DEFAULT_MAX_SNAPSHOT_BYTES, DEFAULT_SESSION_DB,

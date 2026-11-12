@@ -53,9 +53,14 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "010_feedback_records",
         up_sql: include_str!("migrations/010_feedback_records.sql"),
     },
+    Migration {
+        version: 11,
+        name: "011_memoir_graph",
+        up_sql: include_str!("migrations/011_memoir_graph.sql"),
+    },
 ];
 
-pub const LATEST_VERSION: i32 = 10;
+pub const LATEST_VERSION: i32 = 11;
 
 pub const MIGRATION_SET: MigrationSet = MigrationSet {
     db_kind: "session",

@@ -312,5 +312,71 @@ pub(super) fn tools() -> Vec<Value> {
                     "required": ["predicted", "actual"]
                 }
         }),
+        json!({
+                "name": "memoir_create",
+                "description": "Create a memoir concept graph in the continuity database. Memoir graphs are a separate knowledge layer: they never merge into code graph nodes or edges. Duplicate graph names fail deterministically within the same repo and scope (ICM-F).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name":          { "type": "string", "description": "Graph name; unique per repo and scope (case-insensitive)." },
+                        "description":   { "type": "string", "description": "Optional graph description." },
+                        "scope":         { "type": "string", "description": "Visibility scope: project, session, frontend, or global (default project)." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["name"]
+                }
+        }),
+        json!({
+                "name": "memoir_add_concept",
+                "description": "Add a concept to an existing memoir graph. Missing graphs are never auto-created. Concept names are unique per graph (case-insensitive) (ICM-F).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "graph":         { "type": "string", "description": "Graph name." },
+                        "name":          { "type": "string", "description": "Concept name; unique inside the graph (case-insensitive)." },
+                        "description":   { "type": "string", "description": "Concept description or summary." },
+                        "kind":          { "type": "string", "description": "Concept kind label (default concept)." },
+                        "source_id":     { "type": "string", "description": "Source id linking this concept to saved-context evidence." },
+                        "scope":         { "type": "string", "description": "Graph scope: project, session, frontend, or global (default project)." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["graph", "name", "description"]
+                }
+        }),
+        json!({
+                "name": "memoir_link",
+                "description": "Link two memoir concepts with a controlled relation type. Unknown relation types are rejected; aliases replaced_by (direction reversed) and separate_from (tagged related_to) are normalized. Missing endpoints require the explicit create_missing opt-in (ICM-F).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "graph":         { "type": "string", "description": "Graph name." },
+                        "source":        { "type": "string", "description": "Source concept name." },
+                        "target":        { "type": "string", "description": "Target concept name." },
+                        "relation":      { "type": "string", "description": "Relation type: depends_on, part_of, contradicts, refines, replaces, caused_by, fixed_by, blocked_by, decided_by, or related_to. Aliases replaced_by and separate_from are normalized." },
+                        "confidence":    { "type": "number", "description": "Relation confidence between 0.0 and 1.0 (default 1.0)." },
+                        "source_id":     { "type": "string", "description": "Source id linking this relation to saved-context evidence." },
+                        "scope":         { "type": "string", "description": "Graph scope: project, session, frontend, or global (default project)." },
+                        "create_missing":{ "type": "boolean", "description": "Explicitly opt in to creating missing concept endpoints (default false)." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["graph", "source", "target", "relation"]
+                }
+        }),
+        json!({
+                "name": "memoir_inspect",
+                "description": "Inspect a concept's bounded memoir neighbourhood. Every edge includes canonical relation direction (outgoing/incoming) and source evidence ids. Traversal depth is clamped to 1..=5 and node/edge counts are capped (ICM-F).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "concept":       { "type": "string", "description": "Concept name to inspect." },
+                        "graph":         { "type": "string", "description": "Graph name; omit to resolve across graphs (ambiguous names fail)." },
+                        "depth":         { "type": "integer", "description": "Traversal depth, clamped to 1..=5 (default 1)." },
+                        "relation":      { "type": "string", "description": "Restrict traversal to one relation type." },
+                        "scope":         { "type": "string", "description": "Graph scope used when graph is provided (default project)." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["concept"]
+                }
+        }),
     ]
 }

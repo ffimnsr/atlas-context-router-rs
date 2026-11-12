@@ -286,26 +286,26 @@ Implementation structure:
 
 ##### ICM-F1 — Memoir schema and vocabulary
 
-- [ ] create `memoir_graphs`, `memoir_concepts`, and `memoir_relations` tables separate from code graph storage
-- [ ] store relation fields `graph_id`, `source_concept_id`, `target_concept_id`, `relation_type`, `confidence`, `source_id`, `created_at`, and `metadata_json`
-- [ ] add controlled relation vocabulary `depends_on`, `part_of`, `contradicts`, `refines`, `replaces`, `caused_by`, `fixed_by`, `blocked_by`, `decided_by`, and `related_to`
-- [ ] normalize aliases such as `replaced_by` and `separate_from` with explicit direction or tagging rules
-- [ ] reject unknown relation types unless config later enables custom relations
+- [x] create `memoir_graphs`, `memoir_concepts`, and `memoir_relations` tables separate from code graph storage
+- [x] store relation fields `graph_id`, `source_concept_id`, `target_concept_id`, `relation_type`, `confidence`, `source_id`, `created_at`, and `metadata_json`
+- [x] add controlled relation vocabulary `depends_on`, `part_of`, `contradicts`, `refines`, `replaces`, `caused_by`, `fixed_by`, `blocked_by`, `decided_by`, and `related_to`
+- [x] normalize aliases such as `replaced_by` and `separate_from` with explicit direction or tagging rules
+- [x] reject unknown relation types unless config later enables custom relations
 
 ##### ICM-F2 — CLI and MCP memoir commands
 
-- [ ] add `atlas memoir create <name>` with `--description`, `--scope`, and `--json`
-- [ ] add `atlas memoir add-concept <graph> <name> <description>` with `--kind`, `--source-id`, and `--json`
-- [ ] add `atlas memoir link <graph> <source> <target> --relation <type>` with `--confidence`, `--source-id`, and `--json`
-- [ ] add `atlas memoir inspect <concept>` with `--graph`, `--depth`, `--relation`, and `--json`
-- [ ] add MCP `memoir_create`, `memoir_add_concept`, `memoir_link`, and `memoir_inspect` as thin wrappers over same service layer
+- [x] add `atlas memoir create <name>` with `--description`, `--scope`, and `--json`
+- [x] add `atlas memoir add-concept <graph> <name> <description>` with `--kind`, `--source-id`, and `--json`
+- [x] add `atlas memoir link <graph> <source> <target> --relation <type>` with `--confidence`, `--source-id`, and `--json`
+- [x] add `atlas memoir inspect <concept>` with `--graph`, `--depth`, `--relation`, and `--json`
+- [x] add MCP `memoir_create`, `memoir_add_concept`, `memoir_link`, and `memoir_inspect` as thin wrappers over same service layer
 
 ##### ICM-F completion criteria
 
-- [ ] duplicate memoir graph names fail deterministically in same repo and scope
-- [ ] `atlas memoir link A B --relation depends_on` succeeds and invalid relation names fail clearly
-- [ ] bounded inspect output includes relation direction and source evidence ids
-- [ ] code graph queries remain unaware of memoir tables unless explicit memoir surface is invoked
+- [x] duplicate memoir graph names fail deterministically in same repo and scope
+- [x] `atlas memoir link A B --relation depends_on` succeeds and invalid relation names fail clearly
+- [x] bounded inspect output includes relation direction and source evidence ids
+- [x] code graph queries remain unaware of memoir tables unless explicit memoir surface is invoked
 
 #### ICM-G — Code Overview Memory for External Analysis
 

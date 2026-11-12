@@ -86,6 +86,30 @@ pub(super) fn parity_args(tool_name: &str, source_id: &str) -> Value {
         "get_global_memory" => json!({ "limit": 5, "output_format": "json" }),
         "memory_store" => json!({ "text": "parity memory body", "output_format": "json" }),
         "memory_recall" => json!({ "query": "parity", "output_format": "json" }),
+        "memoir_create" => json!({
+            "name": "parity-created-graph",
+            "description": "parity graph",
+            "output_format": "json"
+        }),
+        "memoir_add_concept" => json!({
+            "graph": "parity-graph",
+            "name": "parity-concept",
+            "description": "parity concept",
+            "output_format": "json"
+        }),
+        "memoir_link" => json!({
+            "graph": "parity-graph",
+            "source": "parity-concept",
+            "target": "parity-concept-2",
+            "relation": "depends_on",
+            "create_missing": true,
+            "output_format": "json"
+        }),
+        "memoir_inspect" => json!({
+            "graph": "parity-graph",
+            "concept": "parity-concept",
+            "output_format": "json"
+        }),
         "feedback_record" => json!({
             "predicted": "parity dead",
             "actual": "parity alive",

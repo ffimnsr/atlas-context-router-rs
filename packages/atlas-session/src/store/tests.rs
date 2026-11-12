@@ -120,6 +120,7 @@ mod compaction;
 mod concurrency;
 mod durable;
 mod feedback;
+mod memoir;
 mod memory_curation;
 mod memory_query;
 mod memory_recall;

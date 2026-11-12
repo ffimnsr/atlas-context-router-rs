@@ -788,6 +788,10 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `memory_store` | ICM-A: store a memory record through the shared memory service |
 | `memory_recall` | ICM-A: recall memories with visibility rules and retrieval hints |
 | `feedback_record` | ICM-C: record a correction when an analysis prediction was wrong |
+| `memoir_create` | ICM-F: create a memoir concept graph in the separate knowledge layer |
+| `memoir_add_concept` | ICM-F: add a concept to an existing memoir graph |
+| `memoir_link` | ICM-F: link concepts with a controlled relation type |
+| `memoir_inspect` | ICM-F: bounded concept inspection with direction and evidence ids |
 | `symbol_neighbors` | Immediate callers, callees, tests, and nearby graph nodes |
 | `cross_file_links` | Files semantically linked to a file by shared symbol references |
 | `concept_clusters` | Related file groups around seed files by coupling density |

@@ -18,10 +18,13 @@
 
 mod artifact_io;
 mod feedback;
+mod memoir;
 mod memory;
 mod saved_context;
 mod session;
 
+#[cfg(test)]
+mod memoir_tests;
 #[cfg(test)]
 mod memory_tests;
 #[cfg(test)]
@@ -48,6 +51,9 @@ pub use artifact_io::{
     tool_cross_session_search, tool_purge_saved_context, tool_read_saved_context,
 };
 pub use feedback::tool_feedback_record;
+pub use memoir::{
+    tool_memoir_add_concept, tool_memoir_create, tool_memoir_inspect, tool_memoir_link,
+};
 pub use memory::{tool_get_global_memory, tool_memory_recall, tool_memory_store};
 pub(crate) use saved_context::{
     decision_hits_json, record_mcp_decision_best_effort, search_decisions_best_effort,

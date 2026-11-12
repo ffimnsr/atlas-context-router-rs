@@ -7,6 +7,7 @@ mod history;
 mod impact_review;
 mod insights;
 mod install;
+mod memoir;
 mod memory;
 mod query;
 mod update;
