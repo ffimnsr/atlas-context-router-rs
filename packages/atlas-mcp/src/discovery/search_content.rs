@@ -22,6 +22,22 @@ use super::shared::{
 // Generated / vendor patterns excluded by default
 // ---------------------------------------------------------------------------
 
+/// True when `path` falls inside `prefix` under the same lexicographic range
+/// bounds used by SQL DSQ scope.
+fn path_in_prefix(path: &str, prefix: &str) -> bool {
+    let upper = {
+        let mut chars: Vec<char> = prefix.chars().collect();
+        while let Some(last) = chars.pop() {
+            if let Some(next) = char::from_u32(last as u32 + 1) {
+                chars.push(next);
+                break;
+            }
+        }
+        chars.into_iter().collect::<String>()
+    };
+    path >= prefix && path < upper.as_str()
+}
+
 /// Path patterns (repo-relative) suppressed when `exclude_generated=true`.
 const GENERATED_PATTERNS: &[&str] = &[
     "node_modules/**",
@@ -254,6 +270,17 @@ pub(crate) fn tool_search_content(
                 }
             });
         let subpath = normalized_optional_subpath(str_arg(args, "subpath")?);
+        let exact_dir = normalized_optional_subpath(str_arg(args, "exact_dir")?);
+        let exclude_subpaths: Vec<String> = string_array_arg(args, "exclude_subpaths")?
+            .into_iter()
+            .map(|raw| {
+                atlas_repo::CanonicalRepoPath::from_repo_relative(raw.trim())
+                    .map(|path| path.as_str().to_owned())
+                    .map_err(|error| {
+                        anyhow::anyhow!("invalid excluded directory scope '{raw}': {error}")
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         let pattern = if is_regex {
             query.clone()
@@ -306,13 +333,16 @@ pub(crate) fn tool_search_content(
             None
         };
 
-        let walk_root = match subpath.as_deref() {
+        let walk_root = match exact_dir.as_deref().or(subpath.as_deref()) {
             Some(sp) => resolve_subpath_walk_root(repo_root, sp)?,
             None => repo_root.to_owned(),
         };
 
         let atlasignore_path = Path::new(repo_root).join(".atlasignore");
         let mut walker = ignore::WalkBuilder::new(&walk_root);
+        if exact_dir.is_some() {
+            walker.max_depth(Some(1));
+        }
         walker
             .hidden(false)
             .git_ignore(true)
@@ -341,6 +371,13 @@ pub(crate) fn tool_search_content(
                 Ok(r) => r.to_string_lossy().replace('\\', "/"),
                 Err(_) => continue,
             };
+
+            if exclude_subpaths
+                .iter()
+                .any(|prefix| path_in_prefix(&rel_path, prefix))
+            {
+                continue;
+            }
 
             if let Some(ref filter) = include_filter
                 && !filter.is_match(&*rel_path)

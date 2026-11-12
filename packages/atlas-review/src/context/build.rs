@@ -42,7 +42,8 @@ pub fn build_context(
         _ => {}
     }
 
-    let resolved = resolve_target(store, &request.target)?;
+    let scope = super::scope::ContextScope::from_request(request)?;
+    let resolved = super::resolve::resolve_target_scoped(store, &request.target, &scope)?;
     match resolved {
         ResolvedTarget::Node(node) => build_symbol_context(store, *node, request),
         ResolvedTarget::File(path) => {
@@ -208,7 +209,11 @@ pub(super) fn build_impact_context(
         ContextTarget::ChangedFiles { paths } => (paths.clone(), vec![]),
         ContextTarget::FilePath { path } => (vec![path.clone()], vec![]),
         ContextTarget::QualifiedName { .. } | ContextTarget::SymbolName { .. } => {
-            match resolve_target(store, &request.target)? {
+            match resolve_target_scoped(
+                store,
+                &request.target,
+                &super::scope::ContextScope::from_request(request)?,
+            )? {
                 ResolvedTarget::Node(node) => (vec![node.file_path.clone()], vec![]),
                 ResolvedTarget::File(path) => (vec![path], vec![]),
                 ResolvedTarget::Ambiguous(meta) => {

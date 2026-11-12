@@ -74,6 +74,14 @@ pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
                     "properties/subpath",
                     "Scope the walk to a repo sub-directory (e.g. 'services/auth'). Empty or omitted value means repo root.",
                 ),
+                (
+                    "properties/exact_dir",
+                    "Non-recursive scope: search only files directly inside this canonical repo-relative directory.",
+                ),
+                (
+                    "properties/exclude_subpaths",
+                    "Canonical subpath prefixes excluded from the walk (repeatable).",
+                ),
                 ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
             ],
         )),

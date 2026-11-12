@@ -14,7 +14,7 @@ use super::{
 ///
 /// This is the TrieHI DSQ stage-1 contract: scope is resolved into SQL
 /// predicates so out-of-scope chunks are never ranked.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct VectorScope {
     /// Recursive canonical path prefix.
     pub subpath_prefix: Option<String>,
@@ -28,6 +28,9 @@ pub struct VectorScope {
     pub kinds: Vec<String>,
     /// Languages to restrict to.
     pub languages: Vec<String>,
+    /// Chunk count above which the in-memory TrieHI index is used
+    /// (`retrieval.triehi_min_chunks`).
+    pub triehi_min_chunks: usize,
 }
 
 impl VectorScope {
@@ -59,6 +62,7 @@ impl VectorScope {
             repo_ids: self.repo_ids.clone(),
             kinds: self.kinds.clone(),
             languages: self.languages.clone(),
+            triehi_min_chunks: self.triehi_min_chunks,
         };
         let has_path_scope = scope.subpath_prefix.is_some()
             || scope.exact_dir.is_some()
@@ -74,7 +78,7 @@ impl VectorScope {
 }
 
 /// Strict lexicographic upper bound equivalent to `path.starts_with(prefix)`.
-fn scope_upper_bound(prefix: &str) -> String {
+pub(super) fn scope_upper_bound(prefix: &str) -> String {
     let mut chars: Vec<char> = prefix.chars().collect();
     while let Some(last) = chars.pop() {
         if let Some(next) = char::from_u32(last as u32 + 1) {
@@ -83,6 +87,23 @@ fn scope_upper_bound(prefix: &str) -> String {
         }
     }
     chars.into_iter().collect()
+}
+
+/// Default `retrieval.triehi_min_chunks` threshold.
+pub const DEFAULT_TRIEHI_MIN_CHUNKS: usize = 10_000;
+
+impl Default for VectorScope {
+    fn default() -> Self {
+        Self {
+            subpath_prefix: None,
+            exact_dir: None,
+            exclude_prefixes: Vec::new(),
+            repo_ids: Vec::new(),
+            kinds: Vec::new(),
+            languages: Vec::new(),
+            triehi_min_chunks: DEFAULT_TRIEHI_MIN_CHUNKS,
+        }
+    }
 }
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
@@ -125,6 +146,7 @@ impl Store {
                 params![source_repo_id, node_qn, chunk_idx, text],
             )
             .map_err(db_err)?;
+        self.invalidate_trie_cache();
         Ok(())
     }
 
@@ -147,6 +169,7 @@ impl Store {
                 params![source_repo_id, file_path],
             )
             .map_err(db_err)?;
+        self.invalidate_trie_cache();
         Ok(())
     }
 
@@ -207,6 +230,7 @@ impl Store {
         match result {
             Ok(written) => {
                 self.conn.execute_batch("COMMIT").map_err(db_err)?;
+                self.invalidate_trie_cache();
                 Ok(written)
             }
             Err(error) => {
@@ -284,32 +308,35 @@ impl Store {
     ) -> Result<(Vec<ScoredNode>, usize)> {
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         let scope = scope.validated()?;
+        let trie_bitmap = self.trie_scope_bitmap(&scope)?;
 
         let mut clauses: Vec<String> = vec!["rc.embedding IS NOT NULL".to_owned()];
         let mut bind: Vec<String> = Vec::new();
 
-        if let Some(prefix) = scope.subpath_prefix.as_deref() {
-            bind.push(prefix.to_owned());
-            let low = bind.len();
-            bind.push(scope_upper_bound(prefix));
-            let high = bind.len();
-            clauses.push(format!("n.file_path >= ?{low} AND n.file_path < ?{high}"));
-        }
-        if let Some(dir) = scope.exact_dir.as_deref() {
-            bind.push(dir.to_owned());
-            let index = bind.len();
-            clauses.push(format!(
-                "(substr(n.file_path, 1, length(?{index}) + 1) = ?{index} || '/' AND instr(substr(n.file_path, length(?{index}) + 2), '/') = 0)"
-            ));
-        }
-        for prefix in &scope.exclude_prefixes {
-            bind.push(prefix.clone());
-            let low = bind.len();
-            bind.push(scope_upper_bound(prefix));
-            let high = bind.len();
-            clauses.push(format!(
-                "NOT (n.file_path >= ?{low} AND n.file_path < ?{high})"
-            ));
+        if trie_bitmap.is_none() {
+            if let Some(prefix) = scope.subpath_prefix.as_deref() {
+                bind.push(prefix.to_owned());
+                let low = bind.len();
+                bind.push(scope_upper_bound(prefix));
+                let high = bind.len();
+                clauses.push(format!("n.file_path >= ?{low} AND n.file_path < ?{high}"));
+            }
+            if let Some(dir) = scope.exact_dir.as_deref() {
+                bind.push(dir.to_owned());
+                let index = bind.len();
+                clauses.push(format!(
+                    "(substr(n.file_path, 1, length(?{index}) + 1) = ?{index} || '/' AND instr(substr(n.file_path, length(?{index}) + 2), '/') = 0)"
+                ));
+            }
+            for prefix in &scope.exclude_prefixes {
+                bind.push(prefix.clone());
+                let low = bind.len();
+                bind.push(scope_upper_bound(prefix));
+                let high = bind.len();
+                clauses.push(format!(
+                    "NOT (n.file_path >= ?{low} AND n.file_path < ?{high})"
+                ));
+            }
         }
         if !scope.repo_ids.is_empty() {
             let mut placeholders = Vec::new();
@@ -339,8 +366,13 @@ impl Store {
             clauses.push(format!("n.language IN ({})", placeholders.join(", ")));
         }
 
+        let select_columns = if trie_bitmap.is_some() {
+            "n.qualified_name, rc.embedding, rc.id"
+        } else {
+            "n.qualified_name, rc.embedding"
+        };
         let sql = format!(
-            "SELECT n.qualified_name, rc.embedding
+            "SELECT {select_columns}
              FROM retrieval_chunks rc
              JOIN nodes n
                ON n.qualified_name = rc.node_qn
@@ -352,11 +384,20 @@ impl Store {
         let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
         let mut candidates: Vec<(String, f64)> = stmt
             .query_map(rusqlite::params_from_iter(bind.iter()), |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Option<i64>>(2).unwrap_or(None),
+                ))
             })
             .map_err(db_err)?
             .filter_map(|r| r.ok())
-            .map(|(qn, blob)| {
+            .filter(|(_, _, chunk_id)| match (trie_bitmap.as_ref(), chunk_id) {
+                (Some(bitmap), Some(id)) => u32::try_from(*id).is_ok_and(|id| bitmap.contains(id)),
+                (Some(_), None) => false,
+                (None, _) => true,
+            })
+            .map(|(qn, blob, _)| {
                 let vec: Vec<f32> = blob
                     .as_chunks::<4>()
                     .0
@@ -368,6 +409,11 @@ impl Store {
             })
             .collect();
         let scope_candidates = candidates.len();
+        tracing::debug!(
+            scope_candidates,
+            triehi = trie_bitmap.is_some(),
+            "vector scope pre-filter applied"
+        );
 
         candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         candidates.truncate(limit);
@@ -405,6 +451,98 @@ impl Store {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         Ok((results, scope_candidates))
+    }
+
+    /// Drop the cached TrieHI index after a chunk mutation.
+    pub(crate) fn invalidate_trie_cache(&self) {
+        *self.trie_cache.borrow_mut() = None;
+    }
+
+    /// Relink cached trie entries after a stable file rename (DSM MOVE).
+    ///
+    /// When any chunk cannot be relinked deterministically the cache is
+    /// dropped and rebuilt lazily from `retrieval_chunks` on the next scoped
+    /// vector query.
+    pub(crate) fn relink_trie_chunks(
+        &self,
+        repo_id: &str,
+        old_path: &str,
+        new_path: &str,
+        chunk_ids: &[i64],
+    ) {
+        if self.trie_cache.borrow().is_none() {
+            return;
+        }
+        let mut cache = self.trie_cache.borrow_mut();
+        let Some(trie) = cache.as_mut() else {
+            return;
+        };
+        for chunk_id in chunk_ids {
+            let Ok(chunk_id) = u32::try_from(*chunk_id) else {
+                *cache = None;
+                return;
+            };
+            if !trie.relink(repo_id, old_path, new_path, chunk_id) {
+                *cache = None;
+                return;
+            }
+        }
+    }
+
+    /// Resolve scope to a bitmap when the TrieHI threshold is met.
+    fn trie_scope_bitmap(&self, scope: &VectorScope) -> Result<Option<roaring::RoaringBitmap>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM retrieval_chunks", [], |row| {
+                row.get(0)
+            })
+            .map_err(db_err)?;
+        if (count as usize) < scope.triehi_min_chunks {
+            return Ok(None);
+        }
+        {
+            let mut cache = self.trie_cache.borrow_mut();
+            if cache.is_none() {
+                *cache = Some(self.build_directory_trie()?);
+            }
+        }
+        let cache = self.trie_cache.borrow();
+        let trie = cache
+            .as_ref()
+            .expect("trie cache populated immediately above");
+        Ok(Some(trie.resolve(scope)?))
+    }
+
+    fn build_directory_trie(&self) -> Result<super::directory_trie::DirectoryTrie> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT rc.id, rc.source_repo_id, n.file_path
+                 FROM retrieval_chunks rc
+                 JOIN nodes n
+                   ON n.qualified_name = rc.node_qn
+                  AND n.source_repo_id = rc.source_repo_id",
+            )
+            .map_err(db_err)?;
+        let mut trie = super::directory_trie::DirectoryTrie::new();
+        let mut rows = stmt.query([]).map_err(db_err)?;
+        while let Some(row) = rows.next().map_err(db_err)? {
+            let Ok(chunk_id) = row.get::<_, i64>(0) else {
+                continue;
+            };
+            let Ok(repo_id) = row.get::<_, String>(1) else {
+                continue;
+            };
+            let Ok(file_path) = row.get::<_, String>(2) else {
+                continue;
+            };
+            if let Ok(chunk_id) = u32::try_from(chunk_id) {
+                trie.insert(&repo_id, &file_path, chunk_id);
+            }
+        }
+        Ok(trie)
     }
 
     /// Fetch nodes by their `qualified_name` values.

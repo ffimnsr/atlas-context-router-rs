@@ -7,6 +7,35 @@ pub const DEFAULT_EMBED_MODEL: &str = "nomic-embed-text";
 pub const DEFAULT_EMBED_TIMEOUT_SECS: u64 = 30;
 pub const DEFAULT_EMBED_MAX_RETRIES: u32 = 3;
 pub const DEFAULT_EMBED_RETRY_BACKOFF_MS: u64 = 500;
+/// Default chunk-count threshold for enabling the in-memory TrieHI index.
+pub const DEFAULT_TRIEHI_MIN_CHUNKS: usize = 10_000;
+
+/// Retrieval execution configuration (VR2 stage 2).
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RetrievalConfig {
+    /// Minimum `retrieval_chunks` row count before the TrieHI in-memory
+    /// directory index is built lazily for scoped vector queries.
+    pub triehi_min_chunks: usize,
+}
+
+impl Default for RetrievalConfig {
+    fn default() -> Self {
+        Self {
+            triehi_min_chunks: DEFAULT_TRIEHI_MIN_CHUNKS,
+        }
+    }
+}
+
+impl RetrievalConfig {
+    /// Validate the threshold; `0` would force a trie build on every query.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.triehi_min_chunks == 0 {
+            anyhow::bail!("retrieval.triehi_min_chunks must be >= 1");
+        }
+        Ok(())
+    }
+}
 
 /// Search-phase configuration.
 #[derive(Debug, Serialize, Deserialize)]

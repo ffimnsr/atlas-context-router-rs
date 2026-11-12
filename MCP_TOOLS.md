@@ -94,3 +94,24 @@ Result contract legend:
 | `traverse_graph` | Traverse Graph | object; required fields: 1 | `stable-object` | exact structuredContent schema | Bi-directional graph traversal from a specific symbol (qualified name). Returns all nodes reachable within depth hops. |
 | `update_graph` | Update Graph | object; required fields: 1 | `stable-object` | exact structuredContent schema | Incrementally update graph from one explicit change source. |
 | `wake_up` | Wake Up | object; required fields: 0 | `stable-object` | exact structuredContent schema | Bounded session-start recall for hookless agents. Assembles a compact context pack from the resume snapshot, decision memory, saved-context hints, global memory, changed files, and graph readiness, then records the session-start event through the shared event service shared with native hooks. Large saved artifacts are referenced by source_id only, never inlined. |
+
+## Resources and `atlas://` URI templates
+
+Resource templates expose VikingRAG-style scoped access (`Search`, `List`, `Grep`, `Read`). `?level=l0|l1|l2` is accepted only on `tree`, `file`, and `symbol` URIs; defaults are L1 for those and L2 for `artifacts`. Unknown repos, traversal segments, and absolute paths are rejected.
+
+| URI / template | Name |
+|---|---|
+| `atlas://docs/index` | `docs_index` |
+| `atlas://graph/provenance` | `graph_provenance` |
+| `atlas://health/status` | `health_status` |
+| `atlas://artifacts/{source_id}/{chunk_index}` | `artifact_chunk` |
+| `atlas://docs/{file}#{heading}` | `docs_section` |
+| `atlas://memoir/{graph}/{concept}` | `memoir_concept` |
+| `atlas://memories/id/{memory_id}` | `memory_id` |
+| `atlas://memories/topic/{topic}` | `memory_topic` |
+| `atlas://prompt-docs/{name}` | `prompt_docs` |
+| `atlas://repo/{repo_id}/file/{path}` | `repo_file` |
+| `atlas://repo/{repo_id}/symbol/{qualified_name}` | `repo_symbol` |
+| `atlas://repo/{repo_id}/tree/{dir}` | `repo_tree` |
+| `atlas://saved-context/{source_id}` | `saved_context` |
+| `atlas://tool-docs/{name}` | `tool_docs` |

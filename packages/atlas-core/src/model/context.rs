@@ -127,6 +127,18 @@ pub struct ContextRequest {
     /// Byte cap for overview previews. `None` uses the policy default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overview_max_bytes: Option<usize>,
+    // --- VR2: directory-semantic query scope ---
+    /// Recursive canonical path prefix restricting target resolution and
+    /// selected context to one subtree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subpath: Option<String>,
+    /// Non-recursive directory scope: only files directly inside this
+    /// canonical directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exact_dir: Option<String>,
+    /// Canonical subpath prefixes excluded from resolution and selection.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_subpaths: Vec<String>,
 }
 
 impl Default for ContextRequest {
@@ -159,6 +171,9 @@ impl Default for ContextRequest {
             overview_freshness: None,
             overview_subject_kinds: None,
             overview_max_bytes: None,
+            subpath: None,
+            exact_dir: None,
+            exclude_subpaths: Vec::new(),
         }
     }
 }

@@ -398,6 +398,14 @@ pub enum Command {
         #[arg(long)]
         include_stale_overviews: bool,
 
+        /// Non-recursive scope: only files directly inside this directory.
+        #[arg(long)]
+        exact_dir: Option<String>,
+
+        /// Exclude a subpath prefix from context selection (repeatable).
+        #[arg(long = "exclude-subpath")]
+        exclude_subpaths: Vec<String>,
+
         /// Maximum overview records to include.
         #[arg(long)]
         overview_limit: Option<usize>,
@@ -639,6 +647,14 @@ pub enum Command {
         /// Maximum files to include (default: 20).
         #[arg(long)]
         max_files: Option<usize>,
+
+        /// Non-recursive scope: only files directly inside this directory.
+        #[arg(long)]
+        exact_dir: Option<String>,
+
+        /// Exclude a subpath prefix from context selection (repeatable).
+        #[arg(long = "exclude-subpath")]
+        exclude_subpaths: Vec<String>,
 
         /// Traversal depth in graph hops (default: 2).
         #[arg(long)]

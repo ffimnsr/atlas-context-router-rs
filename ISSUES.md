@@ -1887,17 +1887,17 @@ Implementation structure:
 - [x] add `--level` to `atlas overview show` and `atlas overview search`
 - [x] add the same `level` field to MCP `overview_show` and `overview_search` with identical defaults
 - [x] add `SelectionReason::OverviewLevel` and attach `uri`, `level`, and `freshness` to overview context entries
-- [ ] update `wiki/overview-memory.md`, `MCP_TOOLS.md`, and `docs/PLAN-RAG.md` §5.1–5.2 for URI forms and level semantics
-- [ ] add CLI/MCP parity tests for URI read and list output shape
+- [x] update `wiki/overview-memory.md`, `MCP_TOOLS.md`, and `docs/PLAN-RAG.md` §5.1–5.2 for URI forms and level semantics
+- [x] add CLI/MCP parity tests for URI read and list output shape
 - [x] add a check that every shipped `atlas://` URI appears in `resources/templates/list`
 
 ##### VR1 completion criteria
 
-- [ ] L0 read bytes are less than or equal to L1 read bytes, which are less than or equal to L2 read bytes for the same subject
-- [ ] `stale` and `orphaned` overviews are always explicit in output
-- [ ] traversal and absolute-path URIs are rejected
-- [ ] CLI and MCP return the same shapes for the same URI
-- [ ] no overview body is written to `worldtree.db`
+- [x] L0 read bytes are less than or equal to L1 read bytes, which are less than or equal to L2 read bytes for the same subject
+- [x] `stale` and `orphaned` overviews are always explicit in output
+- [x] traversal and absolute-path URIs are rejected
+- [x] CLI and MCP return the same shapes for the same URI
+- [x] no overview body is written to `worldtree.db`
 
 #### VR2 — Directory-Semantic Query and Vector Scope Pre-Filtering
 
@@ -1934,31 +1934,31 @@ Implementation structure:
 - [x] join `retrieval_chunks` to `nodes` and `files` so scope plus kind and language filters apply before cosine scoring
 - [x] update every caller in `atlas-search` and `atlas-review` to pass an explicit scope
 - [x] fail closed when `repo_root` is missing instead of scanning every repo
-- [ ] add `--exact-dir` and repeatable `--exclude-subpath` to `atlas query`, `atlas symbols`, `atlas context`, and `atlas review-context`
-- [ ] add the same fields to MCP `query_graph`, `list_symbols`, `get_context`, `get_review_context`, and `search_content`
+- [x] add `--exact-dir` and repeatable `--exclude-subpath` to `atlas query`, `atlas symbols`, `atlas context`, and `atlas review-context`
+- [x] add the same fields to MCP `query_graph`, `list_symbols`, `get_context`, `get_review_context`, and `search_content`
 - [x] thread scope through `packages/atlas-search/src/hybrid.rs` so hybrid retrieval obeys DSQ
-- [ ] add parity tests and a benchmark showing candidate-count reduction for a scoped query
+- [x] add parity tests and a benchmark showing candidate-count reduction for a scoped query
 
 ##### VR2.3 — Optional in-memory TrieHI bitmap index
 
-- [ ] add `roaring` to `[workspace.dependencies]` and `packages/atlas-store-sqlite/Cargo.toml` only when this stage is implemented
-- [ ] add `packages/atlas-store-sqlite/src/store/directory_trie.rs` with `DirectoryTrie` and `TrieNode { local: RoaringBitmap, inclusive: RoaringBitmap, children }`
-- [ ] maintain the invariant `inclusive(v) = local(v) union over child inclusive(child)`
-- [ ] build the trie lazily when `retrieval_chunks` count exceeds `retrieval.triehi_min_chunks` (default `10000`)
-- [ ] add config `retrieval.triehi_min_chunks` validated as `>= 1`
-- [ ] resolve recursive, non-recursive, and exclusion queries to bitmaps without SQL
-- [ ] apply the resolved bitmap before cosine scoring and report `scope_candidates` in debug metrics
-- [ ] map git rename and move detection in `atlas-engine` to `DSM MOVE`: relink the node and update `inclusive` sets on removed and added ancestor paths in `O(depth)`
-- [ ] rebuild the trie from `retrieval_chunks` when a move cannot be relinked deterministically
-- [ ] add tests for invariant maintenance across insert, move, merge, and delete, plus bitmap-versus-SQL result equality
+- [x] add `roaring` to `[workspace.dependencies]` and `packages/atlas-store-sqlite/Cargo.toml` only when this stage is implemented
+- [x] add `packages/atlas-store-sqlite/src/store/directory_trie.rs` with `DirectoryTrie` and `TrieNode { local: RoaringBitmap, inclusive: RoaringBitmap, children }`
+- [x] maintain the invariant `inclusive(v) = local(v) union over child inclusive(child)`
+- [x] build the trie lazily when `retrieval_chunks` count exceeds `retrieval.triehi_min_chunks` (default `10000`)
+- [x] add config `retrieval.triehi_min_chunks` validated as `>= 1`
+- [x] resolve recursive, non-recursive, and exclusion queries to bitmaps without SQL
+- [x] apply the resolved bitmap before cosine scoring and report `scope_candidates` in debug metrics
+- [x] map git rename and move detection in `atlas-engine` to `DSM MOVE`: relink the node and update `inclusive` sets on removed and added ancestor paths in `O(depth)`
+- [x] rebuild the trie from `retrieval_chunks` when a move cannot be relinked deterministically
+- [x] add tests for invariant maintenance across insert, move, merge, and delete, plus bitmap-versus-SQL result equality
 
 ##### VR2 completion criteria
 
-- [ ] scoped vector search never evaluates out-of-scope chunks
-- [ ] graph and content stores return identical DSQ membership for the same predicate
-- [ ] no hardcoded `LIMIT 50` remains in content search
-- [ ] trie results equal SQL DSQ results
-- [ ] missing `repo_root` and traversal scope fail closed
+- [x] scoped vector search never evaluates out-of-scope chunks
+- [x] graph and content stores return identical DSQ membership for the same predicate
+- [x] no hardcoded `LIMIT 50` remains in content search
+- [x] trie results equal SQL DSQ results
+- [x] missing `repo_root` and traversal scope fail closed
 
 #### VR3 — Constraint-Aware Evidence-Gap Retrieval and Adaptive Escalation
 
@@ -1990,7 +1990,7 @@ Implementation structure:
 - [x] detect unresolved `Implements` and `ImplementedBy` edges plus dynamic registration targets
 - [x] derive `overview_fresh` from matched `OverviewRecord.freshness` and treat `unverified` as not fresh
 - [x] record every signal in `ContextResult` metadata
-- [ ] add a fixed graph fixture covering each signal
+- [x] add a fixed graph fixture covering each signal
 
 ##### VR3.3 — Bounded Round 2 escalation
 
@@ -2000,14 +2000,14 @@ Implementation structure:
 - [x] stop when the `TokenCounter` budget is exhausted and record `skipped_reason = "budget_exhausted"`
 - [x] emit `evidence_gaps`, `sufficiency_score`, `escalation_reason`, `next_tools`, and `rounds_used` in `ContextResult` metadata
 - [x] surface the same fields in CLI `--json` and MCP context and review tools
-- [ ] add tests for truncation-triggered escalation, budget-exhausted stop, round cap, and deterministic output
+- [x] add tests for truncation-triggered escalation, budget-exhausted stop, round cap, and deterministic output
 
 ##### VR3 completion criteria
 
-- [ ] minimal context escalates only when the report is unsatisfied
-- [ ] escalation never exceeds budget or `max_rounds`
-- [ ] the decision trace is reconstructible from metadata alone
-- [ ] no LLM call is added to the context path
+- [x] minimal context escalates only when the report is unsatisfied
+- [x] escalation never exceeds budget or `max_rounds`
+- [x] the decision trace is reconstructible from metadata alone
+- [x] no LLM call is added to the context path
 
 #### VR4 — Query-Conditioned Experience Edges
 
@@ -2042,7 +2042,7 @@ Implementation structure:
 - [x] implement redundancy suppression `targets \ existing_edge_targets` for each `(repo_root, source_uri, query_text)` group
 - [x] upsert on conflict by incrementing `use_count`, refreshing `last_validated_at`, and keeping the higher `confidence`
 - [x] add `invalidate_by_paths(repo_root, changed_paths)` marking one-endpoint edges `possibly_stale` and deleted-endpoint edges `invalid`
-- [ ] map changed file hashes from `atlas update` into `invalidate_by_paths`
+- [x] map changed file hashes from `atlas update` into `invalidate_by_paths`
 - [x] add read-only `atlas experience inspect <uri>` with `--direction`, `--limit`, and `--json`
 - [x] add `atlas experience prune --older-than <days> --dry-run` and MCP `experience_inspect` with identical output
 - [x] add tests for redundancy suppression, hash invalidation, deleted targets, upsert counting, and prune dry-run
@@ -2055,15 +2055,15 @@ Implementation structure:
 - [x] seed `ContextEngine` Round 1 with activated targets using `SelectionReason::ExperienceShortcut`
 - [x] attach provenance `edge_id`, `confidence`, `trace_summary`, and `commit_sha` to each shortcut
 - [x] never emit a shortcut when `freshness != 'fresh'` or when the commit SHA differs and hashes are unverified
-- [ ] add tests proving a stale edge is not surfaced, a fresh edge reduces rounds, and provenance is present
+- [x] add tests proving a stale edge is not surfaced, a fresh edge reduces rounds, and provenance is present
 
 ##### VR4 completion criteria
 
-- [ ] no experience edge is ever written to `worldtree.db`
-- [ ] stale or invalid edges are never activated
-- [ ] redundancy suppression blocks transitive edge explosion
-- [ ] activation output is deterministic for the same query, commit, and edge set
-- [ ] CLI and MCP inspect output match
+- [x] no experience edge is ever written to `worldtree.db`
+- [x] stale or invalid edges are never activated
+- [x] redundancy suppression blocks transitive edge explosion
+- [x] activation output is deterministic for the same query, commit, and edge set
+- [x] CLI and MCP inspect output match
 
 #### VQ1 — Evaluation and Token-Efficiency Gates
 

@@ -74,6 +74,14 @@ pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
                     "properties/token_budget",
                     "Maximum tokens to include in the result. Overrides the default policy limit for this call only. Cannot exceed the policy ceiling.",
                 ),
+                (
+                    "properties/exact_dir",
+                    "Non-recursive scope: only files directly inside this canonical repo-relative directory.",
+                ),
+                (
+                    "properties/exclude_subpaths",
+                    "Canonical subpath prefixes excluded from context selection (repeatable).",
+                ),
                 ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
             ]),
         ),
@@ -277,6 +285,14 @@ pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
             (
                 "properties/token_budget",
                 "Maximum tokens to include in the result. Overrides the default policy limit for this call only. Cannot exceed the policy ceiling. Use to enforce tighter context budgets from the caller side.",
+            ),
+            (
+                "properties/exact_dir",
+                "Non-recursive scope: only files directly inside this canonical repo-relative directory.",
+            ),
+            (
+                "properties/exclude_subpaths",
+                "Canonical subpath prefixes excluded from context selection (repeatable).",
             ),
             ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
         ])),

@@ -1,3 +1,4 @@
+use super::scope::ContextScope;
 use super::*;
 
 /// Outcome of resolving a [`ContextTarget`].
@@ -25,10 +26,22 @@ pub enum ResolvedTarget {
 /// Falls back to FTS search (capped at 8 candidates) only when exact paths
 /// yield no result.
 pub fn resolve_target(store: &Store, target: &ContextTarget) -> Result<ResolvedTarget> {
+    resolve_target_scoped(store, target, &ContextScope::default())
+}
+
+/// Resolve a [`ContextTarget`] while honoring an active directory scope.
+///
+/// Exact and fallback lookups discard matches outside the scope so a scoped
+/// request never resolves through an out-of-scope symbol.
+pub fn resolve_target_scoped(
+    store: &Store,
+    target: &ContextTarget,
+    scope: &ContextScope,
+) -> Result<ResolvedTarget> {
     match target {
-        ContextTarget::QualifiedName { qname } => resolve_by_qname(store, qname),
-        ContextTarget::SymbolName { name } => resolve_by_name(store, name),
-        ContextTarget::FilePath { path } => resolve_by_file(store, path),
+        ContextTarget::QualifiedName { qname } => resolve_by_qname(store, qname, scope),
+        ContextTarget::SymbolName { name } => resolve_by_name(store, name, scope),
+        ContextTarget::FilePath { path } => resolve_by_file(store, path, scope),
         ContextTarget::ChangedFiles { .. }
         | ContextTarget::ChangedSymbols { .. }
         | ContextTarget::EdgeQuerySeed { .. } => Ok(ResolvedTarget::NotFound {
@@ -66,24 +79,30 @@ pub fn normalize_qn_kind_tokens(qname: &str) -> String {
     format!("{file_part}::{canonical_kind}{symbol_rest}")
 }
 
-fn resolve_by_qname(store: &Store, qname: &str) -> Result<ResolvedTarget> {
-    if let Some(node) = store.node_by_qname(qname)? {
+fn resolve_by_qname(store: &Store, qname: &str, scope: &ContextScope) -> Result<ResolvedTarget> {
+    if let Some(node) = store.node_by_qname(qname)?
+        && scope.contains(&node.file_path)
+    {
         return Ok(ResolvedTarget::Node(Box::new(node)));
     }
     let normalised = normalize_qn_kind_tokens(qname);
     if normalised != qname
         && let Some(node) = store.node_by_qname(&normalised)?
+        && scope.contains(&node.file_path)
     {
         return Ok(ResolvedTarget::Node(Box::new(node)));
     }
-    fts_fallback(store, qname)
+    fts_fallback(store, qname, scope)
 }
 
-fn resolve_by_name(store: &Store, name: &str) -> Result<ResolvedTarget> {
+fn resolve_by_name(store: &Store, name: &str, scope: &ContextScope) -> Result<ResolvedTarget> {
     const CANDIDATE_CAP: usize = 9;
-    let nodes = store.nodes_by_name(name, CANDIDATE_CAP)?;
+    let mut nodes = store.nodes_by_name(name, CANDIDATE_CAP)?;
+    if scope.is_active() {
+        nodes.retain(|node| scope.contains(&node.file_path));
+    }
     match nodes.len() {
-        0 => fts_fallback(store, name),
+        0 => fts_fallback(store, name, scope),
         1 => Ok(ResolvedTarget::Node(Box::new(
             nodes.into_iter().next().unwrap(),
         ))),
@@ -98,7 +117,12 @@ fn resolve_by_name(store: &Store, name: &str) -> Result<ResolvedTarget> {
     }
 }
 
-fn resolve_by_file(store: &Store, path: &str) -> Result<ResolvedTarget> {
+fn resolve_by_file(store: &Store, path: &str, scope: &ContextScope) -> Result<ResolvedTarget> {
+    if !scope.contains(path) {
+        return Ok(ResolvedTarget::NotFound {
+            suggestions: vec![],
+        });
+    }
     let nodes = store.nodes_by_file(path)?;
     if nodes.is_empty() {
         return Ok(ResolvedTarget::NotFound {
@@ -108,16 +132,17 @@ fn resolve_by_file(store: &Store, path: &str) -> Result<ResolvedTarget> {
     Ok(ResolvedTarget::File(path.to_owned()))
 }
 
-fn fts_fallback(store: &Store, text: &str) -> Result<ResolvedTarget> {
+fn fts_fallback(store: &Store, text: &str, scope: &ContextScope) -> Result<ResolvedTarget> {
     use atlas_core::SearchQuery;
     use atlas_search::search as fts_search;
 
-    let query = SearchQuery {
+    let mut query = SearchQuery {
         text: text.to_owned(),
         limit: 8,
         fuzzy_match: true,
         ..SearchQuery::default()
     };
+    scope.apply_to_search(&mut query);
     let results = fts_search(store, &query)?;
     if results.is_empty() {
         return Ok(ResolvedTarget::NotFound {

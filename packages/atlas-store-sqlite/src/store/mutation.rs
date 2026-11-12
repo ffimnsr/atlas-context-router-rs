@@ -796,6 +796,26 @@ impl Store {
             rows
         };
 
+        // Chunk ids keyed to this file before the path rewrite, so the trie
+        // cache can relink them in O(depth) instead of rebuilding (VR2 DSM MOVE).
+        let renamed_chunk_ids: Vec<i64> = {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT rc.id
+                     FROM retrieval_chunks rc
+                     JOIN nodes n
+                       ON n.qualified_name = rc.node_qn
+                      AND n.source_repo_id = rc.source_repo_id
+                     WHERE n.source_repo_id = ?1 AND n.file_path = ?2",
+                )
+                .map_err(db_err)?;
+            stmt.query_map(params![source_repo_id, old_path.as_str()], |row| row.get(0))
+                .map_err(db_err)?
+                .filter_map(|row| row.ok())
+                .collect()
+        };
+
         // FTS-unindex old file_path entries.
         for n in &old_nodes {
             self.conn
@@ -880,6 +900,13 @@ impl Store {
         }
 
         self.conn.execute_batch("COMMIT").map_err(db_err)?;
+
+        self.relink_trie_chunks(
+            source_repo_id,
+            old_path.as_str(),
+            new_path.as_str(),
+            &renamed_chunk_ids,
+        );
 
         info!(
             old_path = old_path.as_str(),

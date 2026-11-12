@@ -20,6 +20,22 @@ pub(crate) fn tool_get_review_context(
     let include_stale_overviews = bool_arg(args, "include_stale_overviews").unwrap_or(false);
     let overview_limit = u64_arg(args, "overview_limit").map(|n| n as usize);
     let overview_max_bytes = u64_arg(args, "overview_max_bytes").map(|n| n as usize);
+    let exact_dir = str_arg(args, "exact_dir")?
+        .map(|raw| {
+            atlas_repo::CanonicalRepoPath::from_repo_relative(raw)
+                .map(|path| path.as_str().to_owned())
+                .map_err(|error| anyhow::anyhow!("invalid directory scope '{raw}': {error}"))
+        })
+        .transpose()?;
+    let exclude_subpaths = string_list_arg(args, "exclude_subpaths")
+        .unwrap_or_default()
+        .iter()
+        .map(|raw| {
+            atlas_repo::CanonicalRepoPath::from_repo_relative(raw)
+                .map(|path| path.as_str().to_owned())
+                .map_err(|error| anyhow::anyhow!("invalid directory scope '{raw}': {error}"))
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     let store = open_store(db_path)?;
     let policy = load_budget_policy(repo_root)?;
@@ -49,6 +65,8 @@ pub(crate) fn tool_get_review_context(
         max_nodes: Some(max_nodes),
         depth: Some(max_depth),
         token_budget,
+        exact_dir,
+        exclude_subpaths,
         include_overviews,
         overview_limit,
         overview_max_bytes,

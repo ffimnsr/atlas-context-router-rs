@@ -376,6 +376,43 @@ fn every_shipped_atlas_uri_template_is_listed() {
 }
 
 #[test]
+fn uri_read_and_list_shapes_match_between_direct_and_resource_surfaces() {
+    let dir = TempDir::new().expect("tempdir");
+    fs::create_dir_all(dir.path().join("src")).expect("src dir");
+    fs::write(dir.path().join("src/lib.rs"), "pub fn lib_fn() {}\n").expect("write file");
+    let repo_root = dir.path().to_str().expect("repo root");
+    let repo_id = atlas_repo::stable_repo_id(camino::Utf8Path::new(repo_root));
+    let db_path = dir
+        .path()
+        .join(".atlas")
+        .join("worldtree.db")
+        .to_string_lossy()
+        .into_owned();
+
+    let tree_uri = format!("atlas://repo/{repo_id}/tree/src");
+    let (direct_mime, direct_text) =
+        uris::read_uri(&tree_uri, None, repo_root, &db_path).expect("direct read");
+    let read_response = resources_read(Some(&json!({ "uri": tree_uri })), repo_root, &db_path)
+        .expect("resource read");
+    assert_eq!(read_response["contents"][0]["uri"], json!(tree_uri));
+    assert_eq!(read_response["contents"][0]["mimeType"], json!(direct_mime));
+    assert_eq!(read_response["contents"][0]["text"], json!(direct_text));
+    assert_eq!(read_response["resultType"], json!("complete"));
+
+    let (direct_mime, direct_text) =
+        uris::list_uri(&tree_uri, repo_root, &db_path).expect("direct list");
+    let listed = uris::list_uri(&tree_uri, repo_root, &db_path).expect("list again");
+    assert_eq!(listed, (direct_mime, direct_text.clone()));
+    let parsed: serde_json::Value = serde_json::from_str(&direct_text).expect("tree json");
+    assert_eq!(parsed["level"], json!("l1"));
+    assert!(
+        parsed["files"]
+            .as_array()
+            .is_some_and(|files| !files.is_empty())
+    );
+}
+
+#[test]
 fn uri_unknown_repo_id_is_rejected() {
     let dir = TempDir::new().expect("tempdir");
     let repo_root = dir.path().to_str().expect("repo root");

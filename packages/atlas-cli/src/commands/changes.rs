@@ -1219,6 +1219,8 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
             include_stale_overviews,
             overview_limit,
             overview_max_bytes,
+            exact_dir,
+            exclude_subpaths,
         ) = match &cli.command {
             Command::ReviewContext {
                 base,
@@ -1232,6 +1234,8 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
                 include_stale_overviews,
                 overview_limit,
                 overview_max_bytes,
+                exact_dir,
+                exclude_subpaths,
             } => (
                 base.clone(),
                 files.clone(),
@@ -1244,6 +1248,8 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
                 *include_stale_overviews,
                 *overview_limit,
                 *overview_max_bytes,
+                exact_dir.clone(),
+                exclude_subpaths.clone(),
             ),
             _ => unreachable!(),
         };
@@ -1330,6 +1336,22 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
             },
             max_nodes: Some(max_nodes),
             depth: Some(max_depth),
+            exact_dir: exact_dir
+                .as_deref()
+                .map(|path| {
+                    atlas_repo::CanonicalRepoPath::from_repo_relative(path)
+                        .map(|resolved| resolved.as_str().to_owned())
+                        .with_context(|| format!("invalid directory scope '{path}'"))
+                })
+                .transpose()?,
+            exclude_subpaths: exclude_subpaths
+                .iter()
+                .map(|path| {
+                    atlas_repo::CanonicalRepoPath::from_repo_relative(path)
+                        .map(|resolved| resolved.as_str().to_owned())
+                        .with_context(|| format!("invalid directory scope '{path}'"))
+                })
+                .collect::<Result<Vec<_>>>()?,
             include_overviews,
             overview_limit,
             overview_max_bytes,

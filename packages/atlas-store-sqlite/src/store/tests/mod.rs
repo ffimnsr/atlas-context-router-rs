@@ -27,12 +27,29 @@ mod recovery;
 mod search;
 mod taxonomy;
 
+#[test]
+fn graph_db_never_contains_experience_edge_tables() {
+    let store = open_in_memory();
+    for table in ["experience_edges", "experience_edge_deps"] {
+        let exists: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [table],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(exists, 0, "{table} must live in session.db only");
+    }
+}
+
 fn open_in_memory() -> Store {
     let conn = Connection::open_in_memory().unwrap();
     atlas_db_utils::apply_atlas_pragmas(&conn).unwrap();
     Store::register_regexp_udf(&conn).unwrap();
     let mut store = Store {
         conn,
+        trie_cache: std::cell::RefCell::new(None),
         _thread_bound: std::marker::PhantomData,
     };
     store.migrate().unwrap();

@@ -44,6 +44,14 @@ pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
                 "Restrict results to nodes whose file_path starts with this prefix (e.g. 'src/auth', 'packages/atlas-core'). Filtering happens in SQL before ranking.",
             ),
             (
+                "properties/exact_dir",
+                "Non-recursive scope: only nodes whose parent directory is exactly this canonical repo-relative path.",
+            ),
+            (
+                "properties/exclude_subpaths",
+                "Canonical subpath prefixes excluded from results (repeatable).",
+            ),
+            (
                 "properties/fuzzy",
                 "Enable fuzzy (edit-distance) typo recovery for near-miss symbol names (default false). Uses relaxed candidate expansion plus stronger code-symbol ranking so close symbol typos outrank weaker docs/config matches.",
             ),
@@ -289,6 +297,14 @@ pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
             (
                 "properties/subpath",
                 "Restrict results to nodes whose file_path starts with this prefix (e.g. 'src/auth', 'packages/atlas-core').",
+            ),
+            (
+                "properties/exact_dir",
+                "Non-recursive scope: only nodes whose parent directory is exactly this canonical repo-relative path.",
+            ),
+            (
+                "properties/exclude_subpaths",
+                "Canonical subpath prefixes excluded from results (repeatable).",
             ),
             (
                 "properties/repo_id",

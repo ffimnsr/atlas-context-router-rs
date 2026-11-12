@@ -269,6 +269,9 @@ fn sample_context_request_symbol() -> ContextRequest {
         overview_freshness: None,
         overview_subject_kinds: None,
         overview_max_bytes: None,
+        subpath: None,
+        exact_dir: None,
+        exclude_subpaths: Vec::new(),
     }
 }
 

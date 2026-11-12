@@ -45,7 +45,8 @@ pub use parsers::ParsersConfig;
 pub use sanitization::SanitizationConfig;
 pub use search::{
     DEFAULT_EMBED_MAX_RETRIES, DEFAULT_EMBED_MODEL, DEFAULT_EMBED_RETRY_BACKOFF_MS,
-    DEFAULT_EMBED_TIMEOUT_SECS, SearchConfig, SearchEmbeddingConfig,
+    DEFAULT_EMBED_TIMEOUT_SECS, DEFAULT_TRIEHI_MIN_CHUNKS, RetrievalConfig, SearchConfig,
+    SearchEmbeddingConfig,
 };
 pub use template::ConfigTemplateProfile;
 
@@ -56,6 +57,8 @@ pub struct Config {
     pub build: BuildConfig,
     #[serde(default)]
     pub search: SearchConfig,
+    #[serde(default)]
+    pub retrieval: RetrievalConfig,
     #[serde(default)]
     pub analysis: AnalysisConfig,
     #[serde(default)]

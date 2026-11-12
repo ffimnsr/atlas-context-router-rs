@@ -84,6 +84,7 @@ impl RetrievalMode {
             rrf_k: 60,
             regex_pattern: None,
             repo_ids: Vec::new(),
+            triehi_min_chunks: None,
         }
     }
 }

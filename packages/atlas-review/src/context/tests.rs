@@ -176,6 +176,7 @@ fn symbol_request(qname: &str) -> ContextRequest {
 
 mod budget;
 mod content;
+mod escalation;
 mod evidence;
 mod resolve;
 mod review;

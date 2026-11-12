@@ -174,6 +174,9 @@ fn bench_context_retrieval_latency(c: &mut Criterion) {
             overview_freshness: None,
             overview_subject_kinds: None,
             overview_max_bytes: None,
+            subpath: None,
+            exact_dir: None,
+            exclude_subpaths: Vec::new(),
         };
 
         group.bench_with_input(

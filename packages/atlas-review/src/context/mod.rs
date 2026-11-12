@@ -33,6 +33,7 @@ mod payload;
 mod rank;
 mod resolve;
 mod saved;
+mod scope;
 mod spans;
 mod sufficiency;
 mod symbol;
@@ -41,7 +42,9 @@ mod tests;
 mod workflow;
 
 pub use self::build::build_context;
-pub use self::resolve::{ResolvedTarget, normalize_qn_kind_tokens, resolve_target};
+pub use self::resolve::{
+    ResolvedTarget, normalize_qn_kind_tokens, resolve_target, resolve_target_scoped,
+};
 
 use self::content::retrieve_content_assets;
 use self::experience::apply_experience_shortcuts;
@@ -49,6 +52,7 @@ use self::overview::overviews_for_context;
 use self::payload::apply_payload_budgets;
 use self::rank::{rank_context, trim_context};
 use self::saved::retrieve_saved_context;
+use self::scope::{ContextScope, apply_context_scope};
 use self::spans::apply_code_spans;
 use self::sufficiency::{
     budget_exhausted, escalation_reason, evaluate as evaluate_sufficiency, merge_round_two,
@@ -250,6 +254,8 @@ impl<'a> ContextEngine<'a> {
         );
 
         let mut result = build_context(self.store, &effective_request, &self.budget_policy)?;
+        let scope = ContextScope::from_request(&effective_request)?;
+        apply_context_scope(&mut result, &scope);
         if let (Some(session), Some(repo_root)) =
             (self.experience_store, self.experience_repo_root.as_deref())
         {

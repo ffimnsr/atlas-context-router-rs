@@ -148,6 +148,28 @@ pub fn tool_list_markdown() -> String {
         markdown.push_str(" |\n");
     }
 
+    markdown.push_str(
+        "\n## Resources and `atlas://` URI templates\n\n\
+         Resource templates expose VikingRAG-style scoped access (`Search`, `List`, `Grep`, `Read`). \
+         `?level=l0|l1|l2` is accepted only on `tree`, `file`, and `symbol` URIs; defaults are L1 for those \
+         and L2 for `artifacts`. Unknown repos, traversal segments, and absolute paths are rejected.\n\n\
+         | URI / template | Name |\n|---|---|\n",
+    );
+    for resource in crate::resources::resource_descriptors() {
+        markdown.push_str(&format!(
+            "| `{}` | `{}` |\n",
+            escape_markdown_table_cell(&resource.uri),
+            resource.name
+        ));
+    }
+    for template in crate::resources::resource_template_descriptors() {
+        markdown.push_str(&format!(
+            "| `{}` | `{}` |\n",
+            escape_markdown_table_cell(&template.uri_template),
+            template.name
+        ));
+    }
+
     markdown
 }
 

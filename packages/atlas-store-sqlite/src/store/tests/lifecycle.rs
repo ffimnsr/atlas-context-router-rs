@@ -70,6 +70,7 @@ fn migration_upgrades_every_historical_version_to_latest_schema() {
         apply_migrations_through(&conn, version);
         let mut store = Store {
             conn,
+            trie_cache: std::cell::RefCell::new(None),
             _thread_bound: std::marker::PhantomData,
         };
         store.migrate().unwrap();
@@ -95,6 +96,7 @@ fn migration_016_preserves_rows_and_allows_same_path_across_repos() {
 
     let mut store = Store {
         conn,
+        trie_cache: std::cell::RefCell::new(None),
         _thread_bound: std::marker::PhantomData,
     };
     store.migrate().unwrap();
@@ -140,6 +142,7 @@ fn migration_020_repo_scopes_chunks_and_drops_ambiguous_rows() {
 
     let mut store = Store {
         conn,
+        trie_cache: std::cell::RefCell::new(None),
         _thread_bound: std::marker::PhantomData,
     };
     store.migrate().unwrap();
@@ -274,6 +277,7 @@ fn migration_019_preserves_nodes_and_fts_rows_on_upgrade() {
     apply_migrations_through(&conn, 18);
     let mut store = Store {
         conn,
+        trie_cache: std::cell::RefCell::new(None),
         _thread_bound: std::marker::PhantomData,
     };
     let node = make_node(

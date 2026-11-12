@@ -31,15 +31,21 @@ pub fn run_experience(cli: &Cli) -> Result<()> {
         } => {
             let direction: ExperienceDirection = direction.parse()?;
             let edges = store.inspect_experience_edges(&repo, uri, direction, *limit)?;
+            let edge_count = edges.len();
             if cli.json {
                 print_json(
                     "experience.inspect",
                     json!({
+                        "tool": "experience_inspect",
                         "repo_root": repo,
                         "uri": uri,
                         "direction": direction,
                         "edges": edges,
-                        "edge_count": edges.len(),
+                        "summary": {
+                            "edge_count": edge_count,
+                            "limit": limit,
+                        },
+                        "warnings": [],
                     }),
                 )?;
             } else {

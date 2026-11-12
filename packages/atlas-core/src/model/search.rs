@@ -303,6 +303,9 @@ pub struct SearchQuery {
     pub regex_pattern: Option<String>,
     /// Restrict search to these indexed repo ids. Empty means all repos.
     pub repo_ids: Vec<String>,
+    /// Chunk-count threshold for the in-memory TrieHI directory index used by
+    /// scoped vector retrieval. `None` uses `retrieval.triehi_min_chunks`.
+    pub triehi_min_chunks: Option<usize>,
 }
 
 impl Default for SearchQuery {
@@ -331,6 +334,7 @@ impl Default for SearchQuery {
             rrf_k: 60,
             regex_pattern: None,
             repo_ids: vec![],
+            triehi_min_chunks: None,
         }
     }
 }

@@ -129,6 +129,9 @@ pub fn run_query(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
     let db_path = db_path(cli, &repo);
     let embed_cfg = load_embedding_config(&repo)?;
+    let triehi_min_chunks = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))
+        .map(|config| config.retrieval.triehi_min_chunks)
+        .unwrap_or(atlas_engine::config::DEFAULT_TRIEHI_MIN_CHUNKS);
 
     let store = match Store::open(&db_path) {
         Ok(s) => s,
@@ -293,6 +296,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
         hybrid,
         regex_pattern,
         repo_ids: selected_repo_ids.clone(),
+        triehi_min_chunks: Some(triehi_min_chunks),
         ..Default::default()
     };
 

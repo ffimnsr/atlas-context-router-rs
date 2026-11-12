@@ -114,6 +114,9 @@ regex = { version = "1", default-features = false, features = ["std", "unicode-p
 # fuzzy matching
 strsim = "0.11"
 
+# bitmap indexes (VR2 stage 2 TrieHI)
+roaring = "0.10"
+
 # concurrency
 rayon = "1"
 notify = "7"

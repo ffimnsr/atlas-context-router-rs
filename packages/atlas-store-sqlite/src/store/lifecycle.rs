@@ -30,6 +30,7 @@ impl Store {
 
         let mut store = Self {
             conn,
+            trie_cache: std::cell::RefCell::new(None),
             _thread_bound: std::marker::PhantomData,
         };
         store.migrate()?;

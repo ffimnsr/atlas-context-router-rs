@@ -33,6 +33,22 @@ pub(crate) fn tool_get_context(
     let overview_max_bytes = u64_arg(args, "overview_max_bytes").map(|n| n as usize);
     let overview_freshness = string_list_arg(args, "overview_freshness");
     let overview_subject_kinds = string_list_arg(args, "overview_subject_kinds");
+    let exact_dir = str_arg(args, "exact_dir")?
+        .map(|raw| {
+            atlas_repo::CanonicalRepoPath::from_repo_relative(raw)
+                .map(|path| path.as_str().to_owned())
+                .map_err(|error| anyhow::anyhow!("invalid directory scope '{raw}': {error}"))
+        })
+        .transpose()?;
+    let exclude_subpaths = string_list_arg(args, "exclude_subpaths")
+        .unwrap_or_default()
+        .iter()
+        .map(|raw| {
+            atlas_repo::CanonicalRepoPath::from_repo_relative(raw)
+                .map(|path| path.as_str().to_owned())
+                .map_err(|error| anyhow::anyhow!("invalid directory scope '{raw}': {error}"))
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     let mut request = match target.kind {
         GetContextTargetKind::Files => {
@@ -106,6 +122,8 @@ pub(crate) fn tool_get_context(
     request.overview_max_bytes = overview_max_bytes;
     request.overview_freshness = overview_freshness;
     request.overview_subject_kinds = overview_subject_kinds;
+    request.exact_dir = exact_dir;
+    request.exclude_subpaths = exclude_subpaths;
 
     let store = open_store(db_path)?;
     let policy = load_budget_policy(repo_root)?;

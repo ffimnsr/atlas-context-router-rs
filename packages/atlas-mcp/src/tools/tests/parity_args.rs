@@ -13,7 +13,12 @@ pub(super) fn parity_args(tool_name: &str, source_id: &str, repo_root: &str) -> 
         "tool_search" => json!({ "query": "query" }),
         "tool_help" => json!({ "name": "query_graph" }),
         "man" => json!({ "namespace": "mcp", "tool_name": "query_graph" }),
-        "query_graph" => json!({ "text": "compute" }),
+        "query_graph" => json!({
+            "text": "compute",
+            "exact_dir": "src",
+            "exclude_subpaths": ["src/generated"],
+            "output_format": "json"
+        }),
         "batch_query_graph" => json!({
             "items": [{ "text": "compute" }, { "text": "handle_request" }],
             "output_format": "json"
@@ -22,7 +27,7 @@ pub(super) fn parity_args(tool_name: &str, source_id: &str, repo_root: &str) -> 
             json!({ "change_source": { "kind": "files", "files": ["src/service.rs"] }, "output_format": "json" })
         }
         "get_review_context" => {
-            json!({ "change_source": { "kind": "files", "files": ["src/service.rs"] }, "output_format": "json" })
+            json!({ "change_source": { "kind": "files", "files": ["src/service.rs"] }, "exact_dir": "src", "exclude_subpaths": ["src/generated"], "output_format": "json" })
         }
         "detect_changes" => {
             json!({ "change_source": { "kind": "working_tree" }, "output_format": "json" })
@@ -44,7 +49,7 @@ pub(super) fn parity_args(tool_name: &str, source_id: &str, repo_root: &str) -> 
             json!({ "change_source": { "kind": "files", "files": ["src/service.rs"] }, "output_format": "json" })
         }
         "get_context" => {
-            json!({ "target": { "kind": "query", "query": "compute" }, "output_format": "json" })
+            json!({ "target": { "kind": "query", "query": "compute" }, "exact_dir": "src", "exclude_subpaths": ["src/generated"], "output_format": "json" })
         }
         "analyze_architecture" => json!({ "output_format": "json" }),
         "analyze_metrics" => json!({ "output_format": "json" }),
@@ -159,7 +164,12 @@ pub(super) fn parity_args(tool_name: &str, source_id: &str, repo_root: &str) -> 
         "cross_file_links" => json!({ "file": "src/service.rs", "output_format": "json" }),
         "concept_clusters" => json!({ "files": ["src/service.rs"], "output_format": "json" }),
         "search_files" => json!({ "pattern": "*.rs", "output_format": "json" }),
-        "search_content" => json!({ "query": "compute", "output_format": "json" }),
+        "search_content" => json!({
+            "query": "compute",
+            "exact_dir": "src",
+            "exclude_subpaths": ["src/generated"],
+            "output_format": "json"
+        }),
         "read_file_excerpt" => {
             json!({ "file": "src/service.rs", "selector": { "kind": "range", "start_line": 1, "end_line": 3 }, "output_format": "json" })
         }
@@ -179,7 +189,13 @@ pub(super) fn parity_args(tool_name: &str, source_id: &str, repo_root: &str) -> 
         "debug_graph" => json!({ "output_format": "json" }),
         "explain_query" => json!({ "text": "compute", "output_format": "json" }),
         "resolve_symbol" => json!({ "name": "compute", "output_format": "json" }),
-        "list_symbols" => json!({ "kind": "function", "limit": 5, "output_format": "json" }),
+        "list_symbols" => json!({
+            "kind": "function",
+            "limit": 5,
+            "exact_dir": "src",
+            "exclude_subpaths": ["src/generated"],
+            "output_format": "json"
+        }),
         "analyze_safety" => {
             json!({ "symbol": "src/service.rs::fn::compute", "output_format": "json" })
         }

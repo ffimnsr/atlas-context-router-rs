@@ -55,6 +55,8 @@ pub(crate) struct SearchContentArgsSchema {
     snippet_context_lines: Option<u64>,
     max_results: Option<u64>,
     subpath: Option<String>,
+    exact_dir: Option<String>,
+    exclude_subpaths: Option<Vec<String>>,
     output_format: Option<String>,
 }
 
@@ -226,6 +228,8 @@ pub(crate) struct QueryGraphArgsSchema {
     expand_hops: Option<u64>,
     regex: Option<String>,
     subpath: Option<String>,
+    exact_dir: Option<String>,
+    exclude_subpaths: Option<Vec<String>>,
     fuzzy: Option<bool>,
     hybrid: Option<bool>,
     include_files: Option<bool>,
@@ -240,6 +244,8 @@ pub(crate) struct ListSymbolsArgsSchema {
     kind: Option<String>,
     language: Option<String>,
     subpath: Option<String>,
+    exact_dir: Option<String>,
+    exclude_subpaths: Option<Vec<String>>,
     repo_id: Option<String>,
     limit: Option<u64>,
     offset: Option<u64>,
@@ -442,6 +448,8 @@ pub(crate) struct GetReviewContextArgsSchema {
     max_depth: Option<u64>,
     max_nodes: Option<u64>,
     token_budget: Option<u64>,
+    exact_dir: Option<String>,
+    exclude_subpaths: Option<Vec<String>>,
     output_format: Option<String>,
 }
 
@@ -519,6 +527,8 @@ pub(crate) struct GetContextArgsSchema {
     agent_id: Option<String>,
     merge_agent_partitions: Option<bool>,
     token_budget: Option<u64>,
+    exact_dir: Option<String>,
+    exclude_subpaths: Option<Vec<String>>,
     output_format: Option<String>,
 }
 

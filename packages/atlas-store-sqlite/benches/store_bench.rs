@@ -1,7 +1,7 @@
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 
 use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile, SearchQuery};
-use atlas_store_sqlite::Store;
+use atlas_store_sqlite::{Store, VectorScope};
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -213,6 +213,7 @@ criterion_group!(
     bench_regex_fts_plus_udf,
     bench_regex_structural_scan_vs_fts_baseline,
     bench_regex_limit_scaling,
+    bench_scoped_vector_candidates,
 );
 criterion_main!(benches);
 
@@ -379,6 +380,81 @@ fn bench_regex_limit_scaling(c: &mut Criterion) {
             };
             b.iter(|| store.search(&q).expect("search"));
         });
+    }
+    group.finish();
+}
+
+/// VR2: scoped vector retrieval evaluates fewer candidates than an unscoped
+/// scan. The benchmark reports both candidate counts once and then times each
+/// path.
+fn bench_scoped_vector_candidates(c: &mut Criterion) {
+    let store = Store::open(":memory:").expect("open in-memory store");
+    let mut store = store;
+    for dir in 0..10 {
+        for file in 0..10 {
+            let path = format!("src/dir{dir}/file{file}.rs");
+            let nodes = make_nodes(&path, 1);
+            store
+                .replace_file_graph_for_repo(
+                    "repo_bench",
+                    &path,
+                    "h",
+                    Some("rust"),
+                    None,
+                    &nodes,
+                    &[],
+                )
+                .expect("seed graph");
+            for node in &nodes {
+                store
+                    .upsert_chunk("repo_bench", &node.qualified_name, 0, "scoped text")
+                    .expect("upsert chunk");
+                let id: i64 = store
+                    .chunks_missing_embeddings(1)
+                    .expect("chunk id")
+                    .first()
+                    .map(|row| row.0)
+                    .expect("pending chunk");
+                store.set_chunk_embedding(id, &[1.0, 0.0]).expect("embed");
+            }
+        }
+    }
+
+    let scoped = VectorScope {
+        subpath_prefix: Some("src/dir3".to_owned()),
+        repo_ids: vec!["repo_bench".to_owned()],
+        triehi_min_chunks: 0,
+        ..Default::default()
+    };
+    let unscoped = VectorScope {
+        repo_ids: vec!["repo_bench".to_owned()],
+        triehi_min_chunks: 0,
+        ..Default::default()
+    };
+    let (_, scoped_candidates) = store
+        .nodes_by_vector_similarity_with_stats(&[1.0, 0.0], &scoped, 10)
+        .expect("scoped candidates");
+    let (_, unscoped_candidates) = store
+        .nodes_by_vector_similarity_with_stats(&[1.0, 0.0], &unscoped, 10)
+        .expect("unscoped candidates");
+    eprintln!(
+        "VR2 scope candidate reduction: scoped={scoped_candidates} unscoped={unscoped_candidates}"
+    );
+    assert!(scoped_candidates < unscoped_candidates);
+
+    let mut group = c.benchmark_group("dsq/vector_scope_candidates");
+    for (label, scope) in [("scoped", &scoped), ("unscoped", &unscoped)] {
+        group.bench_with_input(
+            BenchmarkId::new(label, unscoped_candidates),
+            scope,
+            |b, scope| {
+                b.iter(|| {
+                    store
+                        .nodes_by_vector_similarity(&[1.0, 0.0], scope, 10)
+                        .expect("vector search")
+                });
+            },
+        );
     }
     group.finish();
 }

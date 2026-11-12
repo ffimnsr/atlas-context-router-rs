@@ -107,6 +107,9 @@ pub(super) fn search_hybrid(
         repo_ids: query.repo_ids.clone(),
         kinds: query.kind.clone().into_iter().collect(),
         languages: query.language.clone().into_iter().collect(),
+        triehi_min_chunks: query
+            .triehi_min_chunks
+            .unwrap_or(atlas_store_sqlite::DEFAULT_TRIEHI_MIN_CHUNKS),
     };
     let vector_results = maybe_exclude_file_nodes(
         store.nodes_by_vector_similarity(&query_vec, &scope, query.top_k_vector)?,

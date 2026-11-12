@@ -373,6 +373,8 @@ pub fn run_context(cli: &Cli) -> Result<()> {
             overview_limit,
             overview_max_bytes,
             overview_subject_kinds,
+            exact_dir,
+            exclude_subpaths,
         ) = match &cli.command {
             Command::Context {
                 query,
@@ -396,6 +398,8 @@ pub fn run_context(cli: &Cli) -> Result<()> {
                 overview_limit,
                 overview_max_bytes,
                 overview_subject_kinds,
+                exact_dir,
+                exclude_subpaths,
             } => (
                 query.clone(),
                 file.clone(),
@@ -418,6 +422,8 @@ pub fn run_context(cli: &Cli) -> Result<()> {
                 *overview_limit,
                 *overview_max_bytes,
                 overview_subject_kinds.clone(),
+                exact_dir.clone(),
+                exclude_subpaths.clone(),
             ),
             _ => unreachable!(),
         };
@@ -501,6 +507,18 @@ pub fn run_context(cli: &Cli) -> Result<()> {
         request.include_overviews = include_overviews;
         request.overview_limit = overview_limit;
         request.overview_max_bytes = overview_max_bytes;
+        if exact_dir.is_some() || !exclude_subpaths.is_empty() {
+            let normalize = |path: &str| {
+                atlas_repo::CanonicalRepoPath::from_repo_relative(path)
+                    .map(|resolved| resolved.as_str().to_owned())
+                    .with_context(|| format!("invalid directory scope '{path}'"))
+            };
+            request.exact_dir = exact_dir.as_deref().map(normalize).transpose()?;
+            request.exclude_subpaths = exclude_subpaths
+                .iter()
+                .map(|path| normalize(path))
+                .collect::<Result<Vec<_>>>()?;
+        }
         if include_stale_overviews {
             request.overview_freshness = Some(vec![
                 "fresh".to_owned(),

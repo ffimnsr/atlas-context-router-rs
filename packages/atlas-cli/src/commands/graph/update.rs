@@ -2,7 +2,7 @@ use crate::cli::{Cli, Command};
 use anyhow::{Context, Result};
 use atlas_adapters::{AdapterHooks, CliAdapter};
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
-use atlas_repo::{RepoRelationshipKind, changed_files, find_repo_root, stable_repo_id};
+use atlas_repo::{RepoRelationshipKind, changed_files, find_repo_root, hash_file, stable_repo_id};
 use atlas_store_sqlite::{BuildFinishStats, Store};
 use camino::Utf8Path;
 
@@ -12,6 +12,80 @@ use super::build::{
     rebuild_result_label, rebuild_strategy_label,
 };
 use super::{MultiRepoBudgetAggregate, print_summary_value};
+
+/// Map an update target to `(canonical path, current hash)` entries and
+/// invalidate experience edges that depend on them (VR4).
+///
+/// Deleted and old rename endpoints carry `None`, which marks dependent edges
+/// `invalid`; modified and added endpoints carry the new hash, which marks
+/// them `possibly_stale` until a later validation refreshes them.
+fn invalidate_experience_edges_for_target(
+    repo_root: &Utf8Path,
+    db_path: &str,
+    target: &UpdateTarget,
+) -> Result<usize> {
+    let hash_or_none = |path: &str| -> Option<String> { hash_file(&repo_root.join(path)).ok() };
+
+    let changed: Vec<(String, Option<String>)> = match target {
+        UpdateTarget::Files(paths) => paths
+            .iter()
+            .map(|path| (path.clone(), hash_or_none(path)))
+            .collect(),
+        UpdateTarget::Batch(changes) => changes
+            .iter()
+            .flat_map(|change| {
+                let mut entries = Vec::new();
+                if let Some(old_path) = change.old_path.as_ref() {
+                    entries.push((old_path.clone(), None));
+                }
+                let hash = if change.change_type == atlas_core::model::ChangeType::Deleted {
+                    None
+                } else {
+                    hash_or_none(&change.path)
+                };
+                entries.push((change.path.clone(), hash));
+                entries
+            })
+            .collect(),
+        other => {
+            let diff_target = match other {
+                UpdateTarget::Staged => atlas_repo::DiffTarget::Staged,
+                UpdateTarget::BaseRef(base) => atlas_repo::DiffTarget::BaseRef(base.clone()),
+                _ => atlas_repo::DiffTarget::WorkingTree,
+            };
+            let changes = changed_files(repo_root, &diff_target)?;
+            changes
+                .into_iter()
+                .flat_map(|change| {
+                    let mut entries = Vec::new();
+                    if let Some(old_path) = change.old_path.as_ref() {
+                        entries.push((old_path.clone(), None));
+                    }
+                    let hash = if change.change_type == atlas_core::model::ChangeType::Deleted {
+                        None
+                    } else {
+                        hash_or_none(&change.path)
+                    };
+                    entries.push((change.path, hash));
+                    entries
+                })
+                .collect()
+        }
+    };
+
+    if changed.is_empty() {
+        return Ok(0);
+    }
+
+    let session_db = atlas_engine::paths::session_db_path(db_path);
+    let mut store = match atlas_session::SessionStore::open(&session_db) {
+        Ok(store) => store,
+        Err(_) => return Ok(0),
+    };
+    store
+        .invalidate_experience_paths(repo_root.as_str(), &changed)
+        .context("cannot invalidate experience edges")
+}
 
 fn update_state_for_summary(
     summary: &atlas_engine::UpdateSummary,
@@ -131,6 +205,7 @@ fn run_registered_updates(
         if !dry_run && let Ok(store) = Store::open(db_path) {
             let _ = store.begin_build_for_repo(&registration.repo_id, registration.root.as_str());
         }
+        let invalidation_target = target.clone();
         let result = update_graph(
             registration.root.as_path(),
             db_path,
@@ -174,6 +249,13 @@ fn run_registered_updates(
                 aggregate.processed_repo_count += 1;
                 if summary.budget.budget_hit {
                     aggregate.budget_hit_repo_count += 1;
+                }
+                if !dry_run {
+                    let _ = invalidate_experience_edges_for_target(
+                        registration.root.as_path(),
+                        db_path,
+                        &invalidation_target,
+                    );
                 }
                 aggregate.files_accepted += summary.budget_counters.files_accepted;
                 aggregate.files_skipped_by_byte_budget +=
@@ -385,6 +467,7 @@ pub fn run_update(cli: &Cli) -> Result<()> {
             let _ = store.begin_build_for_repo(&source_repo_id, repo_root_path.as_str());
         }
 
+        let invalidation_target = target.clone();
         let update_result = if full_rebuild {
             build_graph(
                 repo_root_path.as_path(),
@@ -502,6 +585,14 @@ pub fn run_update(cli: &Cli) -> Result<()> {
                 return Err(error);
             }
         };
+
+        if !dry_run {
+            let _ = invalidate_experience_edges_for_target(
+                repo_root_path.as_path(),
+                &db_path,
+                &invalidation_target,
+            );
+        }
 
         if cli.json {
             let mut payload = serde_json::json!({
