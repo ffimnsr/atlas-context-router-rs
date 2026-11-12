@@ -6,6 +6,7 @@
 /// checked-in schema snapshots without duplicating the migration list.
 pub mod migrations;
 pub mod store;
+mod vec_index;
 
 pub use store::{
     BuildFinishStats, ConfidenceTierEdge, DEFAULT_TRIEHI_MIN_CHUNKS, DirectoryTrie,

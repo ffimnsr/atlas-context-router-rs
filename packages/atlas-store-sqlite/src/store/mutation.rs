@@ -148,6 +148,7 @@ fn do_replace_file_graph(
         if retained_qnames.contains(old_node.qualified_name.as_str()) {
             continue;
         }
+        let _ = crate::vec_index::delete_for_node(conn, source_repo_id, &old_node.qualified_name);
         conn.execute(
             "DELETE FROM retrieval_chunks
              WHERE source_repo_id = ?1 AND node_qn = ?2",

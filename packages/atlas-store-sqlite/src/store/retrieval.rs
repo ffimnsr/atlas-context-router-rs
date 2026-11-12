@@ -108,6 +108,20 @@ impl Default for VectorScope {
     }
 }
 
+/// True when the remaining scope predicates can be served exactly by vec0.
+///
+/// `subpath`/directory prefixes, exclusions, kinds, and languages still need
+/// the SQL prefilter + BLOB scan. A single repo id maps to the vec0 partition
+/// key.
+fn scope_is_vec_eligible(scope: &VectorScope) -> bool {
+    scope.subpath_prefix.is_none()
+        && scope.exact_dir.is_none()
+        && scope.exclude_prefixes.is_empty()
+        && scope.repo_ids.len() <= 1
+        && scope.kinds.is_empty()
+        && scope.languages.is_empty()
+}
+
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
@@ -160,6 +174,8 @@ impl Store {
     /// identical qnames) in other repos never lose their chunks.
     pub fn delete_chunks_for_file(&self, source_repo_id: &str, file_path: &str) -> Result<()> {
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let ids = self.chunk_ids_for_file(source_repo_id, file_path)?;
+        let _ = crate::vec_index::delete_ids(&self.conn, &ids);
         self.conn
             .execute(
                 "DELETE FROM retrieval_chunks
@@ -173,6 +189,27 @@ impl Store {
             .map_err(db_err)?;
         self.invalidate_trie_cache();
         Ok(())
+    }
+
+    fn chunk_ids_for_file(&self, source_repo_id: &str, file_path: &str) -> Result<Vec<i64>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id FROM retrieval_chunks
+                 WHERE source_repo_id = ?1
+                   AND node_qn IN (
+                       SELECT qualified_name FROM nodes
+                       WHERE source_repo_id = ?1 AND file_path = ?2
+                   )",
+            )
+            .map_err(db_err)?;
+        let ids = stmt
+            .query_map(params![source_repo_id, file_path], |row| row.get(0))
+            .map_err(db_err)?
+            .filter_map(|row| row.ok())
+            .collect();
+        Ok(ids)
     }
 
     pub fn replace_chunks_for_parsed_files(
@@ -193,7 +230,7 @@ impl Store {
             let mut select_stmt = self
                 .conn
                 .prepare(
-                    "SELECT rc.node_qn, rc.chunk_idx, rc.text, rc.embedding
+                    "SELECT rc.id, rc.node_qn, rc.chunk_idx, rc.text, rc.embedding
                      FROM retrieval_chunks rc
                      WHERE rc.source_repo_id = ?1
                        AND rc.node_qn IN (
@@ -219,7 +256,8 @@ impl Store {
                     "INSERT INTO retrieval_chunks (source_repo_id, node_qn, chunk_idx, text, embedding)
                      VALUES (?1, ?2, ?3, ?4, ?5)
                      ON CONFLICT(source_repo_id, node_qn, chunk_idx)
-                     DO UPDATE SET text = excluded.text, embedding = excluded.embedding",
+                     DO UPDATE SET text = excluded.text, embedding = excluded.embedding
+                     RETURNING id",
                 )
                 .map_err(db_err)?;
 
@@ -228,23 +266,27 @@ impl Store {
                 type ChunkKey = (String, i32);
                 type ChunkSnapshot = (String, Option<Vec<u8>>);
                 let mut previous: HashMap<ChunkKey, ChunkSnapshot> = HashMap::new();
+                let mut old_ids: Vec<i64> = Vec::new();
                 {
                     let rows = select_stmt
                         .query_map(params![source_repo_id, parsed_file.path], |row| {
                             Ok((
-                                row.get::<_, String>(0)?,
-                                row.get::<_, i32>(1)?,
-                                row.get::<_, String>(2)?,
-                                row.get::<_, Option<Vec<u8>>>(3)?,
+                                row.get::<_, i64>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, i32>(2)?,
+                                row.get::<_, String>(3)?,
+                                row.get::<_, Option<Vec<u8>>>(4)?,
                             ))
                         })
                         .map_err(db_err)?;
                     for row in rows {
-                        let (node_qn, chunk_idx, text, embedding) = row.map_err(db_err)?;
+                        let (id, node_qn, chunk_idx, text, embedding) = row.map_err(db_err)?;
+                        old_ids.push(id);
                         previous.insert((node_qn, chunk_idx), (text, embedding));
                     }
                 }
 
+                let _ = crate::vec_index::delete_ids(&self.conn, &old_ids);
                 delete_stmt
                     .execute(params![source_repo_id, parsed_file.path])
                     .map_err(db_err)?;
@@ -254,15 +296,18 @@ impl Store {
                         .get(&(node.qualified_name.clone(), 0))
                         .filter(|(old_text, _)| old_text == &text)
                         .and_then(|(_, embedding)| embedding.clone());
-                    upsert_stmt
-                        .execute(params![
-                            source_repo_id,
-                            node.qualified_name,
-                            0,
-                            text,
-                            embedding
-                        ])
+                    let index_blob = embedding.clone();
+                    let new_id: i64 = upsert_stmt
+                        .query_row(
+                            params![source_repo_id, node.qualified_name, 0, text, embedding],
+                            |row| row.get(0),
+                        )
                         .map_err(db_err)?;
+                    if let Some(blob) = index_blob.as_deref()
+                        && let Err(error) = crate::vec_index::upsert(&self.conn, new_id, blob)
+                    {
+                        tracing::debug!(chunk_id = new_id, "vec0 index update failed: {error}");
+                    }
                     written += 1;
                 }
             }
@@ -321,6 +366,9 @@ impl Store {
                 params![blob, id],
             )
             .map_err(db_err)?;
+        if let Err(error) = crate::vec_index::upsert(&self.conn, id, &blob) {
+            tracing::debug!(chunk_id = id, "vec0 index update failed: {error}");
+        }
         Ok(())
     }
 
@@ -350,6 +398,19 @@ impl Store {
     ) -> Result<(Vec<ScoredNode>, usize)> {
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         let scope = scope.validated()?;
+        // Unscoped queries use the sqlite-vec KNN index when available. Any
+        // scope filter or index error keeps the exact BLOB-scan path below.
+        if scope_is_vec_eligible(&scope)
+            && let Some((candidates, scope_candidates)) = crate::vec_index::try_knn(
+                &self.conn,
+                query_embedding,
+                limit.max(1),
+                scope.repo_ids.first().map(String::as_str),
+            )
+        {
+            tracing::debug!(scope_candidates, "vec0 KNN path");
+            return self.finish_vector_candidates(candidates, scope_candidates, limit);
+        }
         let trie_bitmap = self.trie_scope_bitmap(&scope)?;
 
         let mut clauses: Vec<String> = vec!["rc.embedding IS NOT NULL".to_owned()];
@@ -424,7 +485,7 @@ impl Store {
         );
 
         let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
-        let mut candidates: Vec<(String, f64)> = stmt
+        let candidates: Vec<(String, f64)> = stmt
             .query_map(rusqlite::params_from_iter(bind.iter()), |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -457,6 +518,15 @@ impl Store {
             "vector scope pre-filter applied"
         );
 
+        self.finish_vector_candidates(candidates, scope_candidates, limit)
+    }
+
+    fn finish_vector_candidates(
+        &self,
+        mut candidates: Vec<(String, f64)>,
+        scope_candidates: usize,
+        limit: usize,
+    ) -> Result<(Vec<ScoredNode>, usize)> {
         candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         candidates.truncate(limit);
 

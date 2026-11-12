@@ -14,6 +14,7 @@ impl Store {
     const NONCANONICAL_PATH_LIMIT: usize = 100;
 
     pub fn open(path: &str) -> Result<Self> {
+        crate::vec_index::register_extension();
         let conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE

@@ -27,6 +27,7 @@ mod postprocess;
 mod recovery;
 mod search;
 mod taxonomy;
+mod vec_index;
 
 #[test]
 fn graph_db_never_contains_experience_edge_tables() {
@@ -45,6 +46,7 @@ fn graph_db_never_contains_experience_edge_tables() {
 }
 
 fn open_in_memory() -> Store {
+    crate::vec_index::register_extension();
     let conn = Connection::open_in_memory().unwrap();
     atlas_db_utils::apply_atlas_pragmas(&conn).unwrap();
     Store::register_regexp_udf(&conn).unwrap();
