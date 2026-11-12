@@ -98,56 +98,52 @@ These are the high-value retrieval/indexing improvements still missing or only p
 
 They are meant to strengthen Atlas’s retrieval/content sidecar without changing the graph-first core.
 
-#### Patch R7 — Experimental post-retrieval compaction
+#### Patch R7 — Context payload telemetry and metadata slimming
 
-Optional, late-stage optimization. It may compact already-selected context, but must never choose, rank, or discard retrieval candidates. Graph-first selection and retrieval filtering remain source of truth.
+The earlier post-retrieval compaction experiment is dropped. Atlas context payloads are structured JSON metadata, not retrieved prose: measured review context emitted 93% node records and zero source-text bytes. Text compaction has no target. Token reduction must come from honest telemetry and payload-shape slimming, not a compactor.
 
-##### Entry gates
+##### R7.1 — Baseline context telemetry
 
-Do not implement or enable experiment until all gates pass:
+- [ ] add `ContextTelemetry` in `packages/atlas-core/src/model/context.rs` and `ContextResult::telemetry: Option<ContextTelemetry>` with `intent`, `requested_nodes`, `emitted_nodes`, `requested_edges`, `emitted_edges`, `requested_files`, `emitted_files`, `requested_saved_sources`, `emitted_saved_sources`, `requested_content_assets`, `emitted_content_assets`, `requested_overviews`, `emitted_overviews`, `requested_bytes`, `emitted_bytes`, `requested_tokens`, `emitted_tokens`, `budget_hit`, `budget_name`, `duration_ms`, and `outcome`
+- [ ] add `ContextRequest::include_telemetry` (default `false`) and populate it from the pre-trim and post-trim snapshots already captured in `apply_payload_budgets`
+- [ ] classify `outcome` as `ok`, `empty`, `ambiguous`, `budget_exhausted`, or `error` at the `ContextEngine::build` boundary in `packages/atlas-review/src/context/mod.rs`
+- [ ] keep `ContextResult::telemetry` optional and skipped when absent so default output stays byte-identical
+- [ ] add `--telemetry` to `atlas context` and `atlas review-context`, and `include_telemetry` to MCP `get_context` and `get_review_context`
+- [ ] add `atlas-metrics.workspace = true` to `packages/atlas-review/Cargo.toml`
+- [ ] add `atlas-metrics` families `context_builds` (labeled by intent and outcome), `context_duration_ms`, `context_payload_bytes`, and `context_payload_tokens` (labeled by intent)
+- [ ] extend `packages/atlas-review/benches/context_bench.rs` to emit telemetry JSON for a fixed corpus covering symbol, file, review, change-set, oversized-context, and provenance-sensitive requests
+- [ ] add tests for requested/emitted count parity, outcome classification, metric recording, default-output byte equality, and telemetry JSON shape
+- [ ] document telemetry fields, metric names, and the fixed corpus in `wiki/context-telemetry.md`
 
-- [ ] context engine has stable golden-output or evaluator coverage for representative symbol, file, review, and change-set requests
-- [ ] baseline telemetry records selected chunk count, estimated input tokens, output tokens when available, latency, and request outcome
-- [ ] baseline corpus includes at least one oversized-context case and one provenance-sensitive case
+##### R7.2 — Payload metadata slimming
 
-##### Initial design
+- [ ] add `ContextResult::repo_provenance: Option<RepoProvenance>` and hoist provenance from emitted `SelectedNode`, `SelectedFile`, and `SavedContextSource` items when every item shares the same provenance
+- [ ] keep per-item `repo_provenance` when the result spans multiple repos or when provenance differs across items
+- [ ] add `ContextRequest::include_ranking_evidence` (default `false`) and omit `context_ranking_evidence` from nodes, content assets, and saved-context sources when disabled
+- [ ] keep `selection_reason` and `relevance_score` on every emitted item, node identity fields on graph items (`qualified_name`, `file_path`, `line_start`, `line_end`), and `source_id` on content and saved-context items
+- [ ] add `--include-ranking-evidence` to `atlas context` and `atlas review-context`, and `include_ranking_evidence` to MCP `get_context` and `get_review_context`
+- [ ] update MCP output schemas, `MCP_TOOLS.md`, CLI JSON docs, and goldens for the new default shape
+- [ ] compare emitted bytes and tokens against the current schema on the fixed corpus, with acceptance threshold `>= 15%` token reduction at unchanged recall and unchanged required-evidence retention
+- [ ] add tests for uniform-provenance hoisting, multi-repo provenance preservation, opt-in ranking evidence, and CLI/MCP parity in both metadata modes
 
-- [ ] add `PostRetrievalCompactionMode` with `Off`, `Shadow`, and `Enabled` values; default every CLI, MCP, and config path to `Off`
-- [ ] run compaction only after graph-based selection, retrieval filtering, truncation, and final context ordering complete
-- [ ] define compactor input as immutable selected context plus item metadata: source ID, file path, line span, qualified symbol, retrieval score, and provenance
-- [ ] define compactor output as compacted text plus mapping from every output segment to one or more original selected items
-- [ ] preserve selected-item IDs, file paths, line spans, symbol references, citations, and graph evidence in response metadata; compactor must not invent provenance
-- [ ] make `Shadow` compute compacted result and metrics without changing returned context
-- [ ] make `Enabled` use compacted result only when output validates; on timeout, provider failure, invalid provenance mapping, or token increase, return original selected context unchanged
-- [ ] apply explicit timeout, cancellation, payload-size limit, and per-request token budget; do not send secrets or excluded content to external providers
-- [ ] start with bounded extractive compaction. Add abstractive/provider-backed compaction only through separate design review and opt-in configuration
+##### Rejected experiment
 
-##### Measurement and evaluation
-
-- [ ] record baseline and compacted token estimates, latency, selected-item count, retained-item count, compaction status, fallback reason, and mode
-- [ ] create versioned fixtures containing selected-context input, expected provenance mapping, and expected fallback behavior
-- [ ] run same request corpus in `Off` and `Shadow`; compare answer-quality evaluator result, required-evidence retention, and token estimate
-- [ ] define non-regression as no lost required evidence, no invalid provenance, and no answer-quality decline beyond evaluator noise threshold documented with benchmark
-- [ ] require token reduction against baseline on oversized-context cases before considering `Enabled`
-- [ ] publish experiment report with corpus version, configuration, provider/model when applicable, aggregate metrics, regressions, and recommendation
-
-##### Tests and acceptance criteria
-
-- [ ] unit tests cover mode parsing/defaults, input budget enforcement, provenance mapping validation, timeout/error fallback, and refusal of token-increasing output
-- [ ] integration tests prove `Off` output is byte-for-byte existing behavior and `Shadow` does not alter returned context
-- [ ] fixture tests prove compacted output retains required graph and retrieval evidence with valid source mapping
-- [ ] benchmark test or reproducible command emits baseline-versus-shadow token and quality report
-- [ ] `Enabled` remains hidden or documented as experimental until report meets non-regression and token-reduction gates
+- [ ] do not add `PostRetrievalCompactionMode`, provider-backed compaction, or shadow compaction unless telemetry shows a measured text-bearing share of at least 10% of emitted bytes and metadata slimming has already been applied
 
 Why:
-- possible token-efficiency optimization after selection quality is already trustworthy
-- fail-open design prevents experiment from destabilizing graph-first + retrieval-assisted architecture
+- measured payloads are dominated by repeated structural metadata, so hoisting and opt-in evidence removal are the real token lever
+- telemetry makes selection and budget regressions visible without a lossy post-selection rewrite
+- keeping provenance lossless preserves graph evidence and existing provenance-sensitive gates
 
 #### Patch completion criteria
 
 This patch is complete when:
 
-- [ ] optional post-retrieval compaction is tracked as a late experiment only
+- [ ] context telemetry is recorded for every build and exposed without changing default output
+- [ ] the fixed corpus covers symbol, file, review, change-set, oversized-context, and provenance-sensitive requests
+- [ ] hoisted provenance and opt-in ranking evidence reduce emitted tokens by at least 15% on the corpus
+- [ ] default and multi-repo payloads keep all required evidence fields and pass updated MCP/CLI parity tests
+- [ ] no text compactor or external provider is added to the context path
 
 ---
 
