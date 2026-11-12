@@ -23,6 +23,8 @@ pub(crate) struct ToolInventoryEntry {
     pub read_only: bool,
     pub state_changing: bool,
     pub destructive: bool,
+    pub idempotent: bool,
+    pub open_world: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -212,6 +214,16 @@ fn inventory_entries() -> Vec<ToolInventoryEntry> {
                 .as_ref()
                 .and_then(|annotations| annotations.destructive_hint)
                 .unwrap_or(false);
+            let idempotent = tool
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.idempotent_hint)
+                .unwrap_or(true);
+            let open_world = tool
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.open_world_hint)
+                .unwrap_or(false);
             ToolInventoryEntry {
                 category: tool
                     .meta
@@ -230,6 +242,8 @@ fn inventory_entries() -> Vec<ToolInventoryEntry> {
                 read_only,
                 state_changing: !read_only,
                 destructive,
+                idempotent,
+                open_world,
                 name: tool.name.to_string(),
                 title: tool.title.unwrap_or_default(),
                 description: tool

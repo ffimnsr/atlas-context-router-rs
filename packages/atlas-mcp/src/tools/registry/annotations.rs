@@ -2,9 +2,12 @@
 
 use crate::descriptors::ToolDescriptorAnnotations;
 
-pub(crate) fn tool_annotations(name: &str) -> ToolDescriptorAnnotations {
-    let destructive = matches!(name, "purge_saved_context");
-    let state_changing = matches!(
+/// Tools that mutate Atlas state (files, graph, session, or memory rows).
+///
+/// Keep this list aligned with `tool_usage_guidance` state-changing notes and
+/// with the per-tool `readOnlyHint` exposed in `tools/list`.
+pub(crate) fn is_state_changing_tool(name: &str) -> bool {
+    matches!(
         name,
         "build_graph"
             | "update_graph"
@@ -13,14 +16,39 @@ pub(crate) fn tool_annotations(name: &str) -> ToolDescriptorAnnotations {
             | "record_session_event"
             | "wake_up"
             | "purge_saved_context"
+            | "save_context_artifact"
+            | "memory_store"
+            | "feedback_record"
             | "memoir_create"
             | "memoir_add_concept"
             | "memoir_link"
             | "overview_ingest"
-    );
+            | "overview_refresh_plan"
+    )
+}
+
+/// Tools where replaying the same call is not guaranteed to be a no-op.
+pub(crate) fn is_non_idempotent_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "record_session_event"
+            | "wake_up"
+            | "save_context_artifact"
+            | "memory_store"
+            | "feedback_record"
+    )
+}
+
+pub(crate) fn tool_annotations(name: &str) -> ToolDescriptorAnnotations {
+    let destructive = matches!(name, "purge_saved_context" | "compact_session");
+    let state_changing = is_state_changing_tool(name);
     ToolDescriptorAnnotations::new()
         .read_only(!state_changing)
         .destructive(destructive)
+        .idempotent(!is_non_idempotent_tool(name))
+        // Atlas is local-first: even hybrid embedding calls go to an
+        // operator-configured endpoint, never an open-ended external world.
+        .open_world(false)
 }
 
 pub(crate) fn tool_category(name: &str) -> &'static str {

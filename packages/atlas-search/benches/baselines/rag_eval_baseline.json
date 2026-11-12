@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "corpus": "rag-eval-fixture-v1",
+  "recall_k": 10,
+  "token_efficiency": {
+    "l0_ratio": 0.08260869565217391,
+    "l1_ratio": 0.9260869565217391,
+    "l2_ratio": 1.0
+  },
+  "l0_tokens": 57,
+  "l1_tokens": 639,
+  "l2_tokens": 690,
+  "dsq_pruning": [
+    {
+      "scope": "recursive",
+      "scoped_candidate_count": 10,
+      "unscoped_candidate_count": 100
+    },
+    {
+      "scope": "exact_dir",
+      "scoped_candidate_count": 10,
+      "unscoped_candidate_count": 100
+    },
+    {
+      "scope": "exclusion",
+      "scoped_candidate_count": 10,
+      "unscoped_candidate_count": 100
+    }
+  ],
+  "primary_recall_at_k": 0.8,
+  "aux_recall_at_k": 1.0,
+  "auxiliary_lift": 0.19999999999999996,
+  "rounds_without_experience": 2,
+  "rounds_used": 1,
+  "escalation_round_reduction": 1,
+  "thresholds": {
+    "max_l0_l2_ratio": 0.1,
+    "min_dsq_reduction": 0.5,
+    "min_auxiliary_lift": 0.0,
+    "max_escalation_rounds": 1
+  }
+}

@@ -13,6 +13,7 @@ use tracing::debug;
 pub mod capabilities;
 pub mod embed;
 pub mod eval;
+pub mod rag_eval;
 mod ranking;
 pub mod semantic;
 

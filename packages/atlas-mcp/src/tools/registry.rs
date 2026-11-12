@@ -18,11 +18,14 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
+pub(crate) use annotations::is_state_changing_tool;
 use annotations::*;
 pub use contract::tool_list_markdown;
 pub(crate) use contract::{ToolResultContract, tool_result_contract};
 use output_schemas::*;
 pub(crate) use schemas::*;
+
+use super::manual::tool_usage_guidance;
 
 mod annotations;
 mod contract;
@@ -149,6 +152,7 @@ fn build_tool_descriptor(seed: ToolDescriptorSeed) -> ToolDescriptor {
     let mut meta = descriptor_meta("tool", category);
     meta["atlas:resultContract"] = serde_json::json!(contract.label());
     meta["atlas:resultContractGuidance"] = serde_json::json!(contract.guidance());
+    meta["atlas:usageGuidance"] = serde_json::json!(tool_usage_guidance(&seed.name));
     let mut input_schema =
         ensure_schema_2020_12(typed_input_schema_for(&seed.name).unwrap_or(seed.input_schema));
     strip_output_format_properties(&mut input_schema);

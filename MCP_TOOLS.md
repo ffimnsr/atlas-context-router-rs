@@ -14,6 +14,8 @@ Result contract legend:
 - `stable-object`: JSON `structuredContent` is source of truth; `outputSchema` validates that object.
 - `text-only`: consume MCP `content`; no `outputSchema` advertised.
 
+Every tool descriptor also exposes `_meta.atlas:category`, `_meta.atlas:resultContract`, `_meta.atlas:resultContractGuidance`, and `_meta.atlas:usageGuidance`. Read the usage guidance before first use and after a failed call.
+
 | Tool | Title | Input schema | Result contract | Output schema | Description |
 |------|-------|--------------|-----------------|---------------|-------------|
 | `analyze_architecture` | Analyze Architecture | object; required fields: 0 | `stable-object` | exact structuredContent schema | Analyze module-level cycles, layer violations, and coupling hotspots. JSON output matches the CLI insights architecture report; JSON output stays compact unless verbose=true. |

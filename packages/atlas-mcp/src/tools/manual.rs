@@ -6,7 +6,9 @@ use crate::output::{OutputFormat, render_value};
 use crate::tool_result::{ToolErrorCode, ToolErrorPayload, tool_execution_error_value};
 
 use super::dispatch::is_known_tool_name;
-use super::registry::{tool_descriptor_by_name, tool_descriptors, tool_result_contract};
+use super::registry::{
+    is_state_changing_tool, tool_descriptor_by_name, tool_descriptors, tool_result_contract,
+};
 
 const MAX_DESCRIPTION_CHARS: usize = 220;
 const MAX_EXAMPLE_CHARS: usize = 240;
@@ -42,6 +44,8 @@ pub struct ToolManualAnnotations {
     pub read_only: bool,
     pub state_changing: bool,
     pub destructive: bool,
+    pub idempotent: bool,
+    pub open_world: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -156,10 +160,12 @@ pub fn render_tool_manual_text(document: &ToolManualDocument) -> String {
         document.tool_structure.result_contract
     ));
     lines.push(format!(
-        "  annotations: read_only={}, state_changing={}, destructive={}",
+        "  annotations: read_only={}, state_changing={}, destructive={}, idempotent={}, open_world={}",
         document.tool_structure.annotations.read_only,
         document.tool_structure.annotations.state_changing,
-        document.tool_structure.annotations.destructive
+        document.tool_structure.annotations.destructive,
+        document.tool_structure.annotations.idempotent,
+        document.tool_structure.annotations.open_world
     ));
 
     lines.push(String::new());
@@ -460,6 +466,16 @@ fn lookup_tool_manual(
                     .annotations
                     .as_ref()
                     .and_then(|annotations| annotations.destructive_hint)
+                    .unwrap_or(false),
+                idempotent: tool
+                    .annotations
+                    .as_ref()
+                    .and_then(|annotations| annotations.idempotent_hint)
+                    .unwrap_or(true),
+                open_world: tool
+                    .annotations
+                    .as_ref()
+                    .and_then(|annotations| annotations.open_world_hint)
                     .unwrap_or(false),
             },
         },
@@ -1213,9 +1229,10 @@ fn top_level_shape(label: &str, schema: &Value) -> String {
     format!("{label}: object with {properties} top-level fields ({required} required)")
 }
 
-fn tool_usage_guidance(tool_name: &str) -> Vec<String> {
+pub(crate) fn tool_usage_guidance(tool_name: &str) -> Vec<String> {
     let mut usage = match tool_name {
-        "status" | "doctor" | "db_check" | "debug_graph" | "list_graph_stats" => vec![
+        "status" | "doctor" | "db_check" | "debug_graph" | "list_graph_stats" | "get_metrics"
+        | "broker_status" => vec![
             "Use before trusting graph-backed context or when graph results look empty/stale.",
             "Read health fields first; only rebuild or run deeper diagnostics when readiness says unsafe or stale.",
         ],
@@ -1231,15 +1248,47 @@ fn tool_usage_guidance(tool_name: &str) -> Vec<String> {
             "Use for review, impact, and bounded context assembly around changed files or concrete targets.",
             "Prefer minimal/change detection first; escalate to broader context only when risk or missing evidence requires it.",
         ],
+        "build_graph" | "update_graph" | "postprocess_graph" => vec![
+            "Use only after status or detect_changes shows a missing, stale, or changed graph.",
+            "Prefer update_graph for incremental working-tree changes; reserve build_graph for the first build or a deliberate full rebuild.",
+        ],
+        "get_session_status" | "resume_session" | "wake_up" | "record_session_event"
+        | "compact_session" => vec![
+            "Use for session continuity: check status first, then wake_up or resume_session before asking the user to repeat context.",
+            "record_session_event, wake_up, and compact_session write session state; call them intentionally, never speculatively.",
+        ],
+        "save_context_artifact" | "read_saved_context" | "search_saved_context"
+        | "cross_session_search" | "purge_saved_context" | "search_decisions"
+        | "get_context_stats" | "get_global_memory" => vec![
+            "Use saved-context tools for large tool outputs and cross-session recall: search before read, and page with chunk_offset for large artifacts.",
+            "Artifacts are session- and repo-scoped; purge_saved_context is destructive and requires an explicit user-approved action.",
+        ],
+        "memory_store" | "memory_recall" | "memory_ops" | "feedback_record" => vec![
+            "Use memory_store for durable repo facts, memory_recall for retrieval, and memory_ops to inspect typed-operator history.",
+            "Recall is read-only; store and feedback writes are state-changing. Respect project/session/frontend/global visibility scopes.",
+        ],
+        "memoir_create" | "memoir_add_concept" | "memoir_link" | "memoir_inspect" => vec![
+            "Use memoir tools for the separate concept layer, never as code-graph truth.",
+            "Create the graph before concepts, inspect before linking, and remember missing concepts are never auto-created unless create_missing is explicit.",
+        ],
+        "experience_inspect" => vec![
+            "Use to audit query-conditioned experience edges for one atlas:// URI before trusting a shortcut.",
+            "Only fresh edges activate in context assembly; inspect is read-only and never mutates edges.",
+        ],
+        "overview_show" | "overview_search" | "overview_export" | "overview_refresh_plan"
+        | "overview_ingest" => vec![
+            "Use overview tools for L0/L1/L2 progressive disclosure: start at L1 and escalate to L2 only when detail is needed.",
+            "overview_ingest and overview_refresh_plan with apply=true write overview state; show, search, and export are read-only.",
+        ],
         name if name.starts_with("analyze_") || name.starts_with("assess_") || name.starts_with("find_") || matches!(name, "infer_modules" | "label_components") => vec![
             "Use for deterministic analysis after target files or symbols are known.",
             "Treat ranked findings as triage; validate risky refactors with tests or narrower graph context before editing.",
         ],
         name if name.starts_with("search_") || name.starts_with("read_") || matches!(name, "get_docs_section" | "search_templates" | "search_text_assets") => vec![
-            "Use for non-code assets, saved artifacts, docs, templates, SQL, prompts, or exact file excerpts.",
+            "Use for non-code assets, docs, templates, SQL, prompts, or exact file excerpts.",
             "For symbol relationships, resolve graph symbols first; use content tools as companion evidence.",
         ],
-        "tool_list" | "tool_search" | "tool_help" | "man" | "repo_registry" | "broker_status" => vec![
+        "tool_list" | "tool_search" | "tool_help" | "man" | "repo_registry" => vec![
             "Use for live MCP capability discovery and exact runtime docs before guessing tool arguments.",
             "Prefer tool_search when name is unclear, then tool_help or atlas://tool-docs/{name} for full usage.",
         ],
@@ -1252,16 +1301,7 @@ fn tool_usage_guidance(tool_name: &str) -> Vec<String> {
     .map(str::to_owned)
     .collect::<Vec<_>>();
 
-    if matches!(
-        tool_name,
-        "build_graph"
-            | "update_graph"
-            | "postprocess_graph"
-            | "compact_session"
-            | "record_session_event"
-            | "wake_up"
-            | "purge_saved_context"
-    ) {
+    if is_state_changing_tool(tool_name) {
         usage.push("State-changing tool: call intentionally, avoid speculative execution, and preserve user work.".to_owned());
     }
     usage
@@ -1593,6 +1633,88 @@ mod tests {
                 !doc.usage.few_shot_prompts.is_empty(),
                 "{} missing few-shot prompts",
                 tool.name
+            );
+        }
+    }
+
+    #[test]
+    fn memory_session_and_overview_tools_have_tailored_guidance() {
+        for name in [
+            "memory_store",
+            "memory_recall",
+            "memory_ops",
+            "feedback_record",
+            "memoir_create",
+            "memoir_add_concept",
+            "memoir_link",
+            "memoir_inspect",
+            "experience_inspect",
+            "save_context_artifact",
+            "search_saved_context",
+            "read_saved_context",
+            "purge_saved_context",
+            "get_session_status",
+            "resume_session",
+            "wake_up",
+            "record_session_event",
+            "compact_session",
+            "overview_show",
+            "overview_search",
+            "overview_export",
+            "overview_ingest",
+            "overview_refresh_plan",
+            "get_global_memory",
+            "build_graph",
+            "update_graph",
+            "postprocess_graph",
+            "get_metrics",
+        ] {
+            let doc = tool_manual("mcp", name).expect("manual doc");
+            assert!(
+                !doc.usage
+                    .tool_usage
+                    .iter()
+                    .any(|guidance| guidance
+                        .starts_with("Use when request matches tool description")),
+                "{name} falls back to generic usage guidance"
+            );
+        }
+    }
+
+    #[test]
+    fn state_changing_tools_expose_warning_and_annotations() {
+        for name in [
+            "build_graph",
+            "update_graph",
+            "postprocess_graph",
+            "compact_session",
+            "record_session_event",
+            "wake_up",
+            "purge_saved_context",
+            "save_context_artifact",
+            "memory_store",
+            "feedback_record",
+            "memoir_create",
+            "memoir_add_concept",
+            "memoir_link",
+            "overview_ingest",
+            "overview_refresh_plan",
+        ] {
+            let doc = tool_manual("mcp", name).expect("manual doc");
+            assert!(
+                doc.tool_structure.annotations.state_changing,
+                "{name} must be state-changing"
+            );
+            assert!(
+                !doc.tool_structure.annotations.read_only,
+                "{name} must not be read-only"
+            );
+            assert!(
+                doc.usage
+                    .tool_usage
+                    .iter()
+                    .any(|guidance| guidance.starts_with("State-changing tool:")),
+                "{name} missing state-changing warning"
             );
         }
     }

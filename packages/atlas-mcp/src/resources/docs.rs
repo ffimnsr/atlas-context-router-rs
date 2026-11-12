@@ -214,10 +214,12 @@ pub(crate) fn render_tool_manual_markdown(document: &crate::tools::ToolManualDoc
             document.tool_structure.result_contract
         ),
         format!(
-            "- annotations: read_only=`{}`, state_changing=`{}`, destructive=`{}`",
+            "- annotations: read_only=`{}`, state_changing=`{}`, destructive=`{}`, idempotent=`{}`, open_world=`{}`",
             document.tool_structure.annotations.read_only,
             document.tool_structure.annotations.state_changing,
-            document.tool_structure.annotations.destructive
+            document.tool_structure.annotations.destructive,
+            document.tool_structure.annotations.idempotent,
+            document.tool_structure.annotations.open_world
         ),
         "".to_owned(),
         "## Input Args".to_owned(),

@@ -37,7 +37,9 @@ pub(crate) fn tool_list_output_schema() -> Value {
                     "result_contract": { "type": "string" },
                     "read_only": { "type": "boolean" },
                     "state_changing": { "type": "boolean" },
-                    "destructive": { "type": "boolean" }
+                    "destructive": { "type": "boolean" },
+                    "idempotent": { "type": "boolean" },
+                    "open_world": { "type": "boolean" }
                 },
                 "required": [
                     "name",
@@ -47,7 +49,9 @@ pub(crate) fn tool_list_output_schema() -> Value {
                     "result_contract",
                     "read_only",
                     "state_changing",
-                    "destructive"
+                    "destructive",
+                    "idempotent",
+                    "open_world"
                 ]
             },
             "tool_inventory_guidance": {
@@ -161,9 +165,17 @@ pub(crate) fn man_output_schema() -> Value {
                         "properties": {
                             "read_only": { "type": "boolean" },
                             "state_changing": { "type": "boolean" },
-                            "destructive": { "type": "boolean" }
+                            "destructive": { "type": "boolean" },
+                            "idempotent": { "type": "boolean" },
+                            "open_world": { "type": "boolean" }
                         },
-                        "required": ["read_only", "state_changing", "destructive"]
+                        "required": [
+                            "read_only",
+                            "state_changing",
+                            "destructive",
+                            "idempotent",
+                            "open_world"
+                        ]
                     }
                 },
                 "required": [

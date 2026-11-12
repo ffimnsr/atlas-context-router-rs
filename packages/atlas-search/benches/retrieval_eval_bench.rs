@@ -9,8 +9,12 @@
 
 use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind};
 use atlas_search::eval::{BudgetClass, RetrievalCase, RetrievalMode, evaluate};
+use atlas_search::rag_eval::RagEvaluationReport;
 use atlas_store_sqlite::Store;
 use criterion::{Criterion, criterion_group, criterion_main};
+
+#[path = "../tests/support/rag_corpus.rs"]
+mod rag_corpus;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -110,6 +114,7 @@ fn build_corpus(module_count: usize) -> (Store, Vec<RetrievalCase>) {
 // ---------------------------------------------------------------------------
 
 fn bench_retrieval_modes(c: &mut Criterion) {
+    emit_rag_eval_report();
     let (store, cases) = build_corpus(50);
     let mut group = c.benchmark_group("retrieval_eval/modes");
 
@@ -155,5 +160,104 @@ fn bench_fixed_budget(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_retrieval_modes, bench_fixed_budget);
+// ---------------------------------------------------------------------------
+// VQ1 RAG evaluation report and gate
+// ---------------------------------------------------------------------------
+
+fn baseline_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("benches")
+        .join("baselines")
+        .join("rag_eval_baseline.json")
+}
+
+fn output_path() -> std::path::PathBuf {
+    std::env::var_os("RAG_EVAL_JSON_OUT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("target")
+                .join("bench-ci")
+                .join("rag-eval.json")
+        })
+}
+
+/// Emit the VQ1 report as JSON and enforce the acceptance/baseline gate.
+fn emit_rag_eval_report() -> RagEvaluationReport {
+    let report = rag_corpus::evaluate_rag_corpus().expect("build deterministic rag eval corpus");
+    let json = report.to_json_pretty().expect("serialize rag eval report");
+    println!("{json}");
+
+    let out = output_path();
+    if let Some(parent) = out.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&out, format!("{json}\n"));
+
+    enforce_rag_gate(&report);
+    report
+}
+
+fn enforce_rag_gate(report: &RagEvaluationReport) {
+    let mut failures = Vec::new();
+    for gate in report.gates() {
+        println!(
+            "rag-eval gate {}: {} (observed {})",
+            gate.gate,
+            if gate.passed { "pass" } else { "FAIL" },
+            gate.observed
+        );
+        if !gate.passed {
+            failures.push(format!(
+                "{} observed {} (threshold {})",
+                gate.gate, gate.observed, gate.threshold
+            ));
+        }
+    }
+
+    let baseline = baseline_path();
+    match std::fs::read_to_string(&baseline) {
+        Ok(raw) => match RagEvaluationReport::from_json(&raw) {
+            Ok(baseline) => {
+                for regression in report.compare_to_baseline(&baseline) {
+                    failures.push(format!(
+                        "{} regressed {:.4} -> {:.4}",
+                        regression.metric, regression.baseline, regression.current
+                    ));
+                }
+            }
+            Err(error) => failures.push(format!("baseline parse error: {error}")),
+        },
+        Err(error) => {
+            eprintln!(
+                "warning: no rag eval baseline at {} ({error}); skipping regression gate",
+                baseline.display()
+            );
+        }
+    }
+
+    if std::env::var("RAG_EVAL_GATE").as_deref() == Ok("0") {
+        return;
+    }
+    assert!(
+        failures.is_empty(),
+        "rag eval gate failed: {}",
+        failures.join("; ")
+    );
+}
+
+fn bench_rag_eval_corpus(c: &mut Criterion) {
+    c.bench_function("rag_eval/full_corpus", |b| {
+        b.iter(|| rag_corpus::evaluate_rag_corpus().expect("build deterministic rag eval corpus"))
+    });
+}
+
+criterion_group!(
+    benches,
+    bench_retrieval_modes,
+    bench_fixed_budget,
+    bench_rag_eval_corpus
+);
 criterion_main!(benches);

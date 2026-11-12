@@ -73,7 +73,9 @@ pub(crate) enum ExcerptSelectorKindSchema {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ExcerptLineRangeSchema {
+    /// 1-based inclusive start line.
     start_line: u64,
+    /// 1-based inclusive end line.
     end_line: u64,
 }
 
@@ -81,12 +83,19 @@ pub(crate) struct ExcerptLineRangeSchema {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ReadFileExcerptSelectorSchema {
+    /// Selector kind: range, ranges, or context.
     kind: ExcerptSelectorKindSchema,
+    /// 1-based start line for kind='range'.
     start_line: Option<u64>,
+    /// Inclusive end line for kind='range'.
     end_line: Option<u64>,
+    /// 1-based anchor line for kind='context'.
     line: Option<u64>,
+    /// Context lines before the anchor line (default 2).
     before: Option<u64>,
+    /// Context lines after the anchor line (default 2).
     after: Option<u64>,
+    /// Explicit line ranges for kind='ranges'.
     line_ranges: Option<Vec<ExcerptLineRangeSchema>>,
 }
 
@@ -113,8 +122,11 @@ pub(crate) enum DocsSelectorKindSchema {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GetDocsSectionSelectorSchema {
+    /// Selector kind: heading or line.
     kind: DocsSelectorKindSchema,
+    /// Heading path or slug when kind='heading'.
     heading: Option<String>,
+    /// 1-based line number when kind='line'.
     line: Option<u64>,
 }
 
@@ -211,7 +223,9 @@ pub(crate) enum RepoScopeKindSchema {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RepoScopeArgsSchema {
+    /// Repo scope kind: current, repo_id, or all.
     kind: RepoScopeKindSchema,
+    /// Required when kind='repo_id'. Must be registered and enabled.
     repo_id: Option<String>,
 }
 
@@ -256,17 +270,29 @@ pub(crate) struct ListSymbolsArgsSchema {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct BatchQueryGraphItemArgsSchema {
+    /// Symbol name or identifier to search (e.g. 'BalancesTab'). Required unless 'regex' is set.
     text: Option<String>,
+    /// Filter by node kind (e.g. 'function', 'struct').
     kind: Option<String>,
+    /// Filter by language (e.g. 'rust', 'typescript').
     language: Option<String>,
+    /// Maximum results for this query (default 20).
     limit: Option<u64>,
+    /// Graph-neighbour expansion on top of FTS (default false). Requires FTS to find at least one hit first.
     semantic: Option<bool>,
+    /// Expand results through graph edges after ranking (default false).
     expand: Option<bool>,
+    /// Max edge hops when expand=true (default 1).
     expand_hops: Option<u64>,
+    /// Regex pattern matched against name and qualified_name via SQL UDF. Must be valid regex crate syntax.
     regex: Option<String>,
+    /// Restrict results to nodes whose file_path starts with this prefix.
     subpath: Option<String>,
+    /// Enable fuzzy typo recovery (default false).
     fuzzy: Option<bool>,
+    /// Enable hybrid FTS + vector retrieval (default false). Requires search.embedding.url in .atlas/config.toml.
     hybrid: Option<bool>,
+    /// Include file nodes in the result set (default false).
     include_files: Option<bool>,
 }
 
@@ -371,8 +397,11 @@ pub(crate) enum ChangeSourceWithoutFilesKindSchema {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ChangeSourceWithFilesArgsSchema {
+    /// Change source kind: files, base, staged, or working_tree.
     kind: ChangeSourceWithFilesKindSchema,
+    /// Explicit repo-relative files when kind='files'.
     files: Option<Vec<String>>,
+    /// Base git ref when kind='base' (e.g. origin/main).
     base: Option<String>,
 }
 
@@ -380,7 +409,9 @@ pub(crate) struct ChangeSourceWithFilesArgsSchema {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ChangeSourceWithoutFilesArgsSchema {
+    /// Change source kind: base, staged, or working_tree.
     kind: ChangeSourceWithoutFilesKindSchema,
+    /// Base git ref when kind='base' (e.g. origin/main).
     base: Option<String>,
 }
 
@@ -486,9 +517,13 @@ pub(crate) enum GetContextTargetKindSchema {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GetContextTargetArgsSchema {
+    /// Target kind: query, file, or files.
     kind: GetContextTargetKindSchema,
+    /// Query grammar: identifier, qualified name, 'who calls <symbol>', 'what breaks <symbol>', or 'tests for <symbol>'.
     query: Option<String>,
+    /// Single repo-relative file path when kind='file'.
     file: Option<String>,
+    /// Repo-relative file paths when kind='files'.
     files: Option<Vec<String>>,
 }
 
@@ -686,7 +721,9 @@ pub(crate) enum SingleRepoScopeKindSchema {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SingleRepoScopeArgsSchema {
+    /// Repo scope kind: current or repo_id. Multi-repo scopes are rejected.
     kind: SingleRepoScopeKindSchema,
+    /// Required when kind='repo_id'. Must be registered and enabled.
     repo_id: Option<String>,
 }
 

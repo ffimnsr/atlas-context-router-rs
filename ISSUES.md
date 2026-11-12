@@ -2075,22 +2075,22 @@ Rules:
 
 Implementation structure:
 
-- [ ] extend `RetrievalMetrics` in `packages/atlas-search/src/eval.rs` with `l0_tokens`, `l1_tokens`, `l2_tokens`, `scope_candidate_count`, `unscoped_candidate_count`, `aux_recall_at_k`, `primary_recall_at_k`, and `rounds_used`
-- [ ] add `token_efficiency()` returning L0/L1/L2 token ratios against the L2 baseline
-- [ ] add `dsq_pruning_ratio()` returning candidate reduction for recursive, non-recursive, and exclusion predicates
-- [ ] add `auxiliary_lift()` returning the recall delta between primary-only and two-path recall
-- [ ] add `escalation_round_reduction()` returning rounds saved by experience edges
-- [ ] extend `packages/atlas-search/benches/retrieval_eval_bench.rs` to emit these metrics as JSON
-- [ ] add a deterministic fixture corpus with fixed code, memory, memoir, and overview rows for all four measurements
-- [ ] set acceptance thresholds: L0 tokens at or below 10% of L2, DSQ candidate reduction at or above 50% for scoped queries, auxiliary lift above 0 at `k = 10`, and escalation rounds at or below 1
-- [ ] store baseline JSON under `packages/atlas-search/benches/baselines/` and fail the bench gate on a regression beyond 10%
-- [ ] document methodology in `wiki/retrieval-evaluation.md`
-- [ ] add a CI job that runs the RAG eval bench and uploads the JSON artifact without gating merge
-- [ ] define release gate `RAG Adaptation Complete`
+- [x] extend `RetrievalMetrics` in `packages/atlas-search/src/eval.rs` with `l0_tokens`, `l1_tokens`, `l2_tokens`, `scope_candidate_count`, `unscoped_candidate_count`, `aux_recall_at_k`, `primary_recall_at_k`, and `rounds_used`
+- [x] add `token_efficiency()` returning L0/L1/L2 token ratios against the L2 baseline
+- [x] add `dsq_pruning_ratio()` returning candidate reduction for recursive, non-recursive, and exclusion predicates
+- [x] add `auxiliary_lift()` returning the recall delta between primary-only and two-path recall
+- [x] add `escalation_round_reduction()` returning rounds saved by experience edges
+- [x] extend `packages/atlas-search/benches/retrieval_eval_bench.rs` to emit these metrics as JSON
+- [x] add a deterministic fixture corpus with fixed code, memory, memoir, and overview rows for all four measurements
+- [x] set acceptance thresholds: L0 tokens at or below 10% of L2, DSQ candidate reduction at or above 50% for scoped queries, auxiliary lift above 0 at `k = 10`, and escalation rounds at or below 1
+- [x] store baseline JSON under `packages/atlas-search/benches/baselines/` and fail the bench gate on a regression beyond 10%
+- [x] document methodology in `wiki/retrieval-evaluation.md`
+- [x] add a CI job that runs the RAG eval bench and uploads the JSON artifact without gating merge
+- [x] define release gate `RAG Adaptation Complete`
 
 ##### VQ1 completion criteria
 
-- [ ] all four measurement families emit JSON
-- [ ] the fixture corpus produces identical results across two consecutive runs
-- [ ] baseline comparison is stable across two consecutive runs
-- [ ] `wiki/retrieval-evaluation.md` documents the methodology and thresholds
+- [x] all four measurement families emit JSON
+- [x] the fixture corpus produces identical results across two consecutive runs
+- [x] baseline comparison is stable across two consecutive runs
+- [x] `wiki/retrieval-evaluation.md` documents the methodology and thresholds

@@ -233,6 +233,7 @@ fn tool_list_markdown_documents_result_contract_inventory() {
     assert!(markdown.contains("`stable-object`"));
     assert!(markdown.contains("`text-only`"));
     assert!(markdown.contains("structuredContent` is source of truth"));
+    assert!(markdown.contains("atlas:usageGuidance"));
     assert!(
         !markdown
             .contains("| `query_graph` | Query Graph | object; required fields: 0 | `text-only` |")
@@ -722,6 +723,168 @@ fn typed_session_memory_schemas_keep_enum_values_stable() {
         &memory_recall,
         "/properties/scope",
         &["project", "session", "frontend", "global"],
+    );
+}
+
+#[test]
+fn every_tool_annotation_declares_all_mcp_hints() {
+    for tool in tool_descriptors() {
+        let annotations = tool
+            .annotations
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} missing annotations", tool.name));
+        assert!(
+            annotations.read_only_hint.is_some(),
+            "{} missing readOnlyHint",
+            tool.name
+        );
+        assert!(
+            annotations.destructive_hint.is_some(),
+            "{} missing destructiveHint",
+            tool.name
+        );
+        assert!(
+            annotations.idempotent_hint.is_some(),
+            "{} missing idempotentHint",
+            tool.name
+        );
+        assert!(
+            annotations.open_world_hint.is_some(),
+            "{} missing openWorldHint",
+            tool.name
+        );
+    }
+}
+
+#[test]
+fn write_tools_are_not_marked_read_only() {
+    let descriptors = tool_descriptors();
+    for name in [
+        "build_graph",
+        "update_graph",
+        "postprocess_graph",
+        "compact_session",
+        "record_session_event",
+        "wake_up",
+        "purge_saved_context",
+        "save_context_artifact",
+        "memory_store",
+        "feedback_record",
+        "memoir_create",
+        "memoir_add_concept",
+        "memoir_link",
+        "overview_ingest",
+        "overview_refresh_plan",
+    ] {
+        let tool = descriptors
+            .iter()
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("missing write tool {name}"));
+        let read_only = tool
+            .annotations
+            .as_ref()
+            .and_then(|annotations| annotations.read_only_hint);
+        assert_eq!(read_only, Some(false), "{name} must be state-changing");
+    }
+
+    for name in ["purge_saved_context", "compact_session"] {
+        let tool = descriptors
+            .iter()
+            .find(|tool| tool.name == name)
+            .expect("destructive tool");
+        let destructive = tool
+            .annotations
+            .as_ref()
+            .and_then(|annotations| annotations.destructive_hint);
+        assert_eq!(destructive, Some(true), "{name} must be destructive");
+    }
+}
+
+#[test]
+fn every_tool_exposes_usage_guidance_metadata() {
+    for tool in tool_descriptors() {
+        let guidance = tool
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.get("atlas:usageGuidance"))
+            .and_then(serde_json::Value::as_array)
+            .unwrap_or_else(|| panic!("{} missing atlas:usageGuidance", tool.name));
+        assert!(
+            !guidance.is_empty(),
+            "{} atlas:usageGuidance must not be empty",
+            tool.name
+        );
+        assert!(
+            guidance
+                .iter()
+                .all(|item| item.as_str().is_some_and(|text| !text.trim().is_empty())),
+            "{} atlas:usageGuidance entries must be non-empty strings",
+            tool.name
+        );
+    }
+}
+
+fn collect_undescribed_properties(
+    tool_name: &str,
+    path: &str,
+    root: &serde_json::Value,
+    schema: &serde_json::Value,
+    depth: usize,
+    failures: &mut Vec<String>,
+) {
+    if depth > 8 {
+        return;
+    }
+    let resolved = resolve_local_schema(root, schema);
+    if let Some(properties) = resolved
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+    {
+        for (name, property) in properties {
+            let property_resolved = resolve_local_schema(root, property);
+            let description = property
+                .get("description")
+                .or_else(|| property_resolved.get("description"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            if description.trim().is_empty() {
+                failures.push(format!(
+                    "{tool_name} {path}.{name} needs a property description"
+                ));
+            }
+            collect_undescribed_properties(
+                tool_name,
+                &format!("{path}.{name}"),
+                root,
+                property,
+                depth + 1,
+                failures,
+            );
+        }
+    }
+    if let Some(items) = resolved.get("items") {
+        collect_undescribed_properties(
+            tool_name,
+            &format!("{path}[]"),
+            root,
+            items,
+            depth + 1,
+            failures,
+        );
+    }
+}
+
+#[test]
+fn every_tool_input_property_has_description_guidance() {
+    let mut failures = Vec::new();
+    for tool in tool_descriptors() {
+        let schema = serde_json::Value::Object((*tool.input_schema).clone());
+        collect_undescribed_properties(&tool.name, "$", &schema, &schema, 0, &mut failures);
+    }
+    assert!(
+        failures.is_empty(),
+        "input properties missing guidance:\n{}",
+        failures.join("\n")
     );
 }
 

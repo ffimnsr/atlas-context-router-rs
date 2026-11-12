@@ -20,7 +20,7 @@ use std::collections::HashSet;
 
 use atlas_core::{Result, SearchQuery};
 use atlas_store_sqlite::Store;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::execute_query_with_embedding;
 
@@ -165,6 +165,90 @@ pub struct RetrievalMetrics {
     pub repeated_result_count: usize,
     /// Number of labeled cases evaluated.
     pub case_count: usize,
+    /// Approximation of the tokens emitted by the L0 overview view for the
+    /// same subject set (VQ1).
+    pub l0_tokens: usize,
+    /// Approximation of the tokens emitted by the L1 overview view.
+    pub l1_tokens: usize,
+    /// Approximation of the tokens emitted by the L2 overview view.
+    pub l2_tokens: usize,
+    /// Vector-candidate count after DSQ scope pre-filtering (VQ1).
+    pub scope_candidate_count: usize,
+    /// Vector-candidate count for the equivalent unscoped query.
+    pub unscoped_candidate_count: usize,
+    /// Recall@k of the two-path (primary + auxiliary) memory recall.
+    pub aux_recall_at_k: f64,
+    /// Recall@k of the primary-only memory recall path.
+    pub primary_recall_at_k: f64,
+    /// Context escalation rounds actually used for the measured case set.
+    pub rounds_used: usize,
+    /// Escalation rounds that would be used without experience edges.
+    pub rounds_without_experience: usize,
+}
+
+impl RetrievalMetrics {
+    /// L0/L1/L2 token ratios against the L2 baseline.
+    ///
+    /// `l2_ratio` is always `1.0`; the ratios are meaningless when no overview
+    /// rows were measured, in which case every ratio collapses to `0.0`.
+    pub fn token_efficiency(&self) -> TokenEfficiency {
+        TokenEfficiency::from_counts(self.l0_tokens, self.l1_tokens, self.l2_tokens)
+    }
+
+    /// Fraction of unscoped vector candidates removed by DSQ pre-filtering.
+    ///
+    /// Returns `0.0` when no unscoped candidate baseline was recorded.
+    pub fn dsq_pruning_ratio(&self) -> f64 {
+        if self.unscoped_candidate_count == 0 {
+            return 0.0;
+        }
+        let retained = self.scope_candidate_count as f64 / self.unscoped_candidate_count as f64;
+        (1.0 - retained).clamp(0.0, 1.0)
+    }
+
+    /// Recall delta between primary-only and two-path memory recall.
+    pub fn auxiliary_lift(&self) -> f64 {
+        self.aux_recall_at_k - self.primary_recall_at_k
+    }
+
+    /// Escalation rounds saved by activating experience edges.
+    pub fn escalation_round_reduction(&self) -> usize {
+        self.rounds_without_experience
+            .saturating_sub(self.rounds_used)
+    }
+}
+
+/// Token ratios of the progressive-disclosure levels against the L2 baseline.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TokenEfficiency {
+    /// L0 tokens divided by L2 tokens.
+    pub l0_ratio: f64,
+    /// L1 tokens divided by L2 tokens.
+    pub l1_ratio: f64,
+    /// Always `1.0` when L2 tokens were measured.
+    pub l2_ratio: f64,
+}
+
+impl TokenEfficiency {
+    /// Derive L0/L1/L2 ratios from absolute token counts.
+    ///
+    /// Returns all zeros when `l2_tokens` is zero so callers never divide by
+    /// an empty baseline.
+    pub fn from_counts(l0_tokens: usize, l1_tokens: usize, l2_tokens: usize) -> Self {
+        if l2_tokens == 0 {
+            return Self {
+                l0_ratio: 0.0,
+                l1_ratio: 0.0,
+                l2_ratio: 0.0,
+            };
+        }
+        let baseline = l2_tokens as f64;
+        Self {
+            l0_ratio: l0_tokens as f64 / baseline,
+            l1_ratio: l1_tokens as f64 / baseline,
+            l2_ratio: 1.0,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -381,9 +465,10 @@ pub fn evaluate_with_embedding(
     }
 
     let n = cases.len().max(1) as f64;
+    let recall = sum_recall / n;
     Ok(RetrievalMetrics {
         mode,
-        recall_at_k: sum_recall / n,
+        recall_at_k: recall,
         recall_k,
         mrr: sum_rr / n,
         exact_hit_rate: hit_count as f64 / n,
@@ -394,6 +479,17 @@ pub fn evaluate_with_embedding(
         context_noise: sum_noise / n,
         repeated_result_count,
         case_count: cases.len(),
+        // Graph search measures no overview levels, scope candidates, or memory
+        // paths; the RAG corpus populates these through `rag_eval`.
+        l0_tokens: 0,
+        l1_tokens: 0,
+        l2_tokens: 0,
+        scope_candidate_count: 0,
+        unscoped_candidate_count: 0,
+        primary_recall_at_k: recall,
+        aux_recall_at_k: recall,
+        rounds_used: 1,
+        rounds_without_experience: 1,
     })
 }
 
@@ -626,6 +722,57 @@ mod tests {
         assert!(hybrid_passes_acceptance(&hybrid, &baseline));
     }
 
+    #[test]
+    fn token_efficiency_uses_l2_baseline() {
+        let mut metrics = make_metrics(RetrievalMode::LexicalOnly, 1.0, 1.0, 1.0, 10.0);
+        metrics.l0_tokens = 20;
+        metrics.l1_tokens = 100;
+        metrics.l2_tokens = 200;
+        let efficiency = metrics.token_efficiency();
+        assert!((efficiency.l0_ratio - 0.10).abs() < f64::EPSILON);
+        assert!((efficiency.l1_ratio - 0.50).abs() < f64::EPSILON);
+        assert!((efficiency.l2_ratio - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn token_efficiency_without_overviews_is_zero() {
+        let metrics = make_metrics(RetrievalMode::LexicalOnly, 1.0, 1.0, 1.0, 10.0);
+        let efficiency = metrics.token_efficiency();
+        assert_eq!(efficiency.l0_ratio, 0.0);
+        assert_eq!(efficiency.l1_ratio, 0.0);
+        assert_eq!(efficiency.l2_ratio, 0.0);
+    }
+
+    #[test]
+    fn dsq_pruning_ratio_reports_removed_candidates() {
+        let mut metrics = make_metrics(RetrievalMode::LexicalOnly, 1.0, 1.0, 1.0, 10.0);
+        metrics.scope_candidate_count = 10;
+        metrics.unscoped_candidate_count = 100;
+        assert!((metrics.dsq_pruning_ratio() - 0.9).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn dsq_pruning_ratio_without_candidates_is_zero() {
+        let metrics = make_metrics(RetrievalMode::LexicalOnly, 1.0, 1.0, 1.0, 10.0);
+        assert_eq!(metrics.dsq_pruning_ratio(), 0.0);
+    }
+
+    #[test]
+    fn auxiliary_lift_is_two_path_minus_primary() {
+        let mut metrics = make_metrics(RetrievalMode::LexicalOnly, 1.0, 1.0, 1.0, 10.0);
+        metrics.primary_recall_at_k = 0.75;
+        metrics.aux_recall_at_k = 1.0;
+        assert!((metrics.auxiliary_lift() - 0.25).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn escalation_round_reduction_is_baseline_minus_used() {
+        let mut metrics = make_metrics(RetrievalMode::LexicalOnly, 1.0, 1.0, 1.0, 10.0);
+        metrics.rounds_without_experience = 2;
+        metrics.rounds_used = 1;
+        assert_eq!(metrics.escalation_round_reduction(), 1);
+    }
+
     fn make_metrics(
         mode: RetrievalMode,
         recall: f64,
@@ -646,6 +793,15 @@ mod tests {
             context_noise: 0.2,
             repeated_result_count: 0,
             case_count: 10,
+            l0_tokens: 0,
+            l1_tokens: 0,
+            l2_tokens: 0,
+            scope_candidate_count: 0,
+            unscoped_candidate_count: 0,
+            primary_recall_at_k: recall,
+            aux_recall_at_k: recall,
+            rounds_used: 1,
+            rounds_without_experience: 1,
         }
     }
 }
