@@ -105,6 +105,169 @@ Implementation structure:
 
 ---
 
+### SQLite Index Audit Patch
+
+Static audit of every SQL statement in `atlas-store-sqlite`, `atlas-contentstore`, `atlas-session`, `atlas-db-utils`, and engine doctor paths. Plans were checked with `EXPLAIN QUERY PLAN` against live `.atlas/worldtree.db`, `.atlas/context.db`, and `.atlas/session.db`. Unused-index findings are static (no query telemetry); re-check with plans before dropping indexes used by planned history queries.
+
+Observed full scans on hot paths: `nodes.name`, `nodes.file_path LIKE` (case-insensitive LIKE cannot use BINARY indexes), `files.path` (unscoped lookup), `overview_records.supersedes_id` correlated `NOT EXISTS`, `overview_records.source_id`, `feedback_records` ordering, `session_meta.updated_at`, `memoir_relations.repo_root`, and content `sources.id LIKE` / `created_at` ordering.
+
+#### P0 — missing indexes for hot lookups
+
+- [ ] add graph migration `packages/atlas-store-sqlite/src/migrations/021_graph_index_hot_paths.sql` registering `idx_nodes_name_order ON nodes(name, file_path, line_start)` to replace the full scan in `nodes_by_name` (`packages/atlas-store-sqlite/src/store/context.rs`)
+- [ ] add `idx_nodes_name_nocase ON nodes(name COLLATE NOCASE)` in migration 021 to index `nodes_by_name_prefix` `name LIKE ? ESCAPE '\'`; keep it separate from the BINARY name index because default SQLite LIKE is case-insensitive
+- [ ] add session migration `packages/atlas-session/src/migrations/016_session_index_hot_paths.sql` creating `idx_overview_records_supersedes ON overview_records(supersedes_id) WHERE supersedes_id IS NOT NULL`
+- [ ] replace `ACTIVE_PREDICATE` correlated scan cost in `packages/atlas-session/src/store/overview/store.rs` by confirming the new `supersedes_id` index removes `SCAN newer` from the plan
+- [ ] add `idx_overview_records_source_id ON overview_records(source_id) WHERE source_id IS NOT NULL` in session migration 016 for the repair query at `packages/atlas-session/src/store/overview/store.rs`
+
+#### P1 — missing indexes for ordering, filters, and LIKE prefixes
+
+- [ ] add `idx_nodes_file_path_order ON nodes(file_path, line_start, qualified_name)` and drop `idx_nodes_file_path` in graph migration 021 to remove temp sorts from `list_nodes` and `nodes_by_file`
+- [ ] add `idx_nodes_repo_file_path_order ON nodes(source_repo_id, file_path, line_start, qualified_name)` and drop `idx_nodes_source_repo_file_path` in graph migration 021 for repo-scoped file/node reads
+- [ ] add `idx_nodes_file_path_nocase ON nodes(file_path COLLATE NOCASE)` and `idx_nodes_repo_file_path_nocase ON nodes(source_repo_id, file_path COLLATE NOCASE)` in graph migration 021 for `query_graph` subpath/exclusion `LIKE` filters in `packages/atlas-store-sqlite/src/store/search.rs`
+- [ ] add `idx_files_path ON files(path)` in graph migration 021 for unscoped `SELECT hash FROM files WHERE path = ?1` and `single_source_repo_id_for_value` lookups in `packages/atlas-store-sqlite/src/store/mutation.rs`
+- [ ] add `idx_files_repo_path_nocase ON files(source_repo_id, path COLLATE NOCASE)` in graph migration 021 for `file_paths_with_prefix_for_repo` `path LIKE ?2`
+- [ ] add `idx_files_indexed_at ON files(indexed_at DESC)` in graph migration 021 for `recently_indexed_files` and `MAX(indexed_at)` queries
+- [ ] add `idx_edges_target_kind ON edges(target_qualified, kind)` and drop `idx_edges_target` in graph migration 021 for dead-code anti-joins and caller lookups
+- [ ] add `idx_commits_repo_author_time ON commits(repo_id, author_time DESC, commit_sha DESC)` and drop `idx_commits_repo_id` in graph migration 021 for `list_commits` and history status ordering
+- [ ] add `idx_session_meta_updated_at ON session_meta(updated_at DESC)` in session migration 016 for `list_sessions` and `cleanup_stale_sessions`
+- [ ] add `idx_feedback_repo_created ON feedback_records(repo_root, created_at DESC, id DESC)` in session migration 016 for `recent_feedback` and feedback search ordering
+- [ ] add `idx_experience_edges_repo_freshness ON experience_edges(repo_root, freshness)` and `idx_experience_edges_repo_validated ON experience_edges(repo_root, last_validated_at)` in session migration 016 for activation and pruning
+- [ ] add `idx_memoir_relations_repo_source ON memoir_relations(repo_root, source_concept_id)` and `idx_memoir_relations_repo_target ON memoir_relations(repo_root, target_concept_id)` in session migration 016 for the repo-scoped relation walk in `packages/atlas-session/src/store/memory_recall_aux.rs`
+- [ ] add content migration `packages/atlas-contentstore/src/migrations/011_content_index_hot_paths.sql` creating `idx_sources_created_at ON sources(created_at)` for oldest-source lookup, cleanup, and `ORDER BY created_at DESC`
+- [ ] add `idx_sources_session_created ON sources(session_id, created_at DESC)` in content migration 011 for session-scoped source listing
+- [ ] add `idx_sources_id_nocase ON sources(id COLLATE NOCASE)` in content migration 011 for `recent_source_ids_by_prefix` `id LIKE ?`
+
+#### P2 — lower-impact missing indexes
+
+- [ ] add `idx_edges_repo_confidence_tier ON edges(source_repo_id, confidence_tier)` in graph migration 021 for `count_edges_with_confidence_tier` and `edges_with_confidence_tier`
+- [ ] add `idx_edges_order ON edges(source_qualified, target_qualified, kind, file_path)` and drop `idx_edges_source` in graph migration 021 for `list_all_edges` ordered export
+- [ ] add `idx_nodes_file_parent ON nodes(file_path, parent_name)` in graph migration 021 for `containment_siblings`
+- [ ] add `idx_memories_repo_active ON memories(repo_root) WHERE superseded_by IS NULL` in session migration 016 for recall/embedding coverage counts
+- [ ] add `idx_memories_repo_updated ON memories(repo_root, updated_at DESC)` in session migration 016 for `list_memories` ordering
+- [ ] add `idx_memories_repo_source ON memories(repo_root, source_id)` in session migration 016 for source-id recall joins
+- [ ] replace `idx_durable_tasks_updated_task` with `idx_durable_tasks_updated_created_task ON durable_tasks(updated_at DESC, created_at DESC, task_id DESC)` in session migration 016 to match cursor pagination
+- [ ] add `idx_session_events_event_type ON session_events(event_type, session_id)` in session migration 016 for global-memory focus lookups that filter `event_type` without a session id
+- [ ] add `idx_retrieval_chunks_repo_embedded ON retrieval_chunks(source_repo_id) WHERE embedding IS NOT NULL` in graph migration 021 for repo-scoped `embedded_count`
+
+#### Remove duplicate indexes
+
+- [ ] drop graph `idx_files_source_repo_path`; it duplicates the `files(source_repo_id, path)` primary-key autoindex
+- [ ] drop graph `idx_repos_root_path`; it duplicates the `repos(root_path)` unique autoindex
+- [ ] drop graph `idx_graph_snapshots_repo_id`; it is a prefix of the `graph_snapshots(repo_id, commit_sha)` unique autoindex
+- [ ] drop graph `idx_historical_nodes_file_hash` and `idx_historical_edges_file_hash`; both are prefixes of their table primary keys
+- [ ] drop graph `idx_snapshot_files_snapshot_id`, `idx_snapshot_edges_snapshot_id`, `idx_snapshot_nodes_snapshot_id`, and `idx_snapshot_membership_blobs_snapshot_id`; all are prefixes of their table primary keys
+- [ ] drop graph `idx_node_history_repo_id` and `idx_edge_history_repo_id`; both are prefixes of their table primary keys
+- [ ] drop session `idx_memoir_concepts_graph`; it duplicates the `memoir_concepts(graph_id, name)` unique autoindex
+- [ ] drop session `idx_memoir_graphs_repo_scope`; it is a prefix of the `memoir_graphs(repo_root, scope, name)` unique autoindex
+- [ ] drop session `idx_experience_edges_source`; it is a prefix of the `experience_edges(repo_root, source_uri, target_uri, query_text)` unique autoindex
+- [ ] drop session `idx_overview_records_repo`; it is a prefix of `idx_overview_records_subject` and every other repo-leading overview index
+- [ ] drop content `idx_chunks_source_id`; it is a prefix of the `chunks(source_id, chunk_index)` unique autoindex
+- [ ] drop content `idx_sources_session`; it is a prefix of `idx_sources_session_agent`
+
+#### Remove indexes with no current query usage
+
+- [ ] drop graph `idx_commits_indexed_ref`, `idx_commits_author_time`, and `idx_commits_committer_time`; no query filters or orders by them alone after `idx_commits_repo_author_time` lands
+- [ ] drop graph `idx_graph_snapshots_commit_sha`; every snapshot lookup filters `repo_id` too and uses the unique `(repo_id, commit_sha)` index
+- [ ] drop graph `idx_snapshot_membership_blobs_file_hash`, `idx_snapshot_nodes_file_hash`, and `idx_snapshot_edges_file_hash` after confirming no history query will filter snapshot membership by `file_hash`
+- [ ] drop graph `idx_node_history_qualified_name`, `idx_node_history_introduction_commit`, `idx_node_history_removal_commit`, `idx_edge_history_source_qn`, `idx_edge_history_target_qn`, `idx_edge_history_introduction_commit`, and `idx_edge_history_removal_commit` unless planned history query work will use them
+- [ ] drop graph `idx_flows_kind`, `idx_communities_algorithm`, and `idx_communities_parent`; taxonomy queries fetch by id/name or list all rows
+- [ ] drop graph `idx_postprocess_state_state` and `idx_postprocess_state_updated_at_ms`; postprocess state is only read by `repo_root`
+- [ ] drop graph `idx_edges_kind` unless an explicit edge-kind-only query is added
+- [ ] drop session `idx_overview_records_commit`, `idx_overview_records_file`, `idx_overview_records_qname`, `idx_overview_records_freshness`, `idx_overview_records_subject_kind`, and `idx_overview_packets_repo`; overview filtering currently happens in Rust after `load_records`, and packets are read by `packet_id`
+- [ ] drop session `idx_decision_memory_session_updated`; every decision query includes `repo_root`
+- [ ] drop session `idx_memories_repo_accessed`; no query filters or orders by `last_accessed_at`
+- [ ] drop session `idx_memory_supersessions_new`; supersession rows are only inserted
+- [ ] drop content `idx_chunks_chunk_id`; every chunk-id lookup is paired with `source_id` and uses the `(source_id, chunk_id)` unique index
+- [ ] drop content `idx_sources_repo_id`; no query filters `sources.repo_id`
+
+#### Planner and schema maintenance
+
+- [ ] add `ANALYZE` after a full graph build in `packages/atlas-engine/src/build.rs` and after postprocess in `packages/atlas-engine/src/update.rs` so the planner has `sqlite_stat1` on large graphs
+- [ ] run `PRAGMA optimize` after `ANALYZE` in the same build/update lifecycle path
+- [ ] regenerate `packages/atlas-store-sqlite/src/migrations/schema.sql` with `packages/atlas-store-sqlite/examples/dump_schema.rs` after graph migration 021
+- [ ] add `021_graph_index_hot_paths` to the migration registry in `packages/atlas-store-sqlite/src/migrations.rs`
+- [ ] add `016_session_index_hot_paths` to the session migration registry
+- [ ] add `011_content_index_hot_paths` to the content-store migration registry
+
+#### Validation
+
+- [ ] add a graph-store test that asserts `EXPLAIN QUERY PLAN SELECT ... FROM nodes WHERE name = ?` uses `idx_nodes_name_order`
+- [ ] add a graph-store test that asserts prefix `LIKE` uses `idx_nodes_name_nocase` and subpath `LIKE` uses `idx_nodes_file_path_nocase`
+- [ ] add a graph-store test that asserts `SELECT hash FROM files WHERE path = ?1` uses `idx_files_path`
+- [ ] add a session-store test that asserts the overview `ACTIVE_PREDICATE` plan contains no `SCAN newer`
+- [ ] add migration tests that assert redundant index names are absent from `sqlite_master` after upgrade
+- [ ] run `cargo test --quiet -p atlas-store-sqlite store::tests` after graph migration changes
+- [ ] run `cargo test --quiet -p atlas-session store::tests` after session migration changes
+- [ ] run `cargo test --quiet -p atlas-contentstore` after content migration changes
+- [ ] run `cargo fmt --all` and `cargo clippy --workspace --all-targets --all-features -- -D warnings` after the migration batch
+
+---
+
+### Atlas Tokenizer Patch
+
+Full design: `docs/PLAN-TOKENIZER.md`. Goal: standalone `atlas-tokenizer` crate porting OpenAI `tiktoken`, opt-in provider first, default only after stability gates.
+
+#### Phase 0 — Decisions
+
+- [ ] record vendored-asset decision (in-repo vs Git LFS) in `docs/PLAN-TOKENIZER.md`
+- [ ] record default encodings and Phase 7 default encoding
+- [ ] record `provider = "tokenizers"` removal timeline
+- [ ] pin upstream tiktoken commit/tag for parity
+
+#### Phase 1 — Crate Scaffold
+
+- [ ] add `packages/atlas-tokenizer` with `Cargo.toml`, `README.md`, and `LICENSE-TIKTOKEN`
+- [ ] add `atlas-tokenizer` to workspace members and `[workspace.dependencies]`
+- [ ] add `#![forbid(unsafe_code)]` and `#![deny(missing_docs)]` to `packages/atlas-tokenizer/src/lib.rs`
+- [ ] add `cargo check -p atlas-tokenizer --no-default-features` gate
+
+#### Phase 2 — BPE Core
+
+- [ ] add `packages/atlas-tokenizer/src/rank_file.rs` parser with malformed-input and size-cap tests
+- [ ] add `packages/atlas-tokenizer/src/bpe.rs` byte-pair encode/decode with merge edge-case tests
+- [ ] add property test asserting `decode_bytes(encode_ordinary(x)) == x.as_bytes()`
+
+#### Phase 3 — Encodings and Model Map
+
+- [ ] add encoding constants with exact upstream regex patterns and special tokens
+- [ ] add `model.rs` longest-prefix model-to-encoding map
+- [ ] add `registry.rs` explicit registry plus `OnceLock` default
+- [ ] add `special_tokens.rs` and `model_map.rs` tests
+
+#### Phase 4 — Assets
+
+- [ ] add `scripts/fetch-tiktoken-assets.sh` with sha256 manifest generation
+- [ ] vendor default encoding `.tiktoken` assets and `assets/manifest.json`
+- [ ] add `asset_checksum.rs` verifying embedded assets against the manifest
+- [ ] verify default build and tests run with networking disabled
+
+#### Phase 5 — Parity and Bench
+
+- [ ] add maintainer golden generator for official Python `tiktoken` at the pinned commit
+- [ ] commit golden JSONL for all supported encodings
+- [ ] add `tests/parity.rs` and reach zero mismatches for `cl100k_base` and `o200k_base`
+- [ ] add criterion encode/decode bench and record baselines
+- [ ] add tokenizer fuzz target under workspace `fuzz/`
+
+#### Phase 6 — Integration
+
+- [ ] add `Tiktoken` variants to `atlas_token_count::TokenCounter` and `TokenCountMethod`
+- [ ] add `provider = "tiktoken"` to `ContextTokenizerConfig` with encoding/model/file validation
+- [ ] build tiktoken counter in `Config::token_counter` with existing fallback semantics
+- [ ] add optional `encoding` field to token accounting in `atlas-review/src/context/payload.rs`
+- [ ] update config template, runtime config JSON, README, and `SHIPPED.md`
+- [ ] add CLI and MCP tokenizer quality-gate cases for `provider = "tiktoken"`
+
+#### Phase 7 — Default Flip
+
+- [ ] switch `ContextTokenizerConfig::default()` to `tiktoken` plus the chosen encoding
+- [ ] keep heuristic fallback and verify fallback metadata
+- [ ] remove `provider = "tokenizers"` and the `tokenizers` dependency per Phase 0 decision
+- [ ] remove the `paste` advisory ignore from `deny.toml` after dependency removal
+- [ ] run full workspace tests, clippy, fmt, deny, and bench regression check
+
+---
+
 ## Additional Backlog
 
 - [ ] add CI-visible parser cache hit-ratio metric and fail when cache reuse drops below configured threshold
