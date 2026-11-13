@@ -97,6 +97,7 @@ pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
         | "memoir_add_concept"
         | "memoir_link"
         | "memoir_inspect"
+        | "memoir_delete"
         | "overview_export"
         | "overview_ingest"
         | "overview_search"

@@ -108,4 +108,18 @@ pub enum MemoirCommand {
         #[arg(long)]
         scope: Option<String>,
     },
+
+    /// Delete a memoir graph and all of its concepts and relations.
+    Delete {
+        /// Graph name.
+        graph: String,
+
+        /// Report counts without deleting.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Graph scope: project, session, frontend, or global (default: project).
+        #[arg(long)]
+        scope: Option<String>,
+    },
 }

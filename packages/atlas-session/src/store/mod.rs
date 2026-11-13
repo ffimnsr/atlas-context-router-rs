@@ -24,6 +24,8 @@ mod experience_edges;
 mod feedback;
 mod global_memory;
 mod memoir;
+mod memoir_delete;
+mod memoir_schema;
 mod memory;
 mod memory_consolidate;
 mod memory_embeddings;
@@ -52,6 +54,7 @@ pub use self::memoir::{
     MemoirInspectionEdge, MemoirRelation, MemoirRelationDirection, NewMemoirConcept,
     NewMemoirGraph, NewMemoirRelation, normalize_memoir_relation,
 };
+pub use self::memoir_delete::MemoirDeleteResult;
 pub use self::overview::{
     NewOverviewRecord, OVERVIEW_DESCRIPTION_PREVIEW_MAX_CHARS, OVERVIEW_INLINE_BODY_BUDGET_BYTES,
     OVERVIEW_L0_MAX_CHARS, OVERVIEW_L1_MAX_CHARS, OVERVIEW_L2_MAX_CHARS,

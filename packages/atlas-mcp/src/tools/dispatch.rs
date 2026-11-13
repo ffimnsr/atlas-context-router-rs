@@ -12,8 +12,8 @@ use crate::session_events::tool_record_session_event;
 use crate::session_tools::{
     tool_compact_session, tool_cross_session_search, tool_experience_inspect, tool_feedback_record,
     tool_get_context_stats, tool_get_global_memory, tool_get_session_status,
-    tool_memoir_add_concept, tool_memoir_create, tool_memoir_inspect, tool_memoir_link,
-    tool_memory_ops, tool_memory_recall, tool_memory_store, tool_overview_export,
+    tool_memoir_add_concept, tool_memoir_create, tool_memoir_delete, tool_memoir_inspect,
+    tool_memoir_link, tool_memory_ops, tool_memory_recall, tool_memory_store, tool_overview_export,
     tool_overview_ingest, tool_overview_refresh_plan, tool_overview_search, tool_overview_show,
     tool_purge_saved_context, tool_read_saved_context, tool_resume_session,
     tool_save_context_artifact, tool_search_decisions, tool_search_saved_context,
@@ -179,6 +179,7 @@ fn normalized_contract_tool(name: &str) -> bool {
             | "memoir_add_concept"
             | "memoir_link"
             | "memoir_inspect"
+            | "memoir_delete"
             | "overview_export"
             | "overview_ingest"
             | "overview_search"
@@ -473,6 +474,7 @@ pub(crate) const KNOWN_TOOL_NAMES: &[&str] = &[
     "memoir_add_concept",
     "memoir_link",
     "memoir_inspect",
+    "memoir_delete",
     "overview_export",
     "overview_ingest",
     "overview_search",
@@ -688,6 +690,7 @@ fn call_inner(
         "memoir_add_concept" => tool_memoir_add_concept(args, repo_root, db_path, output_format),
         "memoir_link" => tool_memoir_link(args, repo_root, db_path, output_format),
         "memoir_inspect" => tool_memoir_inspect(args, repo_root, db_path, output_format),
+        "memoir_delete" => tool_memoir_delete(args, repo_root, db_path, output_format),
         "overview_export" => tool_overview_export(args, repo_root, db_path, output_format),
         "overview_ingest" => tool_overview_ingest(args, repo_root, db_path, output_format),
         "overview_search" => tool_overview_search(args, repo_root, db_path, output_format),

@@ -7,16 +7,145 @@
 //! the same readiness block.
 
 use serde::Serialize;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime};
+use time::OffsetDateTime;
+use time::PrimitiveDateTime;
+use time::format_description::FormatItem;
+use time::format_description::well_known::Rfc3339;
+use time::macros::format_description;
 
 use atlas_contentstore::{ContentStore, IndexState};
 use atlas_core::{
-    GraphReadiness, GraphReadinessInput, GraphStoreHealthClass,
+    AtlasError, GraphReadiness, GraphReadinessInput, GraphStoreHealthClass,
     model::{ChangeType, ChangedFile},
 };
 use atlas_parser::ParserRegistry;
 use atlas_repo::{DiffTarget, changed_files, find_repo_root, hash_file};
 use atlas_store_sqlite::{GraphBuildState, Store};
 use camino::Utf8Path;
+
+/// How long a cheap health probe result stays valid for one DB fingerprint.
+///
+/// The readiness gate runs on every graph-backed MCP call. A full
+/// `PRAGMA integrity_check` costs seconds on large graphs, so the cheap probe
+/// is cached until the DB file changes or this window elapses.
+const HEALTH_PROBE_TTL: Duration = Duration::from_secs(15);
+const HEALTH_PROBE_PERSIST_TTL: Duration = Duration::from_secs(300);
+const HEALTH_PROBE_CACHE_LIMIT: usize = 64;
+const BUILD_TIMESTAMP_FORMAT: &[FormatItem<'static>] =
+    format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
+/// Filesystem timestamps can trail the recorded build timestamp by a moment
+/// because the build record commits after the graph write. Treat that window
+/// as "unchanged since build".
+const BUILD_MTIME_TOLERANCE: Duration = Duration::from_secs(5);
+
+#[derive(Clone, PartialEq, Eq)]
+struct HealthProbeFingerprint {
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
+struct HealthProbeCacheEntry {
+    fingerprint: HealthProbeFingerprint,
+    checked_at: Instant,
+    health_class: Option<GraphStoreHealthClass>,
+}
+
+fn health_probe_cache() -> &'static Mutex<HashMap<String, HealthProbeCacheEntry>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, HealthProbeCacheEntry>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn health_probe_fingerprint(db_path: &str) -> HealthProbeFingerprint {
+    match std::fs::metadata(db_path) {
+        Ok(metadata) => HealthProbeFingerprint {
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+        },
+        Err(_) => HealthProbeFingerprint {
+            len: 0,
+            modified: None,
+        },
+    }
+}
+
+/// Probe graph-store health without the full-table integrity scans.
+///
+/// Results are cached per DB path and invalidated when the file length or
+/// modification time changes. `doctor` and `db_check` still call the full
+/// [`Store::integrity_check`] path.
+fn cached_graph_store_health_probe(
+    store: &Store,
+    db_path: &str,
+) -> Result<Option<GraphStoreHealthClass>, AtlasError> {
+    let fingerprint = health_probe_fingerprint(db_path);
+    let now = Instant::now();
+    if let Ok(cache) = health_probe_cache().lock()
+        && let Some(entry) = cache.get(db_path)
+        && entry.fingerprint == fingerprint
+        && now.duration_since(entry.checked_at) < HEALTH_PROBE_TTL
+    {
+        return Ok(entry.health_class);
+    }
+
+    let health_class = store.graph_store_health_probe()?;
+    if let Ok(mut cache) = health_probe_cache().lock() {
+        if cache.len() >= HEALTH_PROBE_CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(
+            db_path.to_owned(),
+            HealthProbeCacheEntry {
+                fingerprint,
+                checked_at: now,
+                health_class,
+            },
+        );
+    }
+    Ok(health_class)
+}
+
+/// Decide whether the cheap health probe is needed at all.
+///
+/// A successful probe is persisted for [`HEALTH_PROBE_PERSIST_TTL`], so short
+/// lived processes (CLI invocations, direct-stdio harnesses) skip the physical
+/// check after the first healthy probe. A successfully built graph is also
+/// trusted until the DB file changes after the recorded build timestamp; that
+/// keeps probing after crashes, interrupted builds, or out-of-band DB writes.
+fn graph_needs_integrity_probe(
+    store: &Store,
+    build_state: Option<&str>,
+    last_built_at: Option<&str>,
+    db_path: &str,
+) -> bool {
+    if build_state != Some("built") {
+        return true;
+    }
+    if let Ok(Some(probed_at)) = store.last_integrity_probe_at()
+        && let Ok(probed_at) = OffsetDateTime::parse(&probed_at, &Rfc3339)
+        && OffsetDateTime::now_utc() - probed_at < HEALTH_PROBE_PERSIST_TTL
+    {
+        return false;
+    }
+    let Some(last_built_at) = last_built_at else {
+        return true;
+    };
+    let built_at = PrimitiveDateTime::parse(last_built_at, &BUILD_TIMESTAMP_FORMAT)
+        .map(PrimitiveDateTime::assume_utc)
+        .or_else(|_| OffsetDateTime::parse(last_built_at, &Rfc3339));
+    let Ok(built_at) = built_at else {
+        return true;
+    };
+    let Ok(metadata) = std::fs::metadata(db_path) else {
+        return true;
+    };
+    let Ok(modified) = metadata.modified() else {
+        return true;
+    };
+    OffsetDateTime::from(modified) > built_at + BUILD_MTIME_TOLERANCE
+}
 
 /// Compact freshness warning attached to graph-backed results when pending
 /// graph-relevant changes overlap the result's files.
@@ -209,7 +338,7 @@ pub fn derive_graph_readiness(store: &Store, repo_root: &str, db_path: &str) -> 
     let db_exists = std::path::Path::new(db_path).exists();
 
     let mut graph_error = None;
-    let (build_state_str, build_last_error, recovery_mode, quarantine_path) =
+    let (build_state_str, build_last_error, build_last_built_at, recovery_mode, quarantine_path) =
         match store.get_build_status(repo_root) {
             Ok(Some(bs)) => {
                 let state = match bs.state {
@@ -221,14 +350,15 @@ pub fn derive_graph_readiness(store: &Store, repo_root: &str, db_path: &str) -> 
                 (
                     Some(state.to_owned()),
                     bs.last_error,
+                    bs.last_built_at,
                     bs.recovery_mode,
                     bs.quarantine_path,
                 )
             }
-            Ok(None) => (None, None, None, None),
+            Ok(None) => (None, None, None, None, None),
             Err(error) => {
                 graph_error = Some(error.to_string());
-                (None, None, None, None)
+                (None, None, None, None, None)
             }
         };
 
@@ -243,7 +373,27 @@ pub fn derive_graph_readiness(store: &Store, repo_root: &str, db_path: &str) -> 
         }
     };
     if graph_error.is_none() {
-        match store.graph_store_health_class() {
+        match store.graph_store_structural_probe() {
+            Ok(Some(GraphStoreHealthClass::LogicalInconsistency)) => {
+                graph_error = Some(
+                    "logical_inconsistency: graph invariant scan found unsafe rows".to_owned(),
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                graph_error = Some(error.to_string());
+            }
+        }
+    }
+    if graph_error.is_none()
+        && graph_needs_integrity_probe(
+            store,
+            build_state_str.as_deref(),
+            build_last_built_at.as_deref(),
+            db_path,
+        )
+    {
+        match cached_graph_store_health_probe(store, db_path) {
             Ok(Some(GraphStoreHealthClass::SchemaMismatch)) => {
                 graph_error = Some(
                     "schema_mismatch: graph store schema does not match current Atlas build"
@@ -260,7 +410,14 @@ pub fn derive_graph_readiness(store: &Store, repo_root: &str, db_path: &str) -> 
                     "logical_inconsistency: graph invariant scan found unsafe rows".to_owned(),
                 );
             }
-            Ok(_) => {}
+            Ok(_) => {
+                // Persist a healthy probe so short-lived processes skip the
+                // physical check for the bounded TTL window.
+                let probed_at = OffsetDateTime::now_utc()
+                    .format(&Rfc3339)
+                    .unwrap_or_default();
+                let _ = store.record_integrity_probe_at(&probed_at);
+            }
             Err(error) => {
                 graph_error = Some(error.to_string());
             }
@@ -325,4 +482,93 @@ pub fn derive_graph_readiness_open_failed(
         last_indexed_at: None,
         retrieval_unavailable: true,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn timestamp(offset: time::Duration) -> String {
+        (OffsetDateTime::now_utc() + offset)
+            .format(&BUILD_TIMESTAMP_FORMAT)
+            .expect("format build timestamp")
+    }
+
+    fn fixture_store(dir: &tempfile::TempDir) -> (Store, String) {
+        let db_path = dir.path().join("worldtree.db");
+        let db_path = db_path.to_string_lossy().into_owned();
+        let store = Store::open(&db_path).expect("open fixture store");
+        (store, db_path)
+    }
+
+    #[test]
+    fn built_graph_skips_probe_when_db_is_older_than_build_stamp() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (store, db_path) = fixture_store(&dir);
+
+        assert!(!graph_needs_integrity_probe(
+            &store,
+            Some("built"),
+            Some(&timestamp(time::Duration::seconds(60))),
+            &db_path,
+        ));
+    }
+
+    #[test]
+    fn built_graph_probes_when_db_changed_after_build_stamp() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (store, db_path) = fixture_store(&dir);
+
+        assert!(graph_needs_integrity_probe(
+            &store,
+            Some("built"),
+            Some(&timestamp(time::Duration::seconds(-60))),
+            &db_path,
+        ));
+    }
+
+    #[test]
+    fn recent_persisted_probe_skips_physical_check() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (store, db_path) = fixture_store(&dir);
+        store
+            .record_integrity_probe_at(
+                &OffsetDateTime::now_utc()
+                    .format(&Rfc3339)
+                    .expect("format probe timestamp"),
+            )
+            .expect("record probe");
+
+        assert!(!graph_needs_integrity_probe(
+            &store,
+            Some("built"),
+            Some(&timestamp(time::Duration::seconds(-3600))),
+            &db_path,
+        ));
+    }
+
+    #[test]
+    fn non_built_or_missing_stamp_always_probes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (store, db_path) = fixture_store(&dir);
+
+        assert!(graph_needs_integrity_probe(
+            &store,
+            Some("degraded"),
+            Some(&timestamp(time::Duration::seconds(60))),
+            &db_path,
+        ));
+        assert!(graph_needs_integrity_probe(
+            &store,
+            Some("built"),
+            None,
+            &db_path,
+        ));
+        assert!(graph_needs_integrity_probe(
+            &store,
+            None,
+            Some(&timestamp(time::Duration::seconds(60))),
+            &db_path,
+        ));
+    }
 }

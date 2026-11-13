@@ -178,6 +178,12 @@ pub fn set_application_id(conn: &Connection, id: i32) -> Result<()> {
 /// migration version that was applied.
 pub fn set_user_version(conn: &Connection, version: i32) -> Result<()> {
     let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+    let current: i32 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(db_err)?;
+    if current == version {
+        return Ok(());
+    }
     let sql = format!("PRAGMA user_version={version}");
     let mut stmt = conn.prepare(&sql).map_err(db_err)?;
     let mut rows = stmt.query([]).map_err(db_err)?;
@@ -331,7 +337,10 @@ fn stamp_provenance(conn: &Connection, db_kind: &str) -> Result<()> {
          ON CONFLICT(singleton_key) DO UPDATE SET
              db_kind = excluded.db_kind,
              last_opened_by = excluded.last_opened_by,
-             last_opened_at = excluded.last_opened_at",
+             last_opened_at = excluded.last_opened_at
+         WHERE atlas_provenance.db_kind <> excluded.db_kind
+            OR atlas_provenance.last_opened_by <> excluded.last_opened_by
+            OR atlas_provenance.last_opened_at < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-60 seconds')",
         params![db_kind, banner],
     )
     .map_err(|e| AtlasError::Db(e.to_string()))?;
@@ -563,7 +572,9 @@ fn insert_metadata_if_absent(conn: &Connection, key: &str, value: &str) -> Resul
 
 fn write_metadata(conn: &Connection, key: &str, value: &str) -> Result<()> {
     conn.execute(
-        "INSERT OR REPLACE INTO metadata(key, value) VALUES (?1, ?2)",
+        "INSERT INTO metadata(key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value
+         WHERE metadata.value <> excluded.value",
         params![key, value],
     )
     .map_err(|e| AtlasError::Db(e.to_string()))?;

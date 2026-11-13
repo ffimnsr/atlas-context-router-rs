@@ -179,3 +179,54 @@ fn memoir_link_rejects_unknown_relations_and_requires_explicit_create_missing() 
     assert_eq!(created["summary"]["created_missing_concepts"], true);
     assert_eq!(created["relation"]["relation_type"], "depends_on");
 }
+
+#[test]
+fn memoir_delete_reports_counts_and_removes_graph() {
+    let (_dir, repo_root, db_path) = setup();
+    let _ = tool_memoir_create(
+        Some(&serde_json::json!({ "name": "Architecture" })),
+        &repo_root,
+        &db_path,
+        OutputFormat::Json,
+    )
+    .unwrap();
+    let _ = tool_memoir_add_concept(
+        Some(&serde_json::json!({
+            "graph": "Architecture",
+            "name": "parser",
+            "description": "source parser"
+        })),
+        &repo_root,
+        &db_path,
+        OutputFormat::Json,
+    )
+    .unwrap();
+
+    let dry_run = json_call(
+        tool_memoir_delete,
+        serde_json::json!({ "graph": "Architecture", "dry_run": true }),
+        &repo_root,
+        &db_path,
+    );
+    assert_eq!(dry_run["summary"]["found"], true);
+    assert_eq!(dry_run["summary"]["deleted"], false);
+    assert_eq!(dry_run["summary"]["concepts_deleted"], 1);
+
+    let deleted = json_call(
+        tool_memoir_delete,
+        serde_json::json!({ "graph": "Architecture" }),
+        &repo_root,
+        &db_path,
+    );
+    assert_eq!(deleted["summary"]["deleted"], true);
+    assert_eq!(deleted["summary"]["concepts_deleted"], 1);
+
+    let missing = json_call(
+        tool_memoir_delete,
+        serde_json::json!({ "graph": "Architecture" }),
+        &repo_root,
+        &db_path,
+    );
+    assert_eq!(missing["summary"]["found"], false);
+    assert_eq!(missing["summary"]["deleted"], false);
+}

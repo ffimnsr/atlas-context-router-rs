@@ -5,6 +5,7 @@ use atlas_core::{
     AtlasError, GraphStoreHealthClass, classify_graph_store_error, graph_health_error_message,
     graph_health_error_suggestions,
 };
+use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, format_description::FormatItem, macros::format_description};
 use tracing::warn;
@@ -12,6 +13,7 @@ use tracing::warn;
 use super::Store;
 
 const STRUCTURAL_SCAN_LIMIT: usize = 100;
+const INTEGRITY_PROBE_METADATA_KEY: &str = "atlas_last_integrity_probe_at";
 const QUARANTINE_TIMESTAMP_FORMAT: &[FormatItem<'static>] =
     format_description!("[year][month][day]T[hour][minute][second]Z");
 
@@ -94,6 +96,93 @@ impl std::fmt::Display for GraphStoreRecoveryError {
 impl std::error::Error for GraphStoreRecoveryError {}
 
 impl Store {
+    /// Timestamp of the last successful cheap integrity probe, when recorded.
+    ///
+    /// Readiness gating uses this to skip repeated physical checks across
+    /// short-lived processes. Only healthy results are recorded.
+    pub fn last_integrity_probe_at(&self) -> Result<Option<String>, AtlasError> {
+        self.conn
+            .query_row(
+                "SELECT value FROM metadata WHERE key = ?1",
+                params![INTEGRITY_PROBE_METADATA_KEY],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| AtlasError::Db(e.to_string()))
+    }
+
+    /// Record a successful cheap integrity probe timestamp.
+    pub fn record_integrity_probe_at(&self, timestamp: &str) -> Result<(), AtlasError> {
+        self.conn
+            .execute(
+                "INSERT INTO metadata(key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                 WHERE metadata.value <> excluded.value",
+                params![INTEGRITY_PROBE_METADATA_KEY, timestamp],
+            )
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Cheap structural probe for hot-path readiness gating.
+    ///
+    /// Checks for dangling structural edges and legacy repo-identity rows.
+    /// Both queries are indexed/bounded and cheap enough to run on every
+    /// graph-backed request. Full-table logical scans
+    /// ([`Self::noncanonical_path_rows`], [`Self::missing_repo_provenance_rows`])
+    /// stay in `doctor` and `db_check`.
+    pub fn graph_store_structural_probe(
+        &self,
+    ) -> Result<Option<GraphStoreHealthClass>, AtlasError> {
+        let structural_dangling = self
+            .dangling_edges(STRUCTURAL_SCAN_LIMIT)?
+            .into_iter()
+            .filter(|(_, _, _, kind, _)| {
+                matches!(
+                    kind.as_str(),
+                    "contains"
+                        | "defines"
+                        | "implements"
+                        | "extends"
+                        | "imports"
+                        | "tests"
+                        | "tested_by"
+                )
+            })
+            .count();
+        if structural_dangling > 0 {
+            return Ok(Some(GraphStoreHealthClass::LogicalInconsistency));
+        }
+        if !self.legacy_identity_rows(1)?.is_empty() {
+            return Ok(Some(GraphStoreHealthClass::LogicalInconsistency));
+        }
+        Ok(None)
+    }
+
+    /// Cheap physical integrity probe for hot-path readiness gating.
+    ///
+    /// Runs `PRAGMA quick_check` only. The full `PRAGMA integrity_check` plus
+    /// full-table logical scans stay on explicit diagnostics surfaces
+    /// (`doctor`, `db_check`).
+    pub fn graph_store_health_probe(&self) -> Result<Option<GraphStoreHealthClass>, AtlasError> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut quick_check_issues = Vec::new();
+        {
+            let mut stmt = self.conn.prepare("PRAGMA quick_check").map_err(db_err)?;
+            let mut rows = stmt.query([]).map_err(db_err)?;
+            while let Some(row) = rows.next().map_err(db_err)? {
+                let msg: String = row.get(0).map_err(db_err)?;
+                if msg != "ok" {
+                    quick_check_issues.push(msg);
+                }
+            }
+        }
+        if !quick_check_issues.is_empty() {
+            return Ok(Some(GraphStoreHealthClass::SqliteCorrupt));
+        }
+        Ok(None)
+    }
+
     pub fn graph_store_health_class(&self) -> Result<Option<GraphStoreHealthClass>, AtlasError> {
         match self.integrity_check() {
             Ok(issues) if !issues.is_empty() => {

@@ -365,3 +365,48 @@ fn memoir_inspect_resolves_by_concept_and_rejects_ambiguity() {
         "ambiguous concept must not silently pick a graph: {error}"
     );
 }
+
+#[test]
+fn delete_memoir_graph_removes_concepts_and_relations() {
+    let (_dir, mut store) = open_store(16, 1024);
+    store
+        .create_memoir_graph(&graph_input("Architecture", MemoryScope::Project))
+        .unwrap();
+    store
+        .add_memoir_concept(&concept_input("Architecture", "parser"))
+        .unwrap();
+    store
+        .add_memoir_concept(&concept_input("Architecture", "lexer"))
+        .unwrap();
+    store
+        .link_memoir_concepts(&link_input("Architecture", "parser", "lexer", "depends_on"))
+        .unwrap();
+
+    let dry_run = store
+        .delete_memoir_graph("/repo", MemoryScope::Project, "Architecture", true)
+        .unwrap();
+    assert!(dry_run.found);
+    assert!(!dry_run.deleted);
+    assert_eq!(dry_run.concepts_deleted, 2);
+    assert_eq!(dry_run.relations_deleted, 1);
+
+    let deleted = store
+        .delete_memoir_graph("/repo", MemoryScope::Project, "Architecture", false)
+        .unwrap();
+    assert!(deleted.found);
+    assert!(deleted.deleted);
+    assert_eq!(deleted.concepts_deleted, 2);
+    assert_eq!(deleted.relations_deleted, 1);
+
+    let remaining: i64 = store
+        .conn
+        .query_row("SELECT COUNT(*) FROM memoir_graphs", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(remaining, 0);
+
+    let missing = store
+        .delete_memoir_graph("/repo", MemoryScope::Project, "Architecture", false)
+        .unwrap();
+    assert!(!missing.found);
+    assert!(!missing.deleted);
+}

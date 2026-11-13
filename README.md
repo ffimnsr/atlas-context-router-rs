@@ -810,6 +810,7 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `memoir_add_concept` | ICM-F: add a concept to an existing memoir graph |
 | `memoir_link` | ICM-F: link concepts with a controlled relation type |
 | `memoir_inspect` | ICM-F: bounded concept inspection with direction and evidence ids |
+| `memoir_delete` | ICM-F: delete a memoir graph, its concepts, and relations |
 | `overview_export` | ICM-G: export bounded overview analysis packets with subject ids and freshness |
 | `overview_ingest` | ICM-G: ingest external overview analysis with packet and subject validation |
 | `overview_search` | ICM-G: search overview memory with FTS and explicit ranking evidence |

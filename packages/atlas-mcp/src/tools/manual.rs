@@ -1260,9 +1260,11 @@ pub(crate) fn tool_usage_guidance(tool_name: &str) -> Vec<String> {
             "Use memory_store for durable repo facts, memory_recall for retrieval, and memory_ops to inspect typed-operator history.",
             "Recall is read-only; store and feedback writes are state-changing. Respect project/session/frontend/global visibility scopes.",
         ],
-        "memoir_create" | "memoir_add_concept" | "memoir_link" | "memoir_inspect" => vec![
+        "memoir_create" | "memoir_add_concept" | "memoir_link" | "memoir_inspect"
+        | "memoir_delete" => vec![
             "Use memoir tools for the separate concept layer, never as code-graph truth.",
             "Create the graph before concepts, inspect before linking, and remember missing concepts are never auto-created unless create_missing is explicit.",
+            "memoir_delete removes the graph plus its concepts and relations; use dry_run=true to inspect counts first.",
         ],
         "experience_inspect" => vec![
             "Use to audit query-conditioned experience edges for one atlas:// URI before trusting a shortcut.",
@@ -1671,6 +1673,7 @@ mod tests {
             "memoir_add_concept",
             "memoir_link",
             "memoir_inspect",
+            "memoir_delete",
             "experience_inspect",
             "save_context_artifact",
             "search_saved_context",

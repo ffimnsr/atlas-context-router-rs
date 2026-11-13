@@ -52,6 +52,7 @@ const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "man",
     "memoir_add_concept",
     "memoir_create",
+    "memoir_delete",
     "memoir_inspect",
     "memoir_link",
     "memory_ops",
@@ -533,8 +534,8 @@ fn tool_list_matches_registry_snapshot() {
 fn exported_tools_match_dispatch_and_inventory_count() {
     assert_eq!(
         TOOL_REGISTRY_SNAPSHOT.len(),
-        80,
-        "documented inventory must contain exactly 80 tools"
+        81,
+        "documented inventory must contain exactly 81 tools"
     );
 
     let exported = tool_descriptors()
@@ -546,7 +547,7 @@ fn exported_tools_match_dispatch_and_inventory_count() {
         .map(|name| (*name).to_owned())
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(exported.len(), 80, "live tools/list must export 80 tools");
+    assert_eq!(exported.len(), 81, "live tools/list must export 81 tools");
     assert_eq!(
         exported, dispatch,
         "tools/list registry and dispatch known-name set drifted"

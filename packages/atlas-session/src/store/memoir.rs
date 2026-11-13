@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 
 use atlas_core::{AtlasError, Result};
 
+use super::memoir_schema::{MEMOIR_CONCEPT_COLUMNS, MEMOIR_GRAPH_COLUMNS, MEMOIR_RELATION_COLUMNS};
 use super::memory::format_memory_now;
 use super::types::MemoryScope;
 use super::util::{hex_encode, to_from_sql_error};
@@ -43,46 +44,6 @@ pub const MEMOIR_RELATION_TYPES: &[&str] = &[
 const MAX_MEMOIR_INSPECT_DEPTH: u32 = 5;
 const MAX_MEMOIR_INSPECT_NODES: usize = 200;
 const MAX_MEMOIR_INSPECT_EDGES: usize = 500;
-
-/// Exact column set of the `memoir_graphs` table (migration 011).
-pub(super) const MEMOIR_GRAPH_COLUMNS: &[&str] = &[
-    "id",
-    "repo_root",
-    "scope",
-    "name",
-    "description",
-    "created_at",
-    "updated_at",
-    "metadata_json",
-];
-
-/// Exact column set of the `memoir_concepts` table (migration 011).
-pub(super) const MEMOIR_CONCEPT_COLUMNS: &[&str] = &[
-    "id",
-    "graph_id",
-    "repo_root",
-    "name",
-    "description",
-    "kind",
-    "source_id",
-    "created_at",
-    "updated_at",
-    "metadata_json",
-];
-
-/// Exact column set of the `memoir_relations` table (migration 011).
-pub(super) const MEMOIR_RELATION_COLUMNS: &[&str] = &[
-    "id",
-    "graph_id",
-    "repo_root",
-    "source_concept_id",
-    "target_concept_id",
-    "relation_type",
-    "confidence",
-    "source_id",
-    "created_at",
-    "metadata_json",
-];
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -369,7 +330,7 @@ fn parse_metadata(raw: String) -> Value {
     serde_json::from_str(&raw).unwrap_or_else(|_| default_metadata())
 }
 
-fn row_to_memoir_graph(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemoirGraph> {
+pub(super) fn row_to_memoir_graph(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemoirGraph> {
     Ok(MemoirGraph {
         id: row.get(0)?,
         repo_root: row.get(1)?,
@@ -397,7 +358,7 @@ fn row_to_memoir_concept(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemoirConc
     })
 }
 
-fn memoir_graph_select() -> &'static str {
+pub(super) fn memoir_graph_select() -> &'static str {
     concat!(
         "SELECT id, repo_root, scope, name, description, created_at, updated_at, metadata_json ",
         "FROM memoir_graphs"
@@ -1006,6 +967,18 @@ impl super::SessionStore {
     /// evidence ids on every edge.
     pub fn inspect_memoir_concept(&self, query: &MemoirInspectQuery) -> Result<MemoirInspection> {
         inspect_memoir_concept(&self.conn, query)
+    }
+
+    /// Delete a memoir graph and its concepts/relations. Missing graphs report
+    /// `found: false`; `dry_run` reports counts without writing.
+    pub fn delete_memoir_graph(
+        &self,
+        repo_root: &str,
+        scope: MemoryScope,
+        name: &str,
+        dry_run: bool,
+    ) -> Result<super::memoir_delete::MemoirDeleteResult> {
+        super::memoir_delete::delete_memoir_graph(&self.conn, repo_root, scope, name, dry_run)
     }
 
     /// Read-only concept listing for the memory TUI (ICM-H2).

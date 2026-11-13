@@ -392,6 +392,20 @@ pub(super) fn tools() -> Vec<Value> {
                 }
         }),
         json!({
+                "name": "memoir_delete",
+                "description": "Delete a memoir concept graph and all of its concepts and relations. Deletion is scoped to the repo and graph scope; a missing graph reports found=false. Use dry_run=true to inspect counts without writing (ICM-F).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "graph":         { "type": "string", "description": "Graph name." },
+                        "scope":         { "type": "string", "description": "Graph scope: project, session, frontend, or global (default project)." },
+                        "dry_run":       { "type": "boolean", "description": "Report counts without deleting (default false)." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["graph"]
+                }
+        }),
+        json!({
                 "name": "experience_inspect",
                 "description": "Inspect query-conditioned experience edges touching one atlas:// URI. Report-only: edges live in session.db and are never code-graph truth (VR4). The ledger stays empty until a retrieval/update workflow records edges; an empty `edges` list is a valid report, not an error.",
                 "inputSchema": {

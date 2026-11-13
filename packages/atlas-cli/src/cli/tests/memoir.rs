@@ -161,3 +161,26 @@ fn parse_memoir_inspect_accepts_graph_positionally() {
         } if targets == &["Architecture".to_owned(), "HealthDiagnostics".to_owned()]
     ));
 }
+
+#[test]
+fn parse_memoir_delete_accepts_dry_run_and_scope() {
+    let cli = parse(&[
+        "atlas",
+        "memoir",
+        "delete",
+        "Architecture",
+        "--dry-run",
+        "--scope",
+        "project",
+    ]);
+    assert!(matches!(
+        cli.command,
+        Command::Memoir {
+            subcommand: MemoirCommand::Delete {
+                ref graph,
+                dry_run: true,
+                ref scope,
+            }
+        } if graph == "Architecture" && scope.as_deref() == Some("project")
+    ));
+}

@@ -57,7 +57,8 @@ pub use artifact_io::{
 pub use experience::tool_experience_inspect;
 pub use feedback::tool_feedback_record;
 pub use memoir::{
-    tool_memoir_add_concept, tool_memoir_create, tool_memoir_inspect, tool_memoir_link,
+    tool_memoir_add_concept, tool_memoir_create, tool_memoir_delete, tool_memoir_inspect,
+    tool_memoir_link,
 };
 pub use memory::{tool_get_global_memory, tool_memory_ops, tool_memory_recall, tool_memory_store};
 pub use overview::{

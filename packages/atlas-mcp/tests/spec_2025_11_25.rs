@@ -621,10 +621,10 @@ fn elicitation_round_trip_stdio_snapshot(repo_root: &str, db_path: &str) -> Valu
         .recv_json(Duration::from_secs(2))
         .expect("recv stdio initialize")
         .expect("stdio initialize response");
-    assert_eq!(
-        initialize["result"]["protocolVersion"],
-        json!(MCP_PROTOCOL_VERSION)
-    );
+    // 2026-07-28 negotiates through `server/discover`, so an `initialize`
+    // request for that version is answered with the newest version that still
+    // has an initialize handshake.
+    assert_eq!(initialize["result"]["protocolVersion"], json!("2025-11-25"));
     session
         .send_json(&initialized_notification())
         .expect("send stdio initialized notification");

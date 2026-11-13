@@ -185,6 +185,34 @@ pub fn run_memoir(cli: &Cli) -> Result<()> {
                 }
             }
         }
+        MemoirCommand::Delete {
+            graph,
+            dry_run,
+            scope,
+        } => {
+            let result = store.delete_memoir_graph(
+                &repo,
+                parse_scope(scope.as_deref())?,
+                graph,
+                *dry_run,
+            )?;
+
+            if cli.json {
+                print_json("memoir.delete", serde_json::json!({ "result": result }))?;
+            } else if !result.found {
+                println!("Memoir graph not found: {}", result.graph);
+            } else if result.dry_run {
+                println!(
+                    "Would delete memoir graph {} ({} concepts, {} relations)",
+                    result.graph, result.concepts_deleted, result.relations_deleted
+                );
+            } else {
+                println!(
+                    "Memoir graph deleted: {} ({} concepts, {} relations)",
+                    result.graph, result.concepts_deleted, result.relations_deleted
+                );
+            }
+        }
     }
 
     Ok(())

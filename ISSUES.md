@@ -282,7 +282,7 @@ Full design: `docs/PLAN-TOKENIZER.md`. Goal: standalone `atlas-tokenizer` crate 
 
 - [ ] add CI-visible parser cache hit-ratio metric and fail when cache reuse drops below configured threshold
 - [ ] add thin LSP shim that maps Atlas query/context/impact/reference flows onto standard LSP requests
-- [ ] add a `memoir_delete` MCP/CLI surface so throwaway smoke-test concept graphs can be removed without direct DB edits
+- [x] add a `memoir_delete` MCP/CLI surface so throwaway smoke-test concept graphs can be removed without direct DB edits **Done:** `memoir_delete` MCP tool, `atlas memoir delete <GRAPH> [--dry-run] [--scope]`, store method with cascade-safe deletes, and regression tests.
 
 ---
 
@@ -397,20 +397,20 @@ Run context: full `AGENTS_MCP_TESTS.md` sweep with the graph healthy (962 files 
 
 ### Latency and protocol
 
-- [ ] **fix(MCP worldtree latency)**: worldtree-backed MCP calls take ~5.2-5.3 s from a direct-stdio harness (`status` 5275 ms, `get_docs_section` 5260 ms, health resource 5303 ms) while the same CLI commands take 89-350 ms. CLIs are also compute-bound at 7.5-36 s for `insights risk`/`architecture`/`patterns`/`duplicates`/`similar-functions`. Profile the dispatch readiness gate and store open path in `packages/atlas-mcp/src/tools/dispatch.rs`.
-- [ ] **fix(MCP protocol negotiation)**: a direct-stdio `initialize` requesting `2026-07-28` was answered with `2025-11-25`, although `MCP_PROTOCOL_VERSION` is `2026-07-28` and both versions are supported (`packages/atlas-mcp/src/spec.rs`). Reproduce with a raw client and confirm the handler's selection logic (`rmcp_server/handler.rs`).
+- [x] **fix(MCP worldtree latency)**: worldtree-backed MCP calls take ~5.2-5.3 s from a direct-stdio harness (`status` 5275 ms, `get_docs_section` 5260 ms, health resource 5303 ms) while the same CLI commands take 89-350 ms. CLIs are also compute-bound at 7.5-36 s for `insights risk`/`architecture`/`patterns`/`duplicates`/`similar-functions`. Profile the dispatch readiness gate and store open path in `packages/atlas-mcp/src/tools/dispatch.rs`. **Fixed:** the readiness gate ran a full `PRAGMA integrity_check` plus noncanonical/provenance/legacy scans on every graph-backed call. Added `Store::graph_store_health_probe` (TTL-gated `quick_check`) plus an always-on bounded structural probe (dangling structural edges + legacy identity rows), persisted `atlas_last_integrity_probe_at` with a 5-minute TTL, gated physical probing on the recorded build timestamp and DB mtime, and made per-open provenance/metadata writes idempotent so reads no longer mutate the DB. Deep scans remain in `doctor`/`db_check`. Regressions: `recent_persisted_probe_skips_physical_check`, `built_graph_skips_probe_when_db_is_older_than_build_stamp`, `built_graph_probes_when_db_changed_after_build_stamp`. Direct-stdio `list_graph_stats` dropped from ~6.2 s to ~1.3 s debug (probe warm ~0.3 s release).
+- [x] **fix(MCP protocol negotiation)**: a direct-stdio `initialize` requesting `2026-07-28` was answered with `2025-11-25`, although `MCP_PROTOCOL_VERSION` is `2026-07-28` and both versions are supported (`packages/atlas-mcp/src/spec.rs`). Reproduce with a raw client and confirm the handler's selection logic (`rmcp_server/handler.rs`). **Resolved as spec-correct:** 2026-07-28 negotiates through `server/discover` and `_meta` and has no `initialize` handshake, so rmcp answers `initialize` with the newest version that has one (`2025-11-25`). Added `packages/atlas-mcp/tests/protocol_negotiation.rs` and aligned the stale fixture/assertion.
 
 ### Doc drift — rerun after the shapes above settle
 
-- [ ] Tool 5/12 thresholds are stale: `struct` 928 (expected >1000), `references` 2570 (expected >10000), rust nodes 11363 (expected >15000). Restate them relative to observed parser output instead of absolute floors.
-- [ ] Tools 44/67/68/69/77 carry invalid CLI invocation forms: `docs-section` needs `--heading`, `memoir link` needs `--relation`, `memoir inspect` needs `--graph`, `overview export` needs `--subject`, `man` requires `<NAMESPACE> <TOOL_NAME>`.
-- [ ] Tools 6.6/6.8/6.9/6.10 document flags that do not exist (`flows create --name`, `history <file> --symbol`, `uri <URI>`, `feedback adjust`) and Tool 6.5 references an absent fixture graph.
-- [ ] Tool 51.2 says events land in `.atlas/context.db`; they are written to `.atlas/session.db`.
-- [ ] Tool 47.3 states a total item cap while `wake_up.max_items` is per-list.
-- [ ] Tool 67 says `relates_to`; the whitelist uses `related_to`.
-- [ ] Tool 14 claims counts must match a CLI traversal, but no CLI subcommand exposes `traverse_graph`'s node/edge/budget shape.
-- [ ] Tool 52 inline cutoff: observed `raw_inline` at 451 B and `indexed_preview` at 956 B, so the documented ~360 B figure is wrong.
+- [x] Tool 5/12 thresholds are stale: `struct` 928 (expected >1000), `references` 2570 (expected >10000), rust nodes 11363 (expected >15000). Restate them relative to observed parser output instead of absolute floors. **Fixed:** thresholds are now proportional floors (function 3000, struct 500, file 900, calls 50000, contains 20000, references 1000; rust nodes 5000) with observed counts noted.
+- [x] Tools 44/67/68/69/77 carry invalid CLI invocation forms: `docs-section` needs `--heading`, `memoir link` needs `--relation`, `memoir inspect` needs `--graph`, `overview export` needs `--subject`, `man` requires `<NAMESPACE> <TOOL_NAME>`. **Fixed:** guide now uses the required flag forms and `man mcp <tool>`.
+- [x] Tools 6.6/6.8/6.9/6.10 document flags that do not exist (`flows create --name`, `history <file> --symbol`, `uri <URI>`, `feedback adjust`) and Tool 6.5 references an absent fixture graph. **Verified/fixed:** those flags exist after the prior run; Tool 6.5 now documents fixture setup and `memoir delete` cleanup.
+- [x] Tool 51.2 says events land in `.atlas/context.db`; they are written to `.atlas/session.db`. **Fixed:** Tool 51.2 and the workspace layout now distinguish `.atlas/session.db` (events/memory/memoir) from `.atlas/context.db` (artifacts/retrieval).
+- [x] Tool 47.3 states a total item cap while `wake_up.max_items` is per-list. **Fixed:** assertion now checks each list independently.
+- [x] Tool 67 says `relates_to`; the whitelist uses `related_to`. **Fixed:** guide now says `related_to`.
+- [x] Tool 14 claims counts must match a CLI traversal, but no CLI subcommand exposes `traverse_graph`'s node/edge/budget shape. **Fixed:** guide marks `query --expand` as a lexical approximation and removes the count-parity claim.
+- [x] Tool 52 inline cutoff: observed `raw_inline` at 451 B and `indexed_preview` at 956 B, so the documented ~360 B figure is wrong. **Verified:** `ContentStoreConfig::small_output_bytes` defaults to 512; the guide already states 512, and the observed 451/956 B cases align.
 
 ### Test-run leftovers (cleanup pending)
 
-- [ ] remove sweep fixtures: memories `mcp-sweep-*`, memoir graphs `mcp-sweep-arch|dup|cli|session`, overview records `10f4a60b…`/`f609da2a…`/`2c7d0ad4…`, saved artifacts `mcp-sweep-*` (incl. `c536ac758208e80e6df546d148d029af`), sessions `mcp-sweep-48a`/`50c`/`57b`, and flow `mcp-sweep-ReadinessHealthFlow` (id 1) in `worldtree.db`; `memoir_delete` does not exist yet (see Additional Backlog).
+- [x] remove sweep fixtures: memories `mcp-sweep-*`, memoir graphs `mcp-sweep-arch|dup|cli|session`, overview records `10f4a60b…`/`f609da2a…`/`2c7d0ad4…`, saved artifacts `mcp-sweep-*` (incl. `c536ac758208e80e6df546d148d029af`), sessions `mcp-sweep-48a`/`50c`/`57b`, and flow `mcp-sweep-ReadinessHealthFlow` (id 1) in `worldtree.db`; `memoir_delete` does not exist yet (see Additional Backlog). **Done:** added `memoir_delete` (MCP + CLI) and removed every listed fixture; also killed leaked `/tmp/.tmp*` test daemons. Verified zero remaining `mcp-sweep%` rows across memories, memoir graphs, overview records, sessions, sources, and flows.

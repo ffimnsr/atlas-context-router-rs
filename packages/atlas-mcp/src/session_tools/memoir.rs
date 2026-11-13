@@ -178,6 +178,44 @@ pub fn tool_memoir_link(
     )
 }
 
+/// Delete a memoir graph and all of its concepts and relations. Missing graphs
+/// report `found: false`; `dry_run` reports counts without writing.
+pub fn tool_memoir_delete(
+    args: Option<&Value>,
+    repo_root: &str,
+    db_path: &str,
+    output_format: OutputFormat,
+) -> Result<Value> {
+    let graph = required_string(args, "graph")?;
+    let scope = scope_arg(args)?;
+    let dry_run = args
+        .and_then(|a| a.get("dry_run"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let store = open_store(db_path)?;
+    let result = store.delete_memoir_graph(repo_root, scope, graph, dry_run)?;
+
+    build_tool_result_value(
+        &serde_json::json!({
+            "tool": "memoir_delete",
+            "repo_root": repo_root,
+            "result": result,
+            "summary": {
+                "graph": result.graph,
+                "scope": result.scope.as_str(),
+                "found": result.found,
+                "deleted": result.deleted,
+                "dry_run": result.dry_run,
+                "concepts_deleted": result.concepts_deleted,
+                "relations_deleted": result.relations_deleted,
+            },
+            "warnings": [],
+        }),
+        output_format,
+    )
+}
+
 /// Bounded concept inspection with canonical relation direction and source
 /// evidence ids.
 pub fn tool_memoir_inspect(

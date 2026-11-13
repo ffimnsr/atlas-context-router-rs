@@ -58,6 +58,7 @@
 //! | `memoir_add_concept`      | ICM-F: add a concept to an existing memoir graph         |
 //! | `memoir_link`             | ICM-F: link concepts with a controlled relation type     |
 //! | `memoir_inspect`          | ICM-F: bounded inspection with direction and evidence    |
+//! | `memoir_delete`           | ICM-F: delete a memoir graph, concepts, and relations    |
 //! | `overview_export`         | ICM-G: export bounded overview analysis packets          |
 //! | `overview_ingest`         | ICM-G: ingest external overview analysis with validation |
 //! | `overview_search`         | ICM-G: search overview memory with FTS and ranking       |

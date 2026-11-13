@@ -119,6 +119,23 @@ fn memoir_defs() -> Value {
         "memoir_relation": memoir_relation_schema(),
         "memoir_inspection_edge": memoir_inspection_edge_schema(),
         "memoir_inspection": memoir_inspection_schema(),
+        "memoir_delete_result": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "graph": { "type": "string" },
+                "scope": { "type": "string" },
+                "found": { "type": "boolean" },
+                "deleted": { "type": "boolean" },
+                "dry_run": { "type": "boolean" },
+                "concepts_deleted": { "type": "integer" },
+                "relations_deleted": { "type": "integer" }
+            },
+            "required": [
+                "graph", "scope", "found", "deleted", "dry_run",
+                "concepts_deleted", "relations_deleted"
+            ]
+        },
     })
 }
 
@@ -221,6 +238,35 @@ pub(crate) fn memoir_inspect_output_schema() -> Value {
             "warnings": { "type": "array", "items": { "type": "string" } }
         }),
         &["tool", "repo_root", "inspection", "summary", "warnings"],
+        Some(memoir_defs()),
+    )
+}
+
+pub(crate) fn memoir_delete_output_schema() -> Value {
+    normalized_tool_output_schema(
+        json!({
+            "repo_root": { "type": "string" },
+            "result": { "$ref": "#/$defs/memoir_delete_result" },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "graph": { "type": "string" },
+                    "scope": { "type": "string" },
+                    "found": { "type": "boolean" },
+                    "deleted": { "type": "boolean" },
+                    "dry_run": { "type": "boolean" },
+                    "concepts_deleted": { "type": "integer" },
+                    "relations_deleted": { "type": "integer" }
+                },
+                "required": [
+                    "graph", "scope", "found", "deleted", "dry_run",
+                    "concepts_deleted", "relations_deleted"
+                ]
+            },
+            "warnings": { "type": "array", "items": { "type": "string" } }
+        }),
+        &["tool", "repo_root", "result", "summary", "warnings"],
         Some(memoir_defs()),
     )
 }
