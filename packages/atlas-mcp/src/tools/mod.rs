@@ -4,6 +4,7 @@ mod config_defaults;
 mod context_ops;
 mod dispatch;
 mod graph;
+mod graph_stats;
 pub mod health;
 mod inventory;
 mod manual;

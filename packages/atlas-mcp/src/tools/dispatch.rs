@@ -36,9 +36,9 @@ use super::context_ops::{
 };
 use super::graph::{
     tool_batch_query_graph, tool_concept_clusters, tool_cross_file_links, tool_explain_query,
-    tool_list_graph_stats, tool_query_graph, tool_resolve_symbol, tool_symbol_neighbors,
-    tool_traverse_graph,
+    tool_query_graph, tool_resolve_symbol, tool_symbol_neighbors, tool_traverse_graph,
 };
+use super::graph_stats::tool_list_graph_stats;
 use super::health::{
     tool_broker_status, tool_db_check, tool_debug_graph, tool_doctor, tool_status,
 };

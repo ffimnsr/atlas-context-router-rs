@@ -138,6 +138,89 @@ impl Store {
     }
 
     /// Return high-level statistics about the stored graph.
+    ///
+    /// Excludes synthetic `.atlas/synthetic/` owner/workspace/repo metadata
+    /// rows so user-facing readiness and counts reflect only real repo files.
+    /// This is the canonical counting source for `status`, `doctor`,
+    /// `list_graph_stats`, and `debug_graph`.
+    pub fn graph_stats(&self) -> Result<GraphStats> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        const SYNTHETIC: &str = ".atlas/synthetic/%";
+
+        let file_count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE path NOT LIKE ?1",
+                params![SYNTHETIC],
+                |r| r.get(0),
+            )
+            .map_err(db_err)?;
+        let node_count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM nodes WHERE file_path NOT LIKE ?1",
+                params![SYNTHETIC],
+                |r| r.get(0),
+            )
+            .map_err(db_err)?;
+        let edge_count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM edges WHERE file_path IS NULL OR file_path NOT LIKE ?1",
+                params![SYNTHETIC],
+                |r| r.get(0),
+            )
+            .map_err(db_err)?;
+
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT kind, COUNT(*) FROM nodes WHERE file_path NOT LIKE ?1
+                 GROUP BY kind ORDER BY COUNT(*) DESC",
+            )
+            .map_err(db_err)?;
+        let nodes_by_kind: Vec<(String, i64)> = stmt
+            .query_map(params![SYNTHETIC], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT DISTINCT language FROM nodes
+                 WHERE language IS NOT NULL AND file_path NOT LIKE ?1
+                 ORDER BY language",
+            )
+            .map_err(db_err)?;
+        let languages: Vec<String> = stmt
+            .query_map(params![SYNTHETIC], |r| r.get(0))
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let last_indexed_at: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT MAX(indexed_at) FROM files WHERE path NOT LIKE ?1",
+                params![SYNTHETIC],
+                |r| r.get(0),
+            )
+            .unwrap_or(None);
+
+        Ok(GraphStats {
+            file_count,
+            node_count,
+            edge_count,
+            nodes_by_kind,
+            languages,
+            last_indexed_at,
+        })
+    }
+
+    /// Return high-level statistics about the stored graph.
     /// Return a minimal provenance snapshot: only the two cheapest queries.
     ///
     /// Used by MCP7 to attach compact metadata to every tool response without
@@ -491,12 +574,76 @@ impl Store {
         Ok(results)
     }
 
+    /// Return dangling edges restricted to structural relationship kinds.
+    ///
+    /// `calls`/`references` targets may legitimately point at unresolved
+    /// expressions, so integrity checks only report `contains`, `defines`,
+    /// `implements`, `extends`, `imports`, `tests`, and `tested_by`. This is the
+    /// single query used by `db_check` and `debug_graph` so both surfaces agree
+    /// on the dangling count.
+    pub fn structural_dangling_edges(&self, limit: usize) -> Result<Vec<DanglingEdge>> {
+        Ok(self
+            .dangling_edges(limit)?
+            .into_iter()
+            .filter(|(_, _, _, kind, _)| {
+                matches!(
+                    kind.as_str(),
+                    "contains"
+                        | "defines"
+                        | "implements"
+                        | "extends"
+                        | "imports"
+                        | "tests"
+                        | "tested_by"
+                )
+            })
+            .collect())
+    }
+
+    /// Return nodes with no edges, excluding file nodes (which are always
+    /// containers and rarely represent actionable orphans).
+    pub fn structural_orphan_nodes(&self, limit: usize) -> Result<Vec<atlas_core::Node>> {
+        Ok(self
+            .orphan_nodes(limit)?
+            .into_iter()
+            .filter(|node| node.kind != atlas_core::NodeKind::File)
+            .collect())
+    }
+
+    /// Return node counts grouped by language, ordered descending.
+    ///
+    /// Rows with a `NULL` language (containers, synthetic metadata) are
+    /// excluded. Used by `list_graph_stats` so the language list carries counts
+    /// instead of bare names.
+    pub fn language_node_counts(&self) -> Result<Vec<(String, i64)>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT language, COUNT(*) FROM nodes
+                 WHERE language IS NOT NULL
+                   AND file_path NOT LIKE '.atlas/synthetic/%'
+                 GROUP BY language ORDER BY COUNT(*) DESC",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
     /// Return edge counts grouped by kind, ordered descending.
     pub fn edge_kind_stats(&self) -> Result<Vec<(String, i64)>> {
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         let mut stmt = self
             .conn
-            .prepare("SELECT kind, COUNT(*) FROM edges GROUP BY kind ORDER BY COUNT(*) DESC")
+            .prepare(
+                "SELECT kind, COUNT(*) FROM edges
+                 WHERE file_path IS NULL OR file_path NOT LIKE '.atlas/synthetic/%'
+                 GROUP BY kind ORDER BY COUNT(*) DESC",
+            )
             .map_err(db_err)?;
         let rows = stmt
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))

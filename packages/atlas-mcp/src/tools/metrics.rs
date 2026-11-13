@@ -9,7 +9,13 @@ use crate::tool_result::tool_result_value;
 /// accumulated by this process.
 pub(super) fn tool_get_metrics(output_format: OutputFormat) -> Result<serde_json::Value> {
     let snapshot = atlas_metrics::snapshot();
-    tool_result_value(&snapshot, output_format)
+    let mut value = serde_json::to_value(&snapshot)?;
+    // Keep one identity field across tools so consumers can route payloads
+    // without inspecting the server's tool registry.
+    if let Some(map) = value.as_object_mut() {
+        map.insert("tool".to_owned(), serde_json::json!("get_metrics"));
+    }
+    tool_result_value(&value, output_format)
 }
 
 #[cfg(test)]

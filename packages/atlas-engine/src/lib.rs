@@ -10,6 +10,7 @@ mod owner_graph;
 pub mod paths;
 
 mod build;
+pub mod doctor;
 mod package_resolution;
 mod postprocess;
 mod reachability;
@@ -22,6 +23,11 @@ pub mod watch;
 
 pub use build::{BuildOptions, BuildSummary};
 pub use config::{BuildRunBudget, Config, ConfigTemplateProfile, EmbeddingBackendConfig};
+pub use doctor::{
+    DoctorCheck, DoctorCheckDetails, SHARED_DOCTOR_CHECKS, SchemaProbe, canonical_check_names,
+    connection_mode_check, path_canonicality_check, probe_content_schema, probe_graph_schema,
+    probe_session_schema, schema_version_check, session_schema_check, shared_checks,
+};
 pub use embedding::{
     DEFAULT_EMBED_CHUNK_LIMIT, EmbedChunkOptions, EmbedChunkReport, embed_pending_chunks,
 };

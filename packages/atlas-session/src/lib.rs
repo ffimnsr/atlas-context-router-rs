@@ -5,6 +5,12 @@ pub mod identity;
 mod migrations;
 pub mod store;
 
+/// Highest session-store schema version this binary can open.
+///
+/// A `session.db` stamped with a higher `PRAGMA user_version` fails closed on
+/// open with a schema-mismatch error and is never quarantined.
+pub const SESSION_SCHEMA_VERSION: i32 = migrations::LATEST_VERSION;
+
 pub use frontend::{KNOWN_FRONTENDS, normalize_frontend};
 pub use identity::SessionId;
 pub use store::{

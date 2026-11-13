@@ -124,7 +124,26 @@ fn graph_relevant_changed_files(
 fn retrieval_index_value(repo: &str, db_path: &str) -> serde_json::Value {
     let content_db_path = atlas_engine::paths::content_db_path(db_path);
     let content_db_path_string = content_db_path.clone();
-    match ContentStore::open(&content_db_path) {
+    // Surface the content-store schema probe with the index state so a
+    // newer-than-supported `context.db` is reported as an actual error rather
+    // than a synthetic `state=indexed` payload (D3).
+    let schema = atlas_engine::doctor::probe_content_schema(&content_db_path);
+    let schema_json = |value: &serde_json::Value| {
+        let mut object = value.clone();
+        if let Some(map) = object.as_object_mut() {
+            map.insert(
+                "content_schema_version".to_owned(),
+                serde_json::json!(schema.schema_version),
+            );
+            map.insert(
+                "content_schema_supported".to_owned(),
+                serde_json::json!(schema.supported_version),
+            );
+            map.insert("content_schema_ok".to_owned(), serde_json::json!(schema.ok));
+        }
+        object
+    };
+    let value = match ContentStore::open(&content_db_path) {
         Ok(mut store) => {
             let _ = store.migrate();
             match store.get_index_status(repo) {
@@ -186,7 +205,8 @@ fn retrieval_index_value(repo: &str, db_path: &str) -> serde_json::Value {
             "last_error": error.to_string(),
             "content_db_path": content_db_path_string,
         }),
-    }
+    };
+    schema_json(&value)
 }
 
 fn collect_status_diagnostics(ctx: &StatusPayloadContext<'_>) -> StatusDiagnostics {

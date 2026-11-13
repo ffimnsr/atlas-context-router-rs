@@ -109,6 +109,12 @@ impl McpInstance {
         if metadata.db_path != self.db_path {
             reasons.push(McpInstanceStaleReason::DbMismatch);
         }
+        // A broker started by an older binary can export a different tool set.
+        // Treat a version difference as stale so the next `mcp serve` restarts
+        // it from the current binary (smoke check for registry drift).
+        if metadata.binary_version != env!("CARGO_PKG_VERSION") {
+            reasons.push(McpInstanceStaleReason::VersionMismatch);
+        }
         if !socket_exists(Path::new(&metadata.socket_path)) {
             reasons.push(McpInstanceStaleReason::SocketMissing);
         }
@@ -140,6 +146,7 @@ impl McpInstance {
             pid,
             protocol_version: protocol_version.to_owned(),
             started_at: started_at.to_owned(),
+            binary_version: env!("CARGO_PKG_VERSION").to_owned(),
         }
     }
 
@@ -175,6 +182,12 @@ pub(crate) struct McpInstanceMetadata {
     pub(crate) pid: u32,
     pub(crate) protocol_version: String,
     pub(crate) started_at: String,
+    /// Atlas binary version that started the broker.
+    ///
+    /// Missing in metadata written by pre-1.7.8 binaries; `serde(default)`
+    /// keeps those readable and the empty value then fails the version check.
+    #[serde(default)]
+    pub(crate) binary_version: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,6 +208,7 @@ pub(crate) enum McpInstanceStaleReason {
     InvalidMetadata,
     RepoMismatch,
     DbMismatch,
+    VersionMismatch,
     SocketMissing,
     ProcessMissing,
 }
@@ -501,6 +515,7 @@ mod tests {
             pid: std::process::id(),
             protocol_version: atlas_mcp::MCP_PROTOCOL_VERSION.to_owned(),
             started_at: "2026-04-23T00:00:00Z".to_owned(),
+            binary_version: env!("CARGO_PKG_VERSION").to_owned(),
         };
         fs::create_dir_all(&instance.instance_dir).unwrap();
         let _listener = UnixListener::bind(&instance.socket_path).unwrap();
@@ -515,6 +530,36 @@ mod tests {
                     McpInstanceStaleReason::RepoMismatch,
                     McpInstanceStaleReason::DbMismatch,
                 ],
+            })
+        );
+    }
+
+    #[test]
+    fn inspect_metadata_marks_binary_version_mismatch_stale() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let instance = McpInstance::for_repo_and_db(
+            repo.to_str().unwrap(),
+            repo.join(".atlas/worldtree.db").to_str().unwrap(),
+        )
+        .unwrap();
+        fs::create_dir_all(&instance.instance_dir).unwrap();
+        let _listener = UnixListener::bind(&instance.socket_path).unwrap();
+        let mut metadata = instance.default_metadata(
+            std::process::id(),
+            atlas_mcp::MCP_PROTOCOL_VERSION,
+            "2026-04-23T00:00:00Z",
+        );
+        metadata.binary_version = "0.0.1-stale".to_owned();
+        instance.write_metadata(&metadata).unwrap();
+
+        let status = instance.inspect_metadata().unwrap();
+        assert_eq!(
+            status,
+            McpInstanceStatus::Stale(McpInstanceStale {
+                metadata: Some(metadata),
+                reasons: vec![McpInstanceStaleReason::VersionMismatch],
             })
         );
     }

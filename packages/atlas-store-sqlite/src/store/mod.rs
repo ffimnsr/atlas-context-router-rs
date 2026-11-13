@@ -30,7 +30,7 @@ pub use self::trace::{
     TraceDirection, TraceNode, TraceOptions, TracePath, TracePathResult, TraceResult,
 };
 
-type DanglingEdge = (i64, String, String, String, &'static str);
+pub type DanglingEdge = (i64, String, String, String, &'static str);
 
 /// SQLite-backed graph store.
 ///

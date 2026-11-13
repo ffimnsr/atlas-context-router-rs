@@ -4,51 +4,142 @@
   "title": "atlas_cli.v1 doctor",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "command", "data"],
+  "required": [
+    "schema_version",
+    "command",
+    "data"
+  ],
   "properties": {
-    "schema_version": { "const": "atlas_cli.v1" },
-    "command": { "const": "doctor" },
+    "schema_version": {
+      "const": "atlas_cli.v1"
+    },
+    "command": {
+      "const": "doctor"
+    },
     "data": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["ok", "error_code", "recovery_mode", "quarantine_path", "rebuild_result", "failure_reason", "message", "suggestions", "checks"],
+      "required": [
+        "ok",
+        "error_code",
+        "recovery_mode",
+        "quarantine_path",
+        "rebuild_result",
+        "failure_reason",
+        "message",
+        "suggestions",
+        "checks"
+      ],
       "properties": {
-        "ok": { "type": "boolean" },
-        "error_code": { "type": "string" },
-        "health_class": { "type": ["string", "null"] },
-        "recovery_mode": { "type": "string" },
-        "quarantine_path": { "type": ["string", "null"] },
-        "rebuild_result": { "type": "string" },
-        "failure_reason": { "type": ["string", "null"] },
-        "message": { "type": "string" },
-        "suggestions": { "type": "array", "items": { "type": "string" } },
-        "repo_provenance": { "$ref": "#/$defs/repo_provenance" },
-        "execution_state": { "type": "string" },
+        "ok": {
+          "type": "boolean"
+        },
+        "error_code": {
+          "type": "string"
+        },
+        "health_class": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recovery_mode": {
+          "type": "string"
+        },
+        "quarantine_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rebuild_result": {
+          "type": "string"
+        },
+        "failure_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "suggestions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "repo_provenance": {
+          "$ref": "#/$defs/repo_provenance"
+        },
+        "execution_state": {
+          "type": "string"
+        },
         "reachability_measurement": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "additionalProperties": false,
           "properties": {
-            "total_same_package_edges": { "type": "integer" },
-            "sampled_edges": { "type": "integer" },
-            "cross_crate_root_edges": { "type": "integer" },
-            "orphan_candidate_edges": { "type": "integer" },
-            "unknown_edges": { "type": "integer" },
-            "measurement_source": { "type": "string" },
-            "sample_limit": { "type": "integer" }
+            "total_same_package_edges": {
+              "type": "integer"
+            },
+            "sampled_edges": {
+              "type": "integer"
+            },
+            "cross_crate_root_edges": {
+              "type": "integer"
+            },
+            "orphan_candidate_edges": {
+              "type": "integer"
+            },
+            "unknown_edges": {
+              "type": "integer"
+            },
+            "measurement_source": {
+              "type": "string"
+            },
+            "sample_limit": {
+              "type": "integer"
+            }
           }
         },
         "reachability": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "additionalProperties": false,
           "properties": {
-            "enabled": { "type": "boolean" },
-            "owners_indexed": { "type": "integer" },
-            "owners_skipped": { "type": "integer" },
-            "unknown_reasons": { "type": "object", "additionalProperties": { "type": "integer" } },
-            "unresolved_mods": { "type": "integer" },
-            "weak_edges_accepted": { "type": "integer" },
-            "weak_edges_rejected": { "type": "integer" },
-            "budget_exhausted": { "type": "boolean" }
+            "enabled": {
+              "type": "boolean"
+            },
+            "owners_indexed": {
+              "type": "integer"
+            },
+            "owners_skipped": {
+              "type": "integer"
+            },
+            "unknown_reasons": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer"
+              }
+            },
+            "unresolved_mods": {
+              "type": "integer"
+            },
+            "weak_edges_accepted": {
+              "type": "integer"
+            },
+            "weak_edges_rejected": {
+              "type": "integer"
+            },
+            "budget_exhausted": {
+              "type": "boolean"
+            }
           }
         },
         "checks": {
@@ -56,12 +147,71 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["check", "ok", "detail", "issue_code"],
+            "required": [
+              "name",
+              "check",
+              "status",
+              "ok",
+              "message",
+              "detail",
+              "issue_code",
+              "details"
+            ],
             "properties": {
-              "check": { "type": "string" },
-              "ok": { "type": "boolean" },
-              "detail": { "type": "string" },
-              "issue_code": { "type": ["string", "null"] }
+              "name": {
+                "type": "string"
+              },
+              "check": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "ok": {
+                "type": "boolean"
+              },
+              "message": {
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "issue_code": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "details": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "label": {
+                    "type": "string"
+                  },
+                  "ok": {
+                    "type": "boolean"
+                  },
+                  "issue_code": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "noncanonical_path_rows": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "label",
+                  "ok",
+                  "issue_code",
+                  "noncanonical_path_rows"
+                ]
+              }
             }
           }
         }
@@ -72,12 +222,27 @@
     "repo_provenance": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["repo_id", "repo_fingerprint", "repo_root"],
+      "required": [
+        "repo_id",
+        "repo_fingerprint",
+        "repo_root"
+      ],
       "properties": {
-        "repo_id": { "type": "string" },
-        "repo_fingerprint": { "type": "string" },
-        "repo_root": { "type": "string" },
-        "remote_url": { "type": ["string", "null"] }
+        "repo_id": {
+          "type": "string"
+        },
+        "repo_fingerprint": {
+          "type": "string"
+        },
+        "repo_root": {
+          "type": "string"
+        },
+        "remote_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     }
   }

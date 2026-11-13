@@ -5,14 +5,17 @@ use atlas_core::BudgetReport;
 use atlas_core::GraphToolRequirement;
 use atlas_core::model::{
     ChangeType, ContextIntent, ContextRequest, ContextResult, ContextTarget, ImpactResult,
-    ReviewContext, ReviewImpactOverview, RiskSummary, SelectionReason,
+    SelectionReason,
 };
 use atlas_impact::analyze as advanced_impact;
 use atlas_repo::{
     DiffTarget, RepoRegistry, changed_files, find_repo_root, phase1_multi_repo_supported,
     stable_repo_id,
 };
-use atlas_review::{ContextEngine, build_explain_change_summary, empty_explain_change_summary};
+use atlas_review::{
+    ContextEngine, build_explain_change_summary, empty_explain_change_summary,
+    explain_change_wire_payload,
+};
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 use std::fmt::Write as _;
@@ -590,6 +593,7 @@ pub fn run_detect_changes(cli: &Cli) -> Result<()> {
     let store_result = Store::open(&db_path);
 
     if cli.json {
+        let entries = augment_changes_with_node_counts(&changes, store_result.as_ref().ok());
         print_json(
             "detect_changes",
             serde_json::json!({
@@ -598,7 +602,10 @@ pub fn run_detect_changes(cli: &Cli) -> Result<()> {
                     "staged": staged,
                     "kind": if staged { "staged" } else if base.is_some() { "base_ref" } else { "working_tree" },
                 },
-                "changes": augment_changes_with_node_counts(&changes, store_result.as_ref().ok()),
+                // `changes` is the historical CLI key; `files` matches MCP.
+                // Emit both so consumers never branch on surface.
+                "files": entries.clone(),
+                "changes": entries,
             }),
         )?;
     } else if changes.is_empty() {
@@ -708,7 +715,7 @@ pub fn run_explain_change(cli: &Cli) -> Result<()> {
         if target_files.is_empty() {
             let empty = empty_explain_change_summary();
             if cli.json {
-                print_json("explain_change", serde_json::to_value(&empty)?)?;
+                print_json("explain_change", explain_change_wire_payload(&empty))?;
             } else {
                 println!("No changed files detected.");
             }
@@ -752,7 +759,7 @@ pub fn run_explain_change(cli: &Cli) -> Result<()> {
         )?;
 
         if cli.json {
-            print_json("explain_change", serde_json::to_value(&summary)?)?;
+            print_json("explain_change", explain_change_wire_payload(&summary))?;
         } else {
             println!("Risk level      : {}", summary.risk_level);
             println!("Changed files   : {}", summary.changed_file_count);
@@ -1009,7 +1016,13 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
                 print_json(
                     "impact",
                     serde_json::json!({
-                        "files": target_files,
+                        // Same `files` element shape as the non-empty path so
+                        // empty and populated payloads share one schema.
+                        "files": target_files.iter().map(|(repo_id, path)| serde_json::json!({
+                            "repo_id": repo_id,
+                            "repo_alias": repo_id,
+                            "path": path,
+                        })).collect::<Vec<_>>(),
                         "repo_scope": {
                             "selected_repo_count": selected_repos.len(),
                             "processed_repo_count": processed_repo_count,
@@ -1293,38 +1306,33 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
 
         if target_files.is_empty() {
             if cli.json {
-                let empty = ReviewContext {
-                    changed_files: vec![],
-                    changed_symbols: vec![],
-                    changed_symbol_summaries: vec![],
-                    impacted_neighbors: vec![],
-                    critical_edges: vec![],
-                    impact_overview: ReviewImpactOverview {
-                        max_depth,
-                        max_nodes,
-                        impacted_node_count: 0,
-                        impacted_file_count: 0,
-                        relevant_edge_count: 0,
-                        reached_node_limit: false,
-                    },
-                    risk_summary: RiskSummary {
-                        changed_symbol_count: 0,
-                        public_api_changes: 0,
-                        test_adjacent: false,
-                        affected_test_count: 0,
-                        uncovered_changed_symbol_count: 0,
-                        large_function_touched: false,
-                        large_function_count: 0,
-                        cross_module_impact: false,
-                        cross_package_impact: false,
-                        cross_repo_impact: false,
-                    },
-                };
+                // Emit the same `context_result` envelope as the non-empty path
+                // (D10). Previously this branch returned `{files, review_context}`
+                // while `--files` returned the context engine payload, forcing
+                // consumers to branch on shape.
                 print_json(
                     "review_context",
                     serde_json::json!({
-                        "files": target_files,
-                        "review_context": empty,
+                        "request": {
+                            "intent": "review",
+                            "target": { "kind": "changed_files", "paths": [] },
+                            "max_nodes": max_nodes,
+                            "depth": max_depth,
+                        },
+                        "nodes": [],
+                        "edges": [],
+                        "files": [],
+                        "truncation": {},
+                        "ambiguity": serde_json::Value::Null,
+                        "workflow": serde_json::Value::Null,
+                        "saved_context_sources": [],
+                        "budget_status": "ok",
+                        "budget_hit": false,
+                        "budget_name": serde_json::Value::Null,
+                        "budget_limit": serde_json::Value::Null,
+                        "budget_observed": serde_json::Value::Null,
+                        "partial": false,
+                        "safe_to_answer": true,
                     }),
                 )?;
             } else if format == ReviewContextFormat::Markdown {

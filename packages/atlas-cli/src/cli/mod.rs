@@ -255,6 +255,17 @@ pub enum Command {
 
     /// List graph symbols with deterministic ordering and pagination.
     Symbols {
+        /// Resolve one symbol by qualified name, exact name, then prefix.
+        ///
+        /// Prints a single match with its canonical qualified name, or a
+        /// bounded ambiguity list. Mutually exclusive with pagination flags.
+        #[arg(long, value_name = "NAME")]
+        resolve: Option<String>,
+
+        /// Restrict resolution to a file path (exact or prefix).
+        #[arg(long)]
+        file: Option<String>,
+
         /// Filter by node kind (e.g. `function`, `struct`); accepts aliases like `fn`.
         #[arg(long)]
         kind: Option<String>,
@@ -542,6 +553,10 @@ pub enum Command {
     ExplainQuery {
         /// Search text.
         text: String,
+
+        /// Treat `text` as a regex pattern and run a structural scan.
+        #[arg(long)]
+        regex: bool,
 
         /// Filter by node kind.
         #[arg(long)]

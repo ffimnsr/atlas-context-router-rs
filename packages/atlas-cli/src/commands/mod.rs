@@ -151,44 +151,13 @@ pub(crate) fn print_json(command: &str, data: serde_json::Value) -> Result<()> {
     Ok(())
 }
 
-const SYNTHETIC_GRAPH_PREFIX: &str = ".atlas/synthetic/";
-
-fn is_synthetic_graph_path(path: &str) -> bool {
-    path.starts_with(SYNTHETIC_GRAPH_PREFIX)
-}
-
-pub(crate) fn public_graph_stats(store: &Store, source_repo_id: &str) -> Result<GraphStats> {
-    let raw = store.stats()?;
-    let mut file_count = 0i64;
-    let mut node_count = 0i64;
-    let mut edge_count = 0i64;
-    let mut nodes_by_kind = std::collections::BTreeMap::<String, i64>::new();
-    let mut languages = std::collections::BTreeSet::<String>::new();
-
-    for file_path in store.file_hashes_for_repo(source_repo_id)?.into_keys() {
-        if is_synthetic_graph_path(&file_path) {
-            continue;
-        }
-        file_count += 1;
-        for node in store.nodes_by_file(&file_path)? {
-            node_count += 1;
-            *nodes_by_kind
-                .entry(node.kind.as_str().to_owned())
-                .or_default() += 1;
-            languages.insert(node.language);
-        }
-        edge_count +=
-            i64::try_from(store.edges_by_file(&file_path)?.len()).expect("edge count fits in i64");
-    }
-
-    Ok(GraphStats {
-        file_count,
-        node_count,
-        edge_count,
-        nodes_by_kind: nodes_by_kind.into_iter().collect(),
-        languages: languages.into_iter().collect(),
-        last_indexed_at: raw.last_indexed_at,
-    })
+pub(crate) fn public_graph_stats(store: &Store, _source_repo_id: &str) -> Result<GraphStats> {
+    // One counting source for every surface. `status`, `doctor`,
+    // `list_graph_stats`, and `debug_graph` all report counts from
+    // `Store::graph_stats()`, which excludes `.atlas/synthetic/` metadata rows.
+    // Previously this CLI helper re-summed per-file rows while MCP tools used
+    // raw `Store::stats()`, producing a 28-node/26-edge/26-file delta.
+    Ok(store.graph_stats()?)
 }
 
 pub(crate) fn load_budget_policy(repo_root: &str) -> Result<BudgetPolicy> {

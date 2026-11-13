@@ -271,15 +271,6 @@ fn parse_batch_query_items(
     })
 }
 
-pub(super) fn tool_list_graph_stats(
-    db_path: &str,
-    output_format: crate::output::OutputFormat,
-) -> Result<serde_json::Value> {
-    let store = open_store(db_path)?;
-    let stats = store.stats().context("stats query failed")?;
-    tool_result_value(&stats, output_format)
-}
-
 pub(super) fn tool_query_graph(
     args: Option<&serde_json::Value>,
     repo_root: &str,
@@ -624,7 +615,7 @@ pub(super) fn tool_batch_query_graph(
 
         normalized_items.push(serde_json::json!({
             "query_index": idx,
-            "text": source_text,
+            "text": source_text.clone(),
             "normalized_text": text,
             "regex": query.regex_pattern,
             "kind": query.kind,
@@ -642,6 +633,8 @@ pub(super) fn tool_batch_query_graph(
         }));
         batch_results.push(serde_json::json!({
             "query_index": idx,
+            "query": source_text.clone(),
+            "text": source_text,
             "matches": items,
             "summary": {
                 "match_count": results.len(),

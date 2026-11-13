@@ -211,7 +211,7 @@ pub fn derive_graph_readiness(store: &Store, repo_root: &str, db_path: &str) -> 
             }
         };
 
-    let (file_count, graph_has_content, last_indexed_at) = match store.stats() {
+    let (file_count, graph_has_content, last_indexed_at) = match store.graph_stats() {
         Ok(s) => {
             let has_content = s.node_count > 0 || s.edge_count > 0 || s.file_count > 0;
             (s.file_count, has_content, s.last_indexed_at)

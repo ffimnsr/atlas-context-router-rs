@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use atlas_core::BudgetManager;
-use atlas_core::NodeKind;
 use camino::Utf8Path;
 use serde::Serialize;
 use serde_json::json;
@@ -101,35 +100,14 @@ fn collect_retrieval_index_summary(repo_root: &str, db_path: &str) -> RetrievalI
 }
 
 fn structural_orphans(store: &atlas_store_sqlite::Store, limit: usize) -> Vec<atlas_core::Node> {
-    store
-        .orphan_nodes(limit)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|node| node.kind != NodeKind::File)
-        .collect()
+    store.structural_orphan_nodes(limit).unwrap_or_default()
 }
 
 fn structural_dangling_edges(
     store: &atlas_store_sqlite::Store,
     limit: usize,
 ) -> Vec<(i64, String, String, String, &'static str)> {
-    store
-        .dangling_edges(limit)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|(_, _, _, kind, _)| {
-            matches!(
-                kind.as_str(),
-                "contains"
-                    | "defines"
-                    | "implements"
-                    | "extends"
-                    | "imports"
-                    | "tests"
-                    | "tested_by"
-            )
-        })
-        .collect()
+    store.structural_dangling_edges(limit).unwrap_or_default()
 }
 
 fn integrity_issue_code(issues: &[String], structural_problem: bool) -> &'static str {
@@ -165,9 +143,10 @@ pub(super) fn tool_broker_status(
     worker_threads: usize,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
+    let handler_start = Instant::now();
     let uptime_secs = STARTED_AT.get_or_init(Instant::now).elapsed().as_secs();
 
-    let response = serde_json::json!({
+    let mut response = serde_json::json!({
         "ok": true,
         "pid": std::process::id(),
         "version": env!("CARGO_PKG_VERSION"),
@@ -176,6 +155,14 @@ pub(super) fn tool_broker_status(
         "repo_root": repo_root,
         "db_path": db_path,
     });
+    // Handler-only latency excludes transport framing and client round-trip.
+    // Recorded so operators can distinguish broker overhead from host noise.
+    if let Some(object) = response.as_object_mut() {
+        object.insert(
+            "handler_duration_us".to_owned(),
+            serde_json::json!(handler_start.elapsed().as_micros() as u64),
+        );
+    }
 
     tool_result_value(&response, output_format)
 }
@@ -203,7 +190,7 @@ pub(super) fn tool_status(
 
     let (node_count, edge_count, file_count, last_indexed_at) = if let Some(store) = store.as_ref()
     {
-        match store.stats() {
+        match store.graph_stats() {
             Ok(stats) => (
                 stats.node_count,
                 stats.edge_count,
@@ -366,6 +353,7 @@ pub(super) fn tool_status(
         "indexed_file_count": file_count,
         "failure_category": category,
         "ready": ok,
+        "ready_scope": "retrieval",
         "safe_for_symbol_lookup": matches!(execution_state, atlas_core::GraphExecutionState::Fresh | atlas_core::GraphExecutionState::Stale),
         "safe_for_analysis": matches!(execution_state, atlas_core::GraphExecutionState::Fresh),
         "retrieval_index": retrieval_index,
@@ -422,6 +410,7 @@ pub(super) fn tool_doctor(
         detail: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         issue_code: Option<&'static str>,
+        noncanonical_path_rows: Option<usize>,
     }
 
     fn check_label(check: &'static str) -> &'static str {
@@ -462,6 +451,7 @@ pub(super) fn tool_doctor(
                 ok: true,
                 detail: $detail.into(),
                 issue_code: None,
+                noncanonical_path_rows: None,
             }
         };
     }
@@ -473,6 +463,7 @@ pub(super) fn tool_doctor(
                 ok: false,
                 detail: $detail.into(),
                 issue_code: None,
+                noncanonical_path_rows: None,
             }
         };
         ($name:expr, $detail:expr, $issue_code:expr) => {
@@ -482,11 +473,14 @@ pub(super) fn tool_doctor(
                 ok: false,
                 detail: $detail.into(),
                 issue_code: Some($issue_code),
+                noncanonical_path_rows: None,
             }
         };
     }
 
     let mut checks: Vec<LegacyCheckItem> = Vec::new();
+
+    checks.push(pass!("repo_root", repo_root));
 
     match find_repo_root(Utf8Path::new(repo_root)) {
         Ok(root) => checks.push(pass!("git_root", root.as_str())),
@@ -551,7 +545,7 @@ pub(super) fn tool_doctor(
                         graph_issue_code(&e.to_string())
                     )),
                 }
-                match store.stats() {
+                match store.graph_stats() {
                     Ok(st) => checks.push(pass!(
                         "graph_stats",
                         format!(
@@ -689,22 +683,6 @@ pub(super) fn tool_doctor(
                         "retrieval_index_unavailable"
                     )),
                 }
-
-                match cs.noncanonical_repo_path_sources(100) {
-                    Ok(issues) if issues.is_empty() => {
-                        checks.push(pass!("content_path_identity", "ok"))
-                    }
-                    Ok(issues) => checks.push(fail!(
-                        "content_path_identity",
-                        issues.join("; "),
-                        "noncanonical_path_rows"
-                    )),
-                    Err(e) => checks.push(fail!(
-                        "content_path_identity",
-                        e.to_string(),
-                        "noncanonical_path_rows"
-                    )),
-                }
             }
             Err(_) => checks.push(fail!(
                 "retrieval_index",
@@ -714,10 +692,29 @@ pub(super) fn tool_doctor(
         }
     }
 
-    checks.push(pass!(
-        "connection_mode",
-        "single_connection_per_store; parallel_parse+sequential_persistence; no_read_pool (pooled graph reads not implemented)"
-    ));
+    // Shared schema/canonicality checks. Produced by
+    // `atlas-engine::doctor` so CLI and MCP `doctor` cannot drift.
+    for check in atlas_engine::doctor::shared_checks(db_path) {
+        checks.push(if check.ok {
+            LegacyCheckItem {
+                check: check.name,
+                label: check_label(check.name),
+                ok: true,
+                detail: check.message,
+                issue_code: None,
+                noncanonical_path_rows: check.details.noncanonical_path_rows,
+            }
+        } else {
+            LegacyCheckItem {
+                check: check.name,
+                label: check_label(check.name),
+                ok: false,
+                detail: check.message,
+                issue_code: check.issue_code,
+                noncanonical_path_rows: check.details.noncanonical_path_rows,
+            }
+        });
+    }
 
     let ok_count = checks.iter().filter(|c| c.ok).count();
     let fail_count = checks.len().saturating_sub(ok_count);
@@ -735,12 +732,17 @@ pub(super) fn tool_doctor(
         .map(|check| {
             json!({
                 "name": check.check,
+                "check": check.check,
                 "status": if check.ok { "pass" } else { "fail" },
+                "ok": check.ok,
                 "message": &check.detail,
+                "detail": &check.detail,
+                "issue_code": check.issue_code,
                 "details": {
                     "label": check.label,
                     "ok": check.ok,
                     "issue_code": check.issue_code,
+                    "noncanonical_path_rows": check.noncanonical_path_rows,
                 },
                 "fix_hint": fix_hint_for(check.issue_code, check.check),
             })
@@ -995,9 +997,19 @@ pub(super) fn tool_db_check(
         );
     }
 
+    let schema_probes = {
+        let (graph, content, session) = atlas_engine::doctor::probe_all_schemas(db_path);
+        json!({
+            "graph": graph,
+            "content": content,
+            "session": session,
+        })
+    };
+
     let payload = json!({
         "ok": ok,
         "health_class": health_class,
+        "schema_version": schema_probes,
         "recovery_mode": "block_only",
         "quarantine_path": serde_json::Value::Null,
         "rebuild_result": if ok { "not_needed" } else { "blocked" },
@@ -1091,16 +1103,16 @@ pub(super) fn tool_debug_graph(
     );
 
     let store = open_store(db_path)?;
-    let stats = store.stats().context("cannot read graph stats")?;
+    let stats = store.graph_stats().context("cannot read graph stats")?;
     let edge_kinds = store.edge_kind_stats().context("edge kind stats failed")?;
     let top_files = store
-        .top_files_by_node_count(10)
+        .top_files_by_node_count(limit)
         .context("top files query failed")?;
     let orphans = store
         .orphan_nodes(limit)
         .context("orphan node query failed")?;
     let dangling = store
-        .dangling_edges(limit)
+        .structural_dangling_edges(limit)
         .context("dangling edge query failed")?;
 
     let orphan_nodes = orphans
@@ -1130,7 +1142,13 @@ pub(super) fn tool_debug_graph(
 
     let top_file_rows = top_files
         .iter()
-        .map(|(path, count)| json!({ "path": path, "node_count": count }))
+        .map(|(path, count)| {
+            json!({
+                "file_path": path,
+                "path": path,
+                "node_count": count,
+            })
+        })
         .collect::<Vec<_>>();
 
     let payload = json!({
@@ -1177,6 +1195,7 @@ pub(super) fn tool_debug_graph(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use atlas_core::NodeKind;
     use atlas_core::{Edge, EdgeKind, Node, NodeId};
 
     fn open_store() -> atlas_store_sqlite::Store {

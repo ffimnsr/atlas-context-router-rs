@@ -54,6 +54,12 @@ pub fn is_schema_mismatch_error(error: &str) -> bool {
         "table nodes has",
         "table files has",
         "table retrieval_index_state has",
+        // `atlas-db-utils` rejects databases whose `PRAGMA user_version` is
+        // newer than the migration set this binary was built with. That is a
+        // schema mismatch, not physical corruption: the database itself may be
+        // perfectly healthy and is waiting for a newer Atlas binary.
+        "newer than atlas-supported version",
+        "unsupported target schema version",
     ]
     .iter()
     .any(|needle| lower.contains(needle))
@@ -359,6 +365,16 @@ mod tests {
         assert_eq!(
             classify_graph_store_error("legacy_repo_identity: table=files rowid=1"),
             GraphStoreHealthClass::LogicalInconsistency
+        );
+        assert_eq!(
+            classify_graph_store_error(
+                "database error: database schema version 10 newer than atlas-supported version 9"
+            ),
+            GraphStoreHealthClass::SchemaMismatch
+        );
+        assert_eq!(
+            classify_graph_store_error("unsupported target schema version 21; latest is 20"),
+            GraphStoreHealthClass::SchemaMismatch
         );
     }
 

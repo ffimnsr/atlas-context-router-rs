@@ -174,8 +174,8 @@ Agents must execute both the MCP tool call and the equivalent CLI command:
 ## 6. Comprehensive Tool-by-Tool Test Suites (80 Tools)
 
 #### Tool 1: `broker_status`
-**Description**: Returns a lightweight liveness and health check for the MCP broker process itself, reporting PID, uptime, server version, and worker threads.
-**Canonical CLI Parity Command**: `./target/debug/atlas status --json`
+**Description**: Returns a lightweight liveness and health check for the MCP broker process itself, reporting PID, uptime, server version, and configured worker threads.
+**Canonical CLI Parity Command**: N/A — the CLI cannot inspect a live broker's PID/uptime. Use `./target/debug/atlas status --json` only for graph readiness.
 
 ##### Test 1.1: Verify Broker Process Liveness and Threading
 **Intent in Plain English**: Verify that the background broker process is running, responsive, and configured with healthy worker thread pools before initiating graph operations.
@@ -186,13 +186,13 @@ Agents must execute both the MCP tool call and the equivalent CLI command:
 ```
 
 **Expected Clean Output & Assertions**:
-- Check `structuredContent.status == 'ok'`
-- Check `structuredContent.worker_threads >= 1`
-- Check `structuredContent.uptime_seconds >= 0`
-- Verify `structuredContent.server_version` matches the semantic version string in `Cargo.toml`
+- Check `structuredContent.ok == true`
+- Check `structuredContent.worker_threads_configured >= 1`
+- Check `structuredContent.uptime_secs >= 0`
+- Verify `structuredContent.version` matches the semantic version string in `Cargo.toml`
 
 **CLI Parity Command**:
-```./target/debug/atlas status --json```
+N/A — broker latency/threads are process-local to the MCP server.
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -209,11 +209,12 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify the call completes synchronously under 50ms without initiating disk I/O on `worldtree.db`
+- Verify the call completes synchronously; read `structuredContent.handler_duration_us` for handler-only time
+- End-to-end latency includes transport framing and client round-trip, so the `handler_duration_us` value is the only stable budget assertion
 - Confirm `structuredContent.pid > 0` and process ID is valid
 
 **CLI Parity Command**:
-```./target/debug/atlas status --json```
+N/A — no CLI surface measures broker handler latency.
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -230,11 +231,12 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `structuredContent.worker_threads` remains intact
+- Verify `structuredContent.worker_threads_configured` remains intact
+- Confirm `structuredContent.version` equals the running binary version (a mismatch means a stale broker; restart it)
 - Confirm no error payload is returned in `structuredContent`
 
 **CLI Parity Command**:
-```./target/debug/atlas status --json```
+N/A — broker liveness is MCP-process-local.
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -261,7 +263,9 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Check `structuredContent.db_state.open_ok == true`
 - Check `structuredContent.node_count > 20000` (actual parsed nodes on this repo: ~25,279)
 - Check `structuredContent.edge_count > 80000` (actual parsed edges: ~100,038)
-- Verify `structuredContent.safe_for_symbol_lookup == true`
+- Check `structuredContent.safe_for_symbol_lookup == true`
+- MCP and CLI report the same counts from `Store::graph_stats()`, which excludes `.atlas/synthetic/` owner/workspace/repo metadata rows; the historical 28-package-node delta is gone
+- `ready` is retrieval-scoped (`ready_scope == 'retrieval'`); use `health_class`/`safe_for_analysis` for graph readiness
 
 **CLI Parity Command**:
 ```./target/debug/atlas status --json```
@@ -305,6 +309,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 **Expected Clean Output & Assertions**:
 - Check `structuredContent.retrieval_index.available == true`
 - Check `structuredContent.retrieval_index.searchable == true`
+- Verify `retrieval_index.content_schema_ok == true` and `retrieval_index.content_schema_version <= content_schema_supported`; a newer-than-supported `context.db` reports `available=false` with the schema error in `last_error`
 - Verify `retrieval_index.content_db_path` ends with `.atlas/context.db`
 
 **CLI Parity Command**:
@@ -332,8 +337,9 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `structuredContent.checks` array contains passes for `git_root`, `atlas_dir`, `db_open`, and `graph_built`
-- Check that every check object has `pass == true` or structured warnings
+- Verify `structuredContent.checks` array contains passes for `git_root`, `atlas_dir`, `db_open`, and `graph_build_state`
+- Check that every check object has `ok == true` and `status == 'pass'` (or structured warnings)
+- Verify the check set matches the CLI `doctor` check set exactly (`repo_root`, `git_root`, `atlas_dir`, `config_file`, `mcp_serve_config`, `db_file`, `db_open`, `db_integrity`, `graph_stats`, `graph_build_state`, `git_ls_files`, `graph_freshness`, `retrieval_index`, `schema_version`, `session_schema`, `path_canonicality`, `connection_mode`)
 - Verify overall health outcome is reported without unhandled exceptions
 
 **CLI Parity Command**:
@@ -405,7 +411,8 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 **Expected Clean Output & Assertions**:
 - Verify `structuredContent.ok == true`
-- Verify `structuredContent.sqlite_integrity == 'ok'`
+- Verify `structuredContent.integrity.ok == true` and `structuredContent.integrity.issue_count == 0`
+- Verify `structuredContent.schema_version` reports `graph`/`content`/`session` versions and `supported_version`
 
 **CLI Parity Command**:
 ```./target/debug/atlas db-check --json```
@@ -427,8 +434,8 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `structuredContent.orphan_count` is returned as an integer
-- Verify `structuredContent.orphan_samples` array length is <= 10
+- Verify `structuredContent.summary.orphan_node_count` is returned as an integer
+- Verify `structuredContent.orphan_nodes` array length is <= 10
 
 **CLI Parity Command**:
 ```./target/debug/atlas db-check --json```
@@ -448,8 +455,9 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `structuredContent.dangling_edge_count == 0`
-- Verify `structuredContent.memories_schema_valid == true`
+- Verify `structuredContent.summary.dangling_edge_count == 0`; `db_check` and `debug_graph` use the same structural-kind query
+- Verify `structuredContent.session_db.memory_schema.ok == true`
+- A session store newer than `supported_version` fails closed with `health_class=schema_mismatch` on both surfaces
 
 **CLI Parity Command**:
 ```./target/debug/atlas db-check --json```
@@ -538,11 +546,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ---
 
 #### Tool 6: `get_metrics`
-**Description**: Returns in-process runtime metrics for Atlas: counter and histogram data for build/update duration, tree-cache reuse ratio, query latency, and MCP tool call counts.
-**Canonical CLI Parity Command**: `./target/debug/atlas status --json`
+**Description**: Returns in-process runtime metrics for Atlas: counter and histogram data for build/update duration, parser tree-cache reuse, query latency, and MCP tool call counts. The payload carries `tool: "get_metrics"` for surface identification.
+**Canonical CLI Parity Command**: N/A — the CLI has no `atlas metrics` surface. Metrics are process-local to the MCP server.
 
-##### Test 6.1: Inspect Tree-Cache Reuse Ratio
-**Intent in Plain English**: Verify that the incremental parser tree cache is active and measuring AST subtree reuse across invocations.
+##### Test 6.1: Inspect Parser Tree-Cache Reuse Ratio
+**Intent in Plain English**: Verify that the incremental parser tree cache reports a reuse ratio in range and understand that a clean build legitimately reuses nothing.
 
 **MCP Arguments (JSON)**:
 ```json
@@ -550,14 +558,13 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `structuredContent.metrics` contains `parser_tree_cache_hit_ratio` or counter families
-- Verify value is between 0.0 and 1.0
+- Verify `structuredContent.tool == 'get_metrics'`
+- Verify `structuredContent.parser_cache_reuse_ratio` is between 0.0 and 1.0
+- Verify `structuredContent.parser_parses_total` and `parser_tree_reuses_total` are integers
+- A value of `0.0` after a full build is expected; reuse rises only when `update_graph` re-parses files that already have cached trees
 
 **CLI Parity Command**:
-```./target/debug/atlas status --json```
-
-**CLI Parity Verification Statement**:
-Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
+N/A — no CLI metrics surface; `status --json` intentionally omits counters.
 
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
@@ -571,20 +578,17 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `structuredContent.tool_call_counts` exists
-- Verify counter for `status` or `get_metrics` is >= 1
+- Verify `structuredContent.mcp_tool_calls` exists
+- Verify `structuredContent.mcp_tool_calls['get_metrics'].ok >= 1`
 
 **CLI Parity Command**:
-```./target/debug/atlas status --json```
-
-**CLI Parity Verification Statement**:
-Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
+N/A — tool counters are MCP-process-local.
 
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
 ##### Test 6.3: Query Latency Distribution Check
-**Intent in Plain English**: Inspect FTS and traversal query latency metrics to confirm sub-millisecond graph query responsiveness.
+**Intent in Plain English**: Inspect FTS and regex-scan latency histograms to characterise graph query responsiveness on this host.
 
 **MCP Arguments (JSON)**:
 ```json
@@ -592,21 +596,15 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify histogram data or average duration exists under `query_latency`
-- Confirm no anomalous timeout counters are incremented
+- Verify `structuredContent.query_duration_ms` is an object of labelled histograms (`fts5`, `regex_structural_scan`, ...)
+- Record `count`, `mean_ms`, and `max_ms`; do not assert sub-millisecond latency on shared hosts
+- Confirm no timeout counters exist or are incremented
 
 **CLI Parity Command**:
-```./target/debug/atlas status --json```
-
-**CLI Parity Verification Statement**:
-Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
+N/A — no CLI metrics surface.
 
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
-
-
----
-
 
 ### Category: Symbol Search & Index Exploration
 #### Tool 7: `list_symbols`
@@ -1093,6 +1091,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 #### Tool 11: `explain_query`
 **Description**: Explains how a query_graph invocation would be executed: tokenisation, FTS phrase construction, regex validation, and expected search path.
 **Canonical CLI Parity Command**: `./target/debug/atlas explain-query 'classify_graph_store_error' --json`
+**Regex Parity Command**: `./target/debug/atlas explain-query '^handle_' --regex --json` (maps to MCP `{"text":"^handle_","regex":"^handle_"}` structural scan)
 
 ##### Test 11.1: Explain Tokenization for Identifier Query
 **Intent in Plain English**: Pre-flight inspect how `classify_graph_store_error` is tokenized by SQLite FTS5.
@@ -1778,7 +1777,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 #### Tool 19: `get_minimal_context`
 **Description**: Auto-detects changed files from git and returns a compact review bundle: changed symbols, immediate impact, and risk flags with lower overhead than get_review_context.
-**Canonical CLI Parity Command**: `./target/debug/atlas review-context --minimal --json`
+**Canonical CLI Parity Command**: `./target/debug/atlas review-context --json`
 
 ##### Test 19.1: Minimal Review Bundle on Working Tree Changes
 **Intent in Plain English**: Get high-signal minimal review context for currently modified files.
@@ -1798,7 +1797,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify payload stays well under 2,000 tokens
 
 **CLI Parity Command**:
-```./target/debug/atlas review-context --minimal --json```
+```./target/debug/atlas review-context --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -1825,7 +1824,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify respects `max_nodes: 10`
 
 **CLI Parity Command**:
-```./target/debug/atlas review-context --minimal --json```
+```./target/debug/atlas review-context --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -1849,7 +1848,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify handles staged changes or returns empty bundle cleanly if nothing is staged
 
 **CLI Parity Command**:
-```./target/debug/atlas review-context --minimal --json```
+```./target/debug/atlas review-context --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -2050,8 +2049,9 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 **Expected Clean Output & Assertions**:
 - Verify `structuredContent.risk_level` is categorized (low/medium/high)
-- Verify `changed_symbols` groups changes into `api`, `signature`, or `internal`
-- Verify `test_coverage_gaps` flags any untested modified symbols
+- Verify `structuredContent.change_kinds` reports `api_change`, `signature_change`, and `internal_change` counts (`changed_by_kind` remains as the legacy alias)
+- Verify `coverage_gaps` flags any untested modified symbols
+- Verify `changed_files` is present; the CLI emits the same `change_kinds`/`changed_files`/`coverage_gaps` keys
 
 **CLI Parity Command**:
 ```./target/debug/atlas explain-change --json```
@@ -2133,6 +2133,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 **Expected Clean Output & Assertions**:
 - Verify `structuredContent.files` lists modified files (e.g. `packages/atlas-mcp/src/tools/dispatch.rs`)
+- Verify `structuredContent.changes` carries the same entries (`files` is the MCP key; the CLI now emits both)
 - Verify each file entry has `node_count` reflecting parsed symbols in that file
 
 **CLI Parity Command**:

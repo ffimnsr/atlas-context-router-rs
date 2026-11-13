@@ -16,6 +16,8 @@ pub fn run_symbols(cli: &Cli) -> Result<()> {
     let db_path = db_path(cli, &repo);
 
     let (
+        resolve,
+        file,
         kind,
         language,
         subpath,
@@ -28,6 +30,8 @@ pub fn run_symbols(cli: &Cli) -> Result<()> {
         allow_partial,
     ) = match &cli.command {
         Command::Symbols {
+            resolve,
+            file,
             kind,
             language,
             subpath,
@@ -39,6 +43,8 @@ pub fn run_symbols(cli: &Cli) -> Result<()> {
             allow_stale,
             allow_partial,
         } => (
+            resolve.clone(),
+            file.clone(),
             kind.clone(),
             language.clone(),
             subpath.clone(),
@@ -104,6 +110,19 @@ pub fn run_symbols(cli: &Cli) -> Result<()> {
         .map(normalize)
         .filter(|scope| !scope.trim().is_empty())
         .collect();
+
+    if let Some(name) = resolve {
+        let file_filter = file.map(&normalize);
+        return run_symbol_resolve(
+            cli,
+            &store,
+            &name,
+            file_filter.as_deref(),
+            kind.as_deref(),
+            language.as_deref(),
+            limit,
+        );
+    }
 
     let filter = NodeListFilter {
         kind: kind.as_deref(),
@@ -207,4 +226,108 @@ pub fn run_symbols(cli: &Cli) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Resolve one symbol without fuzzy fallback.
+///
+/// Order: exact qualified name, exact short name, then FTS prefix candidates.
+/// `file`, `kind`, and `language` filters apply before ranking so a unique
+/// post-filter match resolves deterministically.
+fn run_symbol_resolve(
+    cli: &Cli,
+    store: &Store,
+    name: &str,
+    file: Option<&str>,
+    kind: Option<&str>,
+    language: Option<&str>,
+    limit: usize,
+) -> Result<()> {
+    let keep = |node: &atlas_core::Node| {
+        file.is_none_or(|pattern| node.file_path.contains(pattern))
+            && kind.is_none_or(|kind| node.kind.as_str() == kind)
+            && language.is_none_or(|language| node.language == language)
+    };
+
+    let mut matches: Vec<atlas_core::Node> = Vec::new();
+    if let Some(node) = store
+        .node_by_qname(name)
+        .context("qualified-name lookup failed")?
+        && keep(&node)
+    {
+        matches.push(node);
+    }
+    if matches.is_empty() {
+        matches = store
+            .nodes_by_name(name, limit.max(1))
+            .context("name lookup failed")?
+            .into_iter()
+            .filter(keep)
+            .collect();
+    }
+    if matches.is_empty() {
+        let query = atlas_core::SearchQuery {
+            text: name.to_owned(),
+            kind: kind.map(str::to_owned),
+            language: language.map(str::to_owned),
+            limit: limit.max(1),
+            ..Default::default()
+        };
+        matches = atlas_search::execute_query(store, &query, false)
+            .context("symbol resolution search failed")?
+            .into_iter()
+            .map(|matched| matched.node)
+            .filter(keep)
+            .collect();
+    }
+
+    let match_count = matches.len();
+    let best_match = matches.first();
+    let truncated = match_count > limit;
+
+    if cli.json {
+        print_json(
+            "symbols",
+            serde_json::json!({
+                "tool": "symbols",
+                "action": "resolve",
+                "query": {
+                    "name": name,
+                    "file": file,
+                    "kind": kind,
+                    "language": language,
+                },
+                "match_count": match_count,
+                "best_match": best_match.map(symbol_json).unwrap_or(serde_json::Value::Null),
+                "matches": matches.iter().take(limit).map(symbol_json).collect::<Vec<_>>(),
+                "truncated": truncated,
+            }),
+        )?;
+    } else if let Some(node) = best_match {
+        println!(
+            "{}\t{}\t{}:{}-{}",
+            node.qualified_name,
+            node.kind.as_str(),
+            node.file_path,
+            node.line_start,
+            node.line_end
+        );
+        if match_count > 1 {
+            eprintln!("{match_count} symbols matched; showing best match.");
+        }
+    } else {
+        println!("No symbols matched.");
+    }
+    Ok(())
+}
+
+fn symbol_json(node: &atlas_core::Node) -> serde_json::Value {
+    serde_json::json!({
+        "qualified_name": node.qualified_name,
+        "name": node.name,
+        "kind": node.kind.as_str(),
+        "language": node.language,
+        "file_path": node.file_path,
+        "line_start": node.line_start,
+        "line_end": node.line_end,
+    })
 }

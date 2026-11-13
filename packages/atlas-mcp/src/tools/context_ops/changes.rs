@@ -19,7 +19,7 @@ pub(crate) fn tool_detect_changes(
     let changes = &resolved.changes;
     let store_opt = Store::open(db_path).ok();
 
-    #[derive(Serialize)]
+    #[derive(Serialize, Clone)]
     struct ChangedEntry {
         path: String,
         change_type: String,
@@ -171,6 +171,7 @@ pub(crate) fn tool_detect_changes(
         count_change_kinds(&effective_changes);
     let mut payload = json!({
         "change_source": change_source_json(&resolved),
+        "changes": entries.clone(),
         "files": entries,
         "summary": {
             "changed_file_count": effective_changes.len(),

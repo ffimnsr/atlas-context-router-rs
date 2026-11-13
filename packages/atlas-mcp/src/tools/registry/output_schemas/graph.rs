@@ -799,6 +799,8 @@ pub(crate) fn batch_query_graph_output_schema() -> Value {
                 "additionalProperties": false,
                 "properties": {
                     "query_index": { "type": "integer" },
+                    "query": { "type": "string" },
+                    "text": { "type": "string" },
                     "matches": { "type": "array", "items": { "$ref": "#/$defs/batch_query_match" } },
                     "summary": {
                         "type": "object",
@@ -812,7 +814,7 @@ pub(crate) fn batch_query_graph_output_schema() -> Value {
                     "truncated": { "type": "boolean" },
                     "warnings": { "type": "array", "items": { "type": "string" } }
                 },
-                "required": ["query_index", "matches", "summary", "truncated", "warnings"]
+                "required": ["query_index", "query", "text", "matches", "summary", "truncated", "warnings"]
             }
         })),
     )

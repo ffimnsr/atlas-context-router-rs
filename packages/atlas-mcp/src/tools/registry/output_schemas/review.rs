@@ -188,6 +188,10 @@ pub(crate) fn detect_changes_output_schema() -> Value {
                     ]
                 }
             },
+            "changes": {
+                "type": "array",
+                "items": { "type": "object", "additionalProperties": true }
+            },
             "summary": {
                 "type": "object",
                 "additionalProperties": false,
@@ -219,6 +223,7 @@ pub(crate) fn detect_changes_output_schema() -> Value {
             "tool",
             "change_source",
             "files",
+            "changes",
             "summary",
             "atlas_provenance",
         ],

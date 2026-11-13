@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use atlas_contentstore::{ContentStore, IndexState};
 use atlas_core::{
-    GraphExecutionState, NodeKind, classify_graph_store_error, graph_health_error_message,
+    GraphExecutionState, classify_graph_store_error, graph_health_error_message,
     graph_health_error_suggestions,
 };
 use atlas_repo::{
@@ -319,6 +319,7 @@ struct CheckResult {
     ok: bool,
     detail: String,
     issue_code: Option<&'static str>,
+    noncanonical_path_rows: Option<usize>,
 }
 
 impl CheckResult {
@@ -328,6 +329,7 @@ impl CheckResult {
             ok: true,
             detail: detail.into(),
             issue_code: None,
+            noncanonical_path_rows: None,
         }
     }
     fn fail(
@@ -340,6 +342,7 @@ impl CheckResult {
             ok: false,
             detail: detail.into(),
             issue_code,
+            noncanonical_path_rows: None,
         }
     }
 }
@@ -365,35 +368,14 @@ fn integrity_issue_code(issues: &[String], structural_problem: bool) -> &'static
 }
 
 fn structural_orphans(store: &Store, limit: usize) -> Vec<atlas_core::Node> {
-    store
-        .orphan_nodes(limit)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|node| node.kind != NodeKind::File)
-        .collect()
+    store.structural_orphan_nodes(limit).unwrap_or_default()
 }
 
 fn structural_dangling_edges(
     store: &Store,
     limit: usize,
 ) -> Vec<(i64, String, String, String, &'static str)> {
-    store
-        .dangling_edges(limit)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|(_, _, _, kind, _)| {
-            matches!(
-                kind.as_str(),
-                "contains"
-                    | "defines"
-                    | "implements"
-                    | "extends"
-                    | "imports"
-                    | "tests"
-                    | "tested_by"
-            )
-        })
-        .collect()
+    store.structural_dangling_edges(limit).unwrap_or_default()
 }
 
 fn display_check_name(name: &str) -> &str {
@@ -431,11 +413,22 @@ fn print_doctor_report(
         let items: Vec<serde_json::Value> = checks
             .iter()
             .map(|c| {
+                // Emit both the legacy CLI field names and the MCP field names
+                // so one wire schema covers both surfaces (D6).
                 serde_json::json!({
+                    "name": c.name,
                     "check": c.name,
+                    "status": if c.ok { "pass" } else { "fail" },
                     "ok": c.ok,
+                    "message": c.detail,
                     "detail": c.detail,
                     "issue_code": c.issue_code,
+                    "details": {
+                        "label": display_check_name(c.name),
+                        "ok": c.ok,
+                        "issue_code": c.issue_code,
+                        "noncanonical_path_rows": c.noncanonical_path_rows,
+                    },
                 })
             })
             .collect();
@@ -1090,26 +1083,6 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
                         ));
                     }
                 }
-
-                match cs.noncanonical_repo_path_sources(100) {
-                    Ok(issues) if issues.is_empty() => {
-                        checks.push(CheckResult::pass("content_path_identity", "ok"));
-                    }
-                    Ok(issues) => {
-                        checks.push(CheckResult::fail(
-                            "content_path_identity",
-                            issues.join("; "),
-                            Some("noncanonical_path_rows"),
-                        ));
-                    }
-                    Err(e) => {
-                        checks.push(CheckResult::fail(
-                            "content_path_identity",
-                            e.to_string(),
-                            Some("noncanonical_path_rows"),
-                        ));
-                    }
-                }
             }
             // Content DB not yet created — not an error at this point.
             Err(_) => {
@@ -1120,6 +1093,18 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
                 ));
             }
         }
+    }
+
+    // Shared schema/canonicality checks. These are produced by
+    // `atlas-engine::doctor` so the CLI and MCP `doctor` surfaces cannot drift.
+    for check in atlas_engine::doctor::shared_checks(&db_path_str) {
+        checks.push(CheckResult {
+            name: check.name,
+            ok: check.ok,
+            detail: check.message,
+            issue_code: check.issue_code,
+            noncanonical_path_rows: check.details.noncanonical_path_rows,
+        });
     }
 
     let all_ok = checks.iter().all(|c| c.ok);
@@ -1353,11 +1338,18 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
     };
 
     if cli.json {
+        let (graph_probe, content_probe, session_probe) =
+            atlas_engine::doctor::probe_all_schemas(&db_path);
         let result = serde_json::json!({
             "db_path": db_path,
             "repo_provenance": repo_provenance_json(&repo),
             "ok": ok,
             "health_class": health_class,
+            "schema_version": {
+                "graph": graph_probe,
+                "content": content_probe,
+                "session": session_probe,
+            },
             "recovery_mode": "block_only",
             "quarantine_path": serde_json::Value::Null,
             "rebuild_result": if ok { "not_needed" } else { "blocked" },
@@ -1483,16 +1475,16 @@ pub fn run_debug_graph(cli: &Cli) -> Result<()> {
     let store =
         Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
-    let stats = store.stats().context("cannot read graph stats")?;
+    let stats = store.graph_stats().context("cannot read graph stats")?;
     let edge_kinds = store.edge_kind_stats().context("edge kind stats failed")?;
     let top_files = store
-        .top_files_by_node_count(10)
+        .top_files_by_node_count(limit)
         .context("top files query failed")?;
     let orphans = store
         .orphan_nodes(limit)
         .context("orphan node query failed")?;
     let dangling = store
-        .dangling_edges(limit)
+        .structural_dangling_edges(limit)
         .context("dangling edge query failed")?;
 
     if cli.json {
@@ -1689,6 +1681,7 @@ pub fn run_embedding_config(cli: &Cli) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use atlas_core::NodeKind;
     use atlas_core::{Edge, EdgeKind, Node, NodeId};
 
     fn open_store() -> Store {

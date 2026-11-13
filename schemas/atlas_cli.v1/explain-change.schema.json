@@ -4,62 +4,173 @@
   "title": "atlas_cli.v1 explain_change",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "command", "data"],
+  "required": [
+    "schema_version",
+    "command",
+    "data"
+  ],
   "properties": {
-    "schema_version": { "const": "atlas_cli.v1" },
-    "command": { "const": "explain_change" },
+    "schema_version": {
+      "const": "atlas_cli.v1"
+    },
+    "command": {
+      "const": "explain_change"
+    },
     "data": {
       "type": "object",
       "additionalProperties": true,
       "required": [
-        "risk_level",
-        "changed_file_count",
-        "changed_symbol_count",
+        "boundary_violations",
+        "budget_hit",
+        "budget_limit",
+        "budget_name",
+        "budget_observed",
+        "budget_status",
+        "call_chains",
+        "change_kinds",
         "changed_by_kind",
-        "diff_summary",
+        "changed_file_count",
+        "changed_files",
+        "changed_symbol_count",
         "changed_symbols",
-        "impacted_file_count",
-        "impacted_node_count",
+        "coverage_gaps",
+        "diff_summary",
         "high_impact_nodes",
         "impacted_components",
-        "call_chains",
-        "ripple_effects",
-        "boundary_violations",
-        "test_impact",
+        "impacted_file_count",
+        "impacted_node_count",
         "noise_reduction",
-        "summary",
-        "budget_status",
-        "budget_hit",
-        "budget_name",
-        "budget_limit",
-        "budget_observed",
         "partial",
-        "safe_to_answer"
+        "ripple_effects",
+        "risk_level",
+        "safe_to_answer",
+        "summary",
+        "test_impact"
       ],
       "properties": {
-        "risk_level": { "type": "string" },
-        "changed_file_count": { "type": "integer" },
-        "changed_symbol_count": { "type": "integer" },
-        "changed_by_kind": { "type": "object", "additionalProperties": true },
-        "diff_summary": { "type": "object", "additionalProperties": true },
-        "changed_symbols": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
-        "impacted_file_count": { "type": "integer" },
-        "impacted_node_count": { "type": "integer" },
-        "high_impact_nodes": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
-        "impacted_components": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
-        "call_chains": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
-        "ripple_effects": { "type": "array", "items": { "type": "string" } },
-        "boundary_violations": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
-        "test_impact": { "type": "object", "additionalProperties": true },
-        "noise_reduction": { "type": "object", "additionalProperties": true },
-        "summary": { "type": "string" },
-        "budget_status": { "type": "string" },
-        "budget_hit": { "type": "boolean" },
-        "budget_name": { "type": ["string", "null"] },
-        "budget_limit": { "type": ["integer", "null"] },
-        "budget_observed": { "type": ["integer", "null"] },
-        "partial": { "type": "boolean" },
-        "safe_to_answer": { "type": "boolean" }
+        "risk_level": {
+          "type": "string"
+        },
+        "diff_summary": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "changed_symbols": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "high_impact_nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "impacted_components": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "call_chains": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "ripple_effects": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "boundary_violations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "test_impact": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "noise_reduction": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "summary": {
+          "type": "string"
+        },
+        "budget_status": {
+          "type": "string"
+        },
+        "budget_hit": {
+          "type": "boolean"
+        },
+        "budget_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "budget_limit": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "budget_observed": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "safe_to_answer": {
+          "type": "boolean"
+        },
+        "change_kinds": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "changed_files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "coverage_gaps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "changed_file_count": {
+          "type": "integer"
+        },
+        "changed_symbol_count": {
+          "type": "integer"
+        },
+        "changed_by_kind": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "impacted_file_count": {
+          "type": "integer"
+        },
+        "impacted_node_count": {
+          "type": "integer"
+        }
       }
     }
   }

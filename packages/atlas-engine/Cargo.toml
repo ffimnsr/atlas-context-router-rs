@@ -14,6 +14,7 @@ atlas-metrics.workspace = true
 atlas-parser = { path = "../atlas-parser" , version = "1.7.7"}
 atlas-repo = { path = "../atlas-repo" , version = "1.7.7"}
 atlas-search = { path = "../atlas-search" , version = "1.7.7"}
+atlas-session = { path = "../atlas-session" , version = "1.7.7"}
 atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "1.7.7"}
 atlas-token-count.workspace = true
 anyhow.workspace = true
@@ -30,6 +31,7 @@ globset = "0.4.20"
 
 [dev-dependencies]
 criterion.workspace = true
+rusqlite.workspace = true
 tempfile = "3"
 static_assertions.workspace = true
 

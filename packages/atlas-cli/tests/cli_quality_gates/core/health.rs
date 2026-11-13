@@ -180,7 +180,7 @@ fn doctor_reports_noncanonical_content_path_identity() {
         .as_array()
         .expect("doctor checks array")
         .iter()
-        .find(|item| item["check"] == json!("content_path_identity"))
+        .find(|item| item["check"] == json!("path_canonicality"))
         .expect("content path identity check present");
 
     assert_eq!(content_check["ok"], json!(false));
@@ -334,6 +334,58 @@ fn db_check_reports_missing_memories_table_as_schema_mismatch() {
     let memory_schema = &result["session_db"]["memory_schema"];
     assert_eq!(memory_schema["ok"], json!(false));
     assert_eq!(memory_schema["issues"], json!(["missing table: memories"]));
+}
+
+#[test]
+fn db_check_fails_closed_on_newer_session_schema() {
+    let repo = setup_fixture_repo();
+    run_atlas(repo.path(), &["init"]);
+
+    let session_db = repo.path().join(".atlas").join("session.db");
+    let conn = Connection::open(&session_db).expect("open session db");
+    conn.execute(
+        "UPDATE metadata SET value = '99' WHERE key = 'schema_version'",
+        [],
+    )
+    .expect("bump session schema_version");
+    conn.execute_batch("PRAGMA user_version=99")
+        .expect("bump session user_version");
+    drop(conn);
+
+    let result = read_json_data_output("db_check", run_atlas(repo.path(), &["--json", "db-check"]));
+    assert_eq!(result["ok"], json!(false));
+    assert_eq!(result["error_code"], json!("schema_mismatch"));
+    assert_eq!(result["health_class"], json!("schema_mismatch"));
+    assert_eq!(result["session_db"]["ok"], json!(false));
+}
+
+#[test]
+fn status_surfaces_newer_content_schema_instead_of_synthetic_indexed() {
+    let repo = setup_fixture_repo();
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let content_db = repo.path().join(".atlas").join("context.db");
+    let conn = Connection::open(&content_db).expect("open content db");
+    conn.execute(
+        "UPDATE metadata SET value = '99' WHERE key = 'schema_version'",
+        [],
+    )
+    .expect("bump content schema_version");
+    conn.execute_batch("PRAGMA user_version=99")
+        .expect("bump content user_version");
+    drop(conn);
+
+    let status = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
+    let retrieval = &status["retrieval_index"];
+    assert_eq!(retrieval["available"], json!(false));
+    assert_eq!(retrieval["searchable"], json!(false));
+    assert_eq!(
+        retrieval["last_error"],
+        json!(
+            "database error: database schema version 99 newer than atlas-supported version 10"
+        )
+    );
 }
 
 #[test]

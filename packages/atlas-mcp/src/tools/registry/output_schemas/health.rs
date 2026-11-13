@@ -49,8 +49,23 @@ pub(crate) fn list_graph_stats_output_schema() -> Value {
                 }
             },
             "languages": {
-                "type": "array",
-                "items": { "type": "string" }
+                "type": "object",
+                "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "nodes": { "type": "integer" }
+                    },
+                    "required": ["nodes"]
+                }
+            },
+            "language_node_counts": {
+                "type": "object",
+                "additionalProperties": { "type": "integer" }
+            },
+            "edge_kinds": {
+                "type": "object",
+                "additionalProperties": { "type": "integer" }
             },
             "last_indexed_at": {
                 "type": ["string", "null"]
@@ -62,6 +77,8 @@ pub(crate) fn list_graph_stats_output_schema() -> Value {
             "edge_count",
             "nodes_by_kind",
             "languages",
+            "language_node_counts",
+            "edge_kinds",
             "last_indexed_at",
         ],
         None,
@@ -143,7 +160,8 @@ pub(crate) fn broker_status_output_schema() -> Value {
             "uptime_secs": { "type": "integer" },
             "worker_threads_configured": { "type": "integer" },
             "repo_root": { "type": "string" },
-            "db_path": { "type": "string" }
+            "db_path": { "type": "string" },
+            "handler_duration_us": { "type": "integer" }
         }),
         &[
             "ok",
@@ -153,6 +171,7 @@ pub(crate) fn broker_status_output_schema() -> Value {
             "worker_threads_configured",
             "repo_root",
             "db_path",
+            "handler_duration_us",
         ],
         None,
     )
@@ -236,12 +255,16 @@ pub(crate) fn doctor_check_schema() -> Value {
         "additionalProperties": false,
         "properties": {
             "name": { "type": "string" },
+            "check": { "type": "string" },
             "status": { "type": "string" },
+            "ok": { "type": "boolean" },
             "message": { "type": "string" },
+            "detail": { "type": "string" },
+            "issue_code": { "type": ["string", "null"] },
             "details": { "type": "object" },
             "fix_hint": { "type": ["string", "null"] }
         },
-        "required": ["name", "status", "message", "details", "fix_hint"]
+        "required": ["name", "check", "status", "ok", "message", "detail", "issue_code", "details", "fix_hint"]
     })
 }
 
@@ -251,9 +274,10 @@ pub(crate) fn debug_top_file_schema() -> Value {
         "additionalProperties": false,
         "properties": {
             "path": { "type": "string" },
+            "file_path": { "type": "string" },
             "node_count": { "type": "integer" }
         },
-        "required": ["path", "node_count"]
+        "required": ["path", "file_path", "node_count"]
     })
 }
 
@@ -446,6 +470,7 @@ pub(crate) fn status_output_schema() -> Value {
             "last_indexed_at": { "type": ["string", "null"] },
             "failure_category": { "type": "string" },
             "ready": { "type": "boolean" },
+            "ready_scope": { "type": "string" },
             "safe_for_symbol_lookup": { "type": "boolean" },
             "safe_for_analysis": { "type": "boolean" },
             "retrieval_index": { "type": "object" },
@@ -560,6 +585,7 @@ pub(crate) fn db_check_output_schema() -> Value {
         serde_json::json!({
             "ok": { "type": "boolean" },
             "health_class": { "type": ["string", "null"] },
+            "schema_version": { "type": "object" },
             "recovery_mode": { "type": "string" },
             "quarantine_path": { "type": ["string", "null"] },
             "rebuild_result": { "type": "string" },
@@ -659,6 +685,7 @@ pub(crate) fn db_check_output_schema() -> Value {
             "dangling_edges",
             "noncanonical_path_rows",
             "reachability_provenance",
+            "schema_version",
             "session_db",
             "summary",
             "atlas_provenance",

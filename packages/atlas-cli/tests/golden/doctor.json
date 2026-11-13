@@ -18,88 +18,259 @@
   "health_class": "healthy",
   "checks": [
     {
+      "name": "repo_root",
       "check": "repo_root",
+      "status": "pass",
       "ok": true,
+      "message": "<repo_root>",
       "detail": "<repo_root>",
-      "issue_code": null
+      "issue_code": null,
+      "details": {
+        "label": "atlas_scope",
+        "ok": true,
+        "issue_code": null,
+        "noncanonical_path_rows": null
+      }
     },
     {
+      "name": "git_root",
       "check": "git_root",
+      "status": "pass",
       "ok": true,
+      "message": "<repo_root>",
       "detail": "<repo_root>",
-      "issue_code": null
+      "issue_code": null,
+      "details": {
+        "label": "git_root",
+        "ok": true,
+        "issue_code": null,
+        "noncanonical_path_rows": null
+      }
     },
     {
+      "name": "atlas_dir",
       "check": "atlas_dir",
+      "status": "pass",
       "ok": true,
+      "message": "<repo_root>/.atlas",
       "detail": "<repo_root>/.atlas",
-      "issue_code": null
+      "issue_code": null,
+      "details": {
+        "label": "atlas_dir",
+        "ok": true,
+        "issue_code": null,
+        "noncanonical_path_rows": null
+      }
     },
     {
+      "name": "config_file",
       "check": "config_file",
+      "status": "pass",
       "ok": true,
+      "message": "<repo_root>/.atlas/config.toml",
       "detail": "<repo_root>/.atlas/config.toml",
-      "issue_code": null
+      "issue_code": null,
+      "details": {
+        "label": "config_file",
+        "ok": true,
+        "issue_code": null,
+        "noncanonical_path_rows": null
+      }
     },
     {
+      "name": "mcp_serve_config",
       "check": "mcp_serve_config",
+      "status": "pass",
       "ok": true,
+      "message": "workers=2 timeout_ms=300000",
       "detail": "workers=2 timeout_ms=300000",
-      "issue_code": null
+      "issue_code": null,
+      "details": {
+        "label": "mcp_serve_config",
+        "ok": true,
+        "issue_code": null,
+        "noncanonical_path_rows": null
+      }
     },
     {
+      "name": "db_file",
       "check": "db_file",
+      "status": "pass",
       "ok": true,
+      "message": "<repo_root>/.atlas/worldtree.db",
       "detail": "<repo_root>/.atlas/worldtree.db",
-      "issue_code": null
+      "issue_code": null,
+      "details": {
+        "label": "db_file",
+        "ok": true,
+        "issue_code": null,
+        "noncanonical_path_rows": null
+      }
     },
     {
+      "name": "db_open",
       "check": "db_open",
+      "status": "pass",
       "ok": true,
+      "message": "<repo_root>/.atlas/worldtree.db",
       "detail": "<repo_root>/.atlas/worldtree.db",
-      "issue_code": null
+      "issue_code": null,
+      "details": {
+        "label": "db_open",
+        "ok": true,
+        "issue_code": null,
+        "noncanonical_path_rows": null
+      }
     },
     {
+      "name": "db_integrity",
       "check": "db_integrity",
+      "status": "pass",
       "ok": true,
+      "message": "ok",
       "detail": "ok",
-      "issue_code": null
+      "issue_code": null,
+      "details": {
+        "label": "db_integrity",
+        "ok": true,
+        "issue_code": null,
+        "noncanonical_path_rows": null
+      }
     },
     {
+      "name": "graph_stats",
       "check": "graph_stats",
+      "status": "pass",
       "ok": true,
+      "message": "files=2 nodes=7 edges=8",
       "detail": "files=2 nodes=7 edges=8",
-      "issue_code": null
+      "issue_code": null,
+      "details": {
+        "label": "graph_stats",
+        "ok": true,
+        "issue_code": null,
+        "noncanonical_path_rows": null
+      }
     },
     {
+      "name": "graph_build_state",
       "check": "graph_build_state",
+      "status": "pass",
       "ok": true,
+      "message": "state=built nodes=7 edges=8",
       "detail": "state=built nodes=7 edges=8",
-      "issue_code": null
+      "issue_code": null,
+      "details": {
+        "label": "graph_build_state",
+        "ok": true,
+        "issue_code": null,
+        "noncanonical_path_rows": null
+      }
     },
     {
+      "name": "git_ls_files",
       "check": "git_ls_files",
+      "status": "pass",
       "ok": true,
+      "message": "2 tracked files",
       "detail": "2 tracked files",
-      "issue_code": null
+      "issue_code": null,
+      "details": {
+        "label": "git_ls_files",
+        "ok": true,
+        "issue_code": null,
+        "noncanonical_path_rows": null
+      }
     },
     {
+      "name": "graph_freshness",
       "check": "graph_freshness",
+      "status": "pass",
       "ok": true,
+      "message": "up_to_date",
       "detail": "up_to_date",
-      "issue_code": null
+      "issue_code": null,
+      "details": {
+        "label": "graph_freshness",
+        "ok": true,
+        "issue_code": null,
+        "noncanonical_path_rows": null
+      }
     },
     {
+      "name": "retrieval_index",
       "check": "retrieval_index",
+      "status": "fail",
       "ok": false,
+      "message": "no index run recorded yet",
       "detail": "no index run recorded yet",
-      "issue_code": "retrieval_index_unavailable"
+      "issue_code": "retrieval_index_unavailable",
+      "details": {
+        "label": "retrieval_index",
+        "ok": false,
+        "issue_code": "retrieval_index_unavailable",
+        "noncanonical_path_rows": null
+      }
     },
     {
-      "check": "content_path_identity",
+      "name": "schema_version",
+      "check": "schema_version",
+      "status": "pass",
       "ok": true,
+      "message": "graph=20/20 content=10/10 session=15/15",
+      "detail": "graph=20/20 content=10/10 session=15/15",
+      "issue_code": null,
+      "details": {
+        "label": "schema_version",
+        "ok": true,
+        "issue_code": null,
+        "noncanonical_path_rows": null
+      }
+    },
+    {
+      "name": "session_schema",
+      "check": "session_schema",
+      "status": "pass",
+      "ok": true,
+      "message": "ok",
       "detail": "ok",
-      "issue_code": null
+      "issue_code": null,
+      "details": {
+        "label": "session_schema",
+        "ok": true,
+        "issue_code": null,
+        "noncanonical_path_rows": null
+      }
+    },
+    {
+      "name": "path_canonicality",
+      "check": "path_canonicality",
+      "status": "pass",
+      "ok": true,
+      "message": "noncanonical_path_rows=0",
+      "detail": "noncanonical_path_rows=0",
+      "issue_code": null,
+      "details": {
+        "label": "path_canonicality",
+        "ok": true,
+        "issue_code": null,
+        "noncanonical_path_rows": 0
+      }
+    },
+    {
+      "name": "connection_mode",
+      "check": "connection_mode",
+      "status": "pass",
+      "ok": true,
+      "message": "single_connection_per_store; parallel_parse+sequential_persistence; no_read_pool (pooled graph reads not implemented)",
+      "detail": "single_connection_per_store; parallel_parse+sequential_persistence; no_read_pool (pooled graph reads not implemented)",
+      "issue_code": null,
+      "details": {
+        "label": "connection_mode",
+        "ok": true,
+        "issue_code": null,
+        "noncanonical_path_rows": null
+      }
     }
   ],
   "reachability_measurement": {

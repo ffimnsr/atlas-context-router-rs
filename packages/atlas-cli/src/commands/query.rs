@@ -428,21 +428,36 @@ pub fn run_embed(cli: &Cli) -> Result<()> {
 }
 
 pub fn run_explain_query(cli: &Cli) -> Result<()> {
-    let (text, kind, language, subpath, limit) = match &cli.command {
+    let (text, regex, kind, language, subpath, limit) = match &cli.command {
         Command::ExplainQuery {
             text,
+            regex,
             kind,
             language,
             subpath,
             limit,
         } => (
             text.clone(),
+            *regex,
             kind.clone(),
             language.clone(),
             subpath.clone(),
             *limit,
         ),
         _ => unreachable!(),
+    };
+
+    if text.trim().is_empty() {
+        if regex {
+            anyhow::bail!("regex pattern required when --regex is set");
+        } else {
+            anyhow::bail!("search text required; use --regex to treat text as a regex pattern");
+        }
+    }
+    let (effective_text, regex_pattern) = if regex {
+        (String::new(), Some(text.clone()))
+    } else {
+        (text.clone(), None)
     };
 
     let repo = resolve_repo(cli)?;
@@ -488,10 +503,11 @@ pub fn run_explain_query(cli: &Cli) -> Result<()> {
     }
 
     let query = SearchQuery {
-        text: text.clone(),
+        text: effective_text,
         kind: kind.clone(),
         language: language.clone(),
         subpath: subpath.clone(),
+        regex_pattern,
         limit,
         hybrid: hybrid_default,
         ..Default::default()
@@ -512,6 +528,9 @@ pub fn run_explain_query(cli: &Cli) -> Result<()> {
         } = explanation;
         println!("Query explanation");
         println!("  Text     : {}", input.text);
+        if let Some(pattern) = &input.regex {
+            println!("  Regex    : {pattern}");
+        }
         if let Some(k) = &input.kind {
             println!("  Kind     : {k}");
         }

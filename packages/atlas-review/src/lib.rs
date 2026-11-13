@@ -4,6 +4,7 @@ pub mod context;
 mod decision_query;
 mod docs_section;
 mod explain_change;
+mod explain_wire;
 pub mod overview;
 pub mod query_parser;
 mod ranking;
@@ -19,3 +20,4 @@ pub use docs_section::{
 pub use explain_change::{
     ExplainChangeSummary, build_explain_change_summary, empty_explain_change_summary,
 };
+pub use explain_wire::explain_change_wire_payload;
