@@ -53,9 +53,14 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "010_directory_hierarchy",
         up_sql: include_str!("migrations/010_directory_hierarchy.sql"),
     },
+    Migration {
+        version: 11,
+        name: "011_content_index_hot_paths",
+        up_sql: include_str!("migrations/011_content_index_hot_paths.sql"),
+    },
 ];
 
-pub const LATEST_VERSION: i32 = 10;
+pub const LATEST_VERSION: i32 = 11;
 
 pub const MIGRATION_SET: MigrationSet = MigrationSet {
     db_kind: "context",

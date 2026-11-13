@@ -68,7 +68,7 @@ fn open_stamps_migration_history_and_provenance() {
         .conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 10);
+    assert_eq!(version, crate::migrations::LATEST_VERSION);
 
     let history_count: i64 = store
         .conn
@@ -76,7 +76,7 @@ fn open_stamps_migration_history_and_provenance() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(history_count, 10);
+    assert_eq!(history_count, i64::from(crate::migrations::LATEST_VERSION));
 
     let (db_kind, created_by): (String, String) = store
         .conn
@@ -107,7 +107,7 @@ fn rollback_and_reupgrade_restore_content_schema() {
         .conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(restored_version, 10);
+    assert_eq!(restored_version, crate::migrations::LATEST_VERSION);
     assert!(table_columns(&store.conn, "chunks").contains(&"chunk_id".to_string()));
     assert!(table_columns(&store.conn, "sources").contains(&"identity_kind".to_string()));
     assert!(table_columns(&store.conn, "sources").contains(&"agent_id".to_string()));

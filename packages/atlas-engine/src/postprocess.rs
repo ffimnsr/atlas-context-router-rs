@@ -591,6 +591,11 @@ pub fn postprocess_graph(
         store
             .finish_postprocess(&summary)
             .context("cannot record postprocess completion")?;
+        // Derived stages rewrite whole tables (flows, communities, chunks), so
+        // refresh `sqlite_stat1` before the next read-heavy MCP session.
+        if let Err(error) = store.optimize_for_reads() {
+            tracing::warn!("cannot refresh graph planner statistics after postprocess: {error:#}");
+        }
     }
     Ok(summary)
 }

@@ -20,6 +20,7 @@ mod context;
 mod graph;
 mod helpers;
 mod history;
+mod indexes;
 mod lifecycle;
 mod listing;
 mod mutation;
@@ -192,6 +193,7 @@ fn schema_fixture(version: i32) -> &'static str {
         18 => include_str!("../../migrations/schema_versions/018.sql"),
         19 => include_str!("../../migrations/schema_versions/019.sql"),
         20 => include_str!("../../migrations/schema_versions/020.sql"),
+        21 => include_str!("../../migrations/schema_versions/021.sql"),
         _ => panic!("missing schema fixture for version {version}"),
     }
 }

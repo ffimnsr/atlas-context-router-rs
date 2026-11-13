@@ -26,9 +26,11 @@ fn migration_adds_postprocess_state_table() {
         ])
     );
 
+    // Migration 021 drops the single-column postprocess indexes: every read
+    // filters by `repo_root`, which is the table primary key.
     let indexes = schema_indexes(&store.conn);
-    assert!(indexes.contains("idx_postprocess_state_state"));
-    assert!(indexes.contains("idx_postprocess_state_updated_at_ms"));
+    assert!(!indexes.contains("idx_postprocess_state_state"));
+    assert!(!indexes.contains("idx_postprocess_state_updated_at_ms"));
 }
 
 #[test]

@@ -31,6 +31,9 @@ pub fn build_graph(
         result.as_ref().ok().map(|summary| summary.parsed as u64),
         result.is_ok(),
     );
+    if result.is_ok() && !opts.dry_run {
+        refresh_planner_statistics(db_path);
+    }
     result
 }
 
@@ -48,7 +51,33 @@ pub fn update_graph(
         result.as_ref().ok().map(|summary| summary.parsed as u64),
         result.is_ok(),
     );
+    // Skip statistics refresh when the update was a no-op: `ANALYZE` walks the
+    // whole database and would dominate an empty incremental run.
+    if let Ok(summary) = &result
+        && !opts.dry_run
+        && summary.parsed > 0
+    {
+        refresh_planner_statistics(db_path);
+    }
     result
+}
+
+/// Recompute `sqlite_stat1` after the graph shape changed.
+///
+/// Failures are logged and never fail the build/update: stale planner
+/// statistics only cost a suboptimal plan, while a hard error here would
+/// discard an otherwise successful run.
+fn refresh_planner_statistics(db_path: &str) {
+    match atlas_store_sqlite::Store::open(db_path) {
+        Ok(store) => {
+            if let Err(error) = store.optimize_for_reads() {
+                tracing::warn!("cannot refresh graph planner statistics: {error:#}");
+            }
+        }
+        Err(error) => {
+            tracing::warn!("cannot open graph database to refresh planner statistics: {error:#}");
+        }
+    }
 }
 
 fn record_run(kind: &str, elapsed_ms: u64, parsed_files: Option<u64>, ok: bool) {

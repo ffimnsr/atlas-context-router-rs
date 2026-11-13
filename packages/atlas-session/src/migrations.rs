@@ -78,9 +78,14 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "015_memory_embeddings",
         up_sql: include_str!("migrations/015_memory_embeddings.sql"),
     },
+    Migration {
+        version: 16,
+        name: "016_session_index_hot_paths",
+        up_sql: include_str!("migrations/016_session_index_hot_paths.sql"),
+    },
 ];
 
-pub const LATEST_VERSION: i32 = 15;
+pub const LATEST_VERSION: i32 = 16;
 
 pub const MIGRATION_SET: MigrationSet = MigrationSet {
     db_kind: "session",

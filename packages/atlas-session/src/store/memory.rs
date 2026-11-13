@@ -45,13 +45,15 @@ pub(super) const MEMORY_COLUMNS: &[&str] = &[
     "numeric_value",
 ];
 
-/// Exact index set of the `memories` table (migrations 007 + 009).
+/// Index set of the `memories` table (migrations 007, 009, and 016).
 pub(super) const MEMORY_INDEXES: &[&str] = &[
     "idx_memories_repo_topic",
     "idx_memories_repo_importance",
     "idx_memories_repo_scope",
     "idx_memories_repo_session",
-    "idx_memories_repo_accessed",
+    "idx_memories_repo_updated",
+    "idx_memories_repo_source",
+    "idx_memories_repo_active",
     "idx_memories_superseded",
 ];
 
@@ -59,8 +61,11 @@ pub(super) const MEMORY_INDEXES: &[&str] = &[
 pub(super) const SUPERSESSION_COLUMNS: &[&str] =
     &["old_memory_id", "new_memory_id", "reason", "created_at"];
 
-/// Exact index set of the `memory_supersessions` table (migration 009).
-pub(super) const SUPERSESSION_INDEXES: &[&str] = &["idx_memory_supersessions_new"];
+/// Index set of the `memory_supersessions` table.
+///
+/// Migration 016 drops the previous `(new_memory_id)` index because supersession
+/// rows are insert-only; the table's primary key already covers reads.
+pub(super) const SUPERSESSION_INDEXES: &[&str] = &[];
 
 // ── IDs and timestamps ────────────────────────────────────────────────────────
 

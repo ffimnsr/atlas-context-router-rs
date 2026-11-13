@@ -67,10 +67,6 @@ fn memories_indexes_match_golden() {
             "idx_memories_repo_session",
             "CREATE INDEX idx_memories_repo_session\n    ON memories(repo_root, session_id)",
         ),
-        (
-            "idx_memories_repo_accessed",
-            "CREATE INDEX idx_memories_repo_accessed\n    ON memories(repo_root, last_accessed_at DESC)",
-        ),
     ] {
         let sql: String = store
             .conn
@@ -136,7 +132,9 @@ fn memory_schema_issues_detect_missing_table_and_indexes() {
             "missing index: idx_memories_repo_importance",
             "missing index: idx_memories_repo_scope",
             "missing index: idx_memories_repo_session",
-            "missing index: idx_memories_repo_accessed",
+            "missing index: idx_memories_repo_updated",
+            "missing index: idx_memories_repo_source",
+            "missing index: idx_memories_repo_active",
             "missing index: idx_memories_superseded",
             "missing table: memory_supersessions",
             "missing trigger: memories_ai",

@@ -1,5 +1,5 @@
--- schema_version: 20
-PRAGMA user_version = 20;
+-- schema_version: 21
+PRAGMA user_version = 21;
 
 -- table: atlas_provenance
 CREATE TABLE atlas_provenance ( singleton_key INTEGER PRIMARY KEY CHECK(singleton_key = 1), db_kind TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL, last_opened_by TEXT NOT NULL, last_opened_at TEXT NOT NULL );
@@ -94,50 +94,20 @@ CREATE INDEX idx_chunks_has_embedding ON retrieval_chunks (id) WHERE embedding I
 -- index: idx_chunks_node_qn
 CREATE INDEX idx_chunks_node_qn ON retrieval_chunks (node_qn);
 
--- index: idx_commits_author_time
-CREATE INDEX idx_commits_author_time ON commits (author_time);
-
--- index: idx_commits_committer_time
-CREATE INDEX idx_commits_committer_time ON commits (committer_time);
-
--- index: idx_commits_indexed_ref
-CREATE INDEX idx_commits_indexed_ref ON commits (indexed_ref);
-
--- index: idx_commits_repo_id
-CREATE INDEX idx_commits_repo_id ON commits (repo_id);
-
--- index: idx_communities_algorithm
-CREATE INDEX idx_communities_algorithm ON communities (algorithm);
-
--- index: idx_communities_parent
-CREATE INDEX idx_communities_parent ON communities (parent_community_id);
+-- index: idx_commits_repo_author_time
+CREATE INDEX idx_commits_repo_author_time ON commits (repo_id, author_time DESC, commit_sha DESC);
 
 -- index: idx_community_nodes_node_qn
 CREATE INDEX idx_community_nodes_node_qn ON community_nodes (node_qualified_name);
 
--- index: idx_edge_history_introduction_commit
-CREATE INDEX idx_edge_history_introduction_commit ON edge_history (introduction_commit_sha);
-
--- index: idx_edge_history_removal_commit
-CREATE INDEX idx_edge_history_removal_commit ON edge_history (removal_commit_sha);
-
--- index: idx_edge_history_repo_id
-CREATE INDEX idx_edge_history_repo_id ON edge_history (repo_id);
-
--- index: idx_edge_history_source_qn
-CREATE INDEX idx_edge_history_source_qn ON edge_history (source_qn);
-
--- index: idx_edge_history_target_qn
-CREATE INDEX idx_edge_history_target_qn ON edge_history (target_qn);
-
 -- index: idx_edges_file_path
 CREATE INDEX idx_edges_file_path ON edges (file_path);
 
--- index: idx_edges_kind
-CREATE INDEX idx_edges_kind ON edges (kind);
+-- index: idx_edges_order
+CREATE INDEX idx_edges_order ON edges (source_qualified, target_qualified, kind, file_path);
 
--- index: idx_edges_source
-CREATE INDEX idx_edges_source ON edges (source_qualified);
+-- index: idx_edges_repo_confidence_tier
+CREATE INDEX idx_edges_repo_confidence_tier ON edges (source_repo_id, confidence_tier);
 
 -- index: idx_edges_source_repo_file_path
 CREATE INDEX idx_edges_source_repo_file_path ON edges (source_repo_id, file_path);
@@ -148,14 +118,17 @@ CREATE INDEX idx_edges_source_repo_source ON edges (source_repo_id, source_quali
 -- index: idx_edges_source_repo_target
 CREATE INDEX idx_edges_source_repo_target ON edges (source_repo_id, target_qualified);
 
--- index: idx_edges_target
-CREATE INDEX idx_edges_target ON edges (target_qualified);
+-- index: idx_edges_target_kind
+CREATE INDEX idx_edges_target_kind ON edges (target_qualified, kind);
+
+-- index: idx_files_indexed_at
+CREATE INDEX idx_files_indexed_at ON files (indexed_at DESC);
 
 -- index: idx_files_owner_id
 CREATE INDEX idx_files_owner_id ON files (owner_id);
 
--- index: idx_files_source_repo_path
-CREATE INDEX idx_files_source_repo_path ON files (source_repo_id, path);
+-- index: idx_files_path
+CREATE INDEX idx_files_path ON files (path);
 
 -- index: idx_flow_memberships_flow_position
 CREATE INDEX idx_flow_memberships_flow_position ON flow_memberships (flow_id, position);
@@ -163,38 +136,17 @@ CREATE INDEX idx_flow_memberships_flow_position ON flow_memberships (flow_id, po
 -- index: idx_flow_memberships_node_qualified_name
 CREATE INDEX idx_flow_memberships_node_qualified_name ON flow_memberships (node_qualified_name);
 
--- index: idx_flows_kind
-CREATE INDEX idx_flows_kind ON flows (kind);
-
 -- index: idx_graph_build_state_source_repo
 CREATE INDEX idx_graph_build_state_source_repo ON graph_build_state (source_repo_id);
 
--- index: idx_graph_snapshots_commit_sha
-CREATE INDEX idx_graph_snapshots_commit_sha ON graph_snapshots (commit_sha);
+-- index: idx_nodes_file_parent
+CREATE INDEX idx_nodes_file_parent ON nodes (file_path, parent_name);
 
--- index: idx_graph_snapshots_repo_id
-CREATE INDEX idx_graph_snapshots_repo_id ON graph_snapshots (repo_id);
+-- index: idx_nodes_file_path_nocase
+CREATE INDEX idx_nodes_file_path_nocase ON nodes (file_path COLLATE NOCASE);
 
--- index: idx_historical_edges_file_hash
-CREATE INDEX idx_historical_edges_file_hash ON historical_edges (file_hash);
-
--- index: idx_historical_nodes_file_hash
-CREATE INDEX idx_historical_nodes_file_hash ON historical_nodes (file_hash);
-
--- index: idx_node_history_introduction_commit
-CREATE INDEX idx_node_history_introduction_commit ON node_history (introduction_commit_sha);
-
--- index: idx_node_history_qualified_name
-CREATE INDEX idx_node_history_qualified_name ON node_history (qualified_name);
-
--- index: idx_node_history_removal_commit
-CREATE INDEX idx_node_history_removal_commit ON node_history (removal_commit_sha);
-
--- index: idx_node_history_repo_id
-CREATE INDEX idx_node_history_repo_id ON node_history (repo_id);
-
--- index: idx_nodes_file_path
-CREATE INDEX idx_nodes_file_path ON nodes (file_path);
+-- index: idx_nodes_file_path_order
+CREATE INDEX idx_nodes_file_path_order ON nodes (file_path, line_start, qualified_name);
 
 -- index: idx_nodes_kind
 CREATE INDEX idx_nodes_kind ON nodes (kind);
@@ -202,44 +154,26 @@ CREATE INDEX idx_nodes_kind ON nodes (kind);
 -- index: idx_nodes_language
 CREATE INDEX idx_nodes_language ON nodes (language);
 
+-- index: idx_nodes_name_nocase
+CREATE INDEX idx_nodes_name_nocase ON nodes (name COLLATE NOCASE);
+
+-- index: idx_nodes_name_order
+CREATE INDEX idx_nodes_name_order ON nodes (name, file_path, line_start);
+
 -- index: idx_nodes_qualified_name
 CREATE INDEX idx_nodes_qualified_name ON nodes (qualified_name);
 
--- index: idx_nodes_source_repo_file_path
-CREATE INDEX idx_nodes_source_repo_file_path ON nodes (source_repo_id, file_path);
+-- index: idx_nodes_repo_file_path_nocase
+CREATE INDEX idx_nodes_repo_file_path_nocase ON nodes (source_repo_id, file_path COLLATE NOCASE);
 
--- index: idx_postprocess_state_state
-CREATE INDEX idx_postprocess_state_state ON postprocess_state (state);
+-- index: idx_nodes_repo_file_path_order
+CREATE INDEX idx_nodes_repo_file_path_order ON nodes (source_repo_id, file_path, line_start, qualified_name);
 
--- index: idx_postprocess_state_updated_at_ms
-CREATE INDEX idx_postprocess_state_updated_at_ms ON postprocess_state (updated_at_ms DESC);
-
--- index: idx_repos_root_path
-CREATE INDEX idx_repos_root_path ON repos (root_path);
+-- index: idx_retrieval_chunks_repo_embedded
+CREATE INDEX idx_retrieval_chunks_repo_embedded ON retrieval_chunks (source_repo_id) WHERE embedding IS NOT NULL;
 
 -- index: idx_schema_migrations_version_id
 CREATE INDEX idx_schema_migrations_version_id ON schema_migrations(version, id);
 
--- index: idx_snapshot_edges_file_hash
-CREATE INDEX idx_snapshot_edges_file_hash ON snapshot_edges (file_hash);
-
--- index: idx_snapshot_edges_snapshot_id
-CREATE INDEX idx_snapshot_edges_snapshot_id ON snapshot_edges (snapshot_id);
-
 -- index: idx_snapshot_files_file_hash
 CREATE INDEX idx_snapshot_files_file_hash ON snapshot_files (file_hash);
-
--- index: idx_snapshot_files_snapshot_id
-CREATE INDEX idx_snapshot_files_snapshot_id ON snapshot_files (snapshot_id);
-
--- index: idx_snapshot_membership_blobs_file_hash
-CREATE INDEX idx_snapshot_membership_blobs_file_hash ON snapshot_membership_blobs (file_hash);
-
--- index: idx_snapshot_membership_blobs_snapshot_id
-CREATE INDEX idx_snapshot_membership_blobs_snapshot_id ON snapshot_membership_blobs (snapshot_id);
-
--- index: idx_snapshot_nodes_file_hash
-CREATE INDEX idx_snapshot_nodes_file_hash ON snapshot_nodes (file_hash);
-
--- index: idx_snapshot_nodes_snapshot_id
-CREATE INDEX idx_snapshot_nodes_snapshot_id ON snapshot_nodes (snapshot_id);

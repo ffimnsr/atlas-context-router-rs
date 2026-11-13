@@ -13,6 +13,24 @@ use super::{
     },
 };
 
+/// Exclusive upper bound for a literal prefix range scan.
+///
+/// Increments the last character that has a successor and drops the trailing
+/// maximum scalars, so `[prefix, bound)` contains exactly the strings that
+/// start with `prefix`. Returns `None` only when the prefix is all maximum
+/// scalars; callers then fall back to a lower-bound-only scan.
+fn prefix_upper_bound(prefix: &str) -> Option<String> {
+    let mut chars: Vec<char> = prefix.chars().collect();
+    while let Some(last) = chars.last_mut() {
+        if let Some(next) = char::from_u32(*last as u32 + 1) {
+            *last = next;
+            return Some(chars.into_iter().collect());
+        }
+        chars.pop();
+    }
+    None
+}
+
 #[allow(clippy::too_many_arguments)]
 fn upsert_repo_provenance_json(
     extra_json: &serde_json::Value,
@@ -679,15 +697,40 @@ impl Store {
         prefix: &str,
     ) -> Result<Vec<String>> {
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
-        let like = format!("{prefix}%");
+
+        // Use a half-open range on the PRIMARY KEY `(source_repo_id, path)`
+        // instead of `path LIKE 'prefix%'`. The range is index-backed, treats
+        // `%`/`_` in paths literally without escaping, and keeps repo-relative
+        // path identity case-sensitive (default `LIKE` is case-insensitive).
+        let Some(upper) = prefix_upper_bound(prefix) else {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT path FROM files WHERE source_repo_id = ?1 AND path >= ?2 ORDER BY path",
+                )
+                .map_err(db_err)?;
+            let paths = stmt
+                .query_map(params![source_repo_id, prefix], |row| {
+                    row.get::<_, String>(0)
+                })
+                .map_err(db_err)?
+                .filter_map(|row| row.ok())
+                .collect();
+            return Ok(paths);
+        };
+
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT path FROM files WHERE source_repo_id = ?1 AND path LIKE ?2 ORDER BY path",
+                "SELECT path FROM files
+                 WHERE source_repo_id = ?1 AND path >= ?2 AND path < ?3
+                 ORDER BY path",
             )
             .map_err(db_err)?;
         let paths = stmt
-            .query_map(params![source_repo_id, like], |row| row.get::<_, String>(0))
+            .query_map(params![source_repo_id, prefix, upper], |row| {
+                row.get::<_, String>(0)
+            })
             .map_err(db_err)?
             .filter_map(|row| row.ok())
             .collect();

@@ -8,6 +8,7 @@ mod graph;
 mod helpers;
 mod history;
 mod lifecycle;
+mod maintenance;
 mod mutation;
 mod postprocess;
 mod recovery;

@@ -121,6 +121,7 @@ mod concurrency;
 mod curation_compress;
 mod durable;
 mod feedback;
+mod indexes;
 mod memoir;
 mod memory_consolidate;
 mod memory_curation;
