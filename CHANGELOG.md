@@ -36,6 +36,70 @@ Versioning policy may evolve while Atlas is still moving quickly, but release no
 - drop the unused `windows-sys` target dependency from `atlas-cli` and the stale `#[allow(deprecated)]` around `std::env::home_dir`; allow `Zlib` in `deny.toml` for `foldhash` 0.2 and remove the obsolete `number_prefix` advisory ignore now that `indicatif` 0.18 no longer pulls it
 - extract the Unix stdio broker (daemon attach/spawn, stdio relay, reconnect loop) and its signal handling into `commands/platform/broker.rs` / `commands/platform/broker_signals.rs`, bringing `platform.rs` back under the 1K LOC threshold
 
+## 1.7.8 - 2026-11-13
+
+### Features
+
+- make atlas install tool-agnostic (`fe34d65`)
+- improve cross session recall quality (`49bea7c`)
+- add memoir concept graph layer (`5819888`)
+- add code overview memory with external analysis handoff (`5ef245e`)
+- add typed memory operator algebra and operator history surfaces (`821f12b`)
+- add non-destructive consolidation, eua patching, and two-path recall (`3542efd`)
+- add uri hierarchy, dsq retrieval, sufficiency escalation, and experience edges (`c4655bf`)
+- complete dsq scope, triehi indexing, and rag evidence coverage (`12e4c36`)
+- strengthen mcp tool guidance metadata and annotations (`0b3a185`)
+- add optional memory embeddings and hybrid recall (`f908938`)
+- add context telemetry, payload slimming, and runtime event classification (`8268c5d`)
+- add weak-edge reachability measurement and Rust module guard (`bce2946`)
+- complete embedding workflow (`e0b7a51`)
+- auto-embed pending chunks after build and update (`a1b8b55`)
+- add optional sqlite-vec KNN index for retrieval vectors (`a7d3190`)
+- accelerate scoped vector search with vec0 rowid filters (`d5d3e47`)
+- add directional call tracing (`c96aa43`)
+- execute query intents and fix resolution/traversal contracts (`8c53f17`)
+- add graph/session/content index migrations for hot SQLite paths (`f2a290b`)
+
+
+### Fixes
+
+- preserve chunk embeddings across incremental updates (`2e1de86`)
+- bound insight, context, and manual payloads (`9c96135`)
+- enforce export parity and clean introspection discovery (`2203fe5`)
+- unify schema probes, counting, and wire parity (`a8c1c32`)
+- expand file context and repair analysis contracts (`24c6379`)
+- add content commands and close run-01 P1/P2 defects (`0b388ac`)
+- close run-02 P0 error contract and context budget defects (`4fc22ec`)
+- close run-02 P1 report shape and counting parity defects (`63ab2a9`)
+- resolve MCP tool sweep defects (`8db5186`)
+- resolve verified MCP sweep defects and CLI parity gaps (`d5123aa`)
+- resolve review-context and analysis-quality sweep defects (`0df6559`)
+- resolve overview, memoir, resource, and CLI parity defects (`e87d6f4`)
+- resolve MCP readiness latency, protocol docs, and memoir deletion (`c89eeb2`)
+- exclude nested testdata manifests from release version gate (`24ed3db`)
+
+
+### Documentation
+
+- add new docs for next features (`3627665`)
+- move shipped roadmap items into SHIPPED.md (`e1c2182`)
+- replace post-retrieval compaction experiment with context payload telemetry (`696fecd`)
+- trim runtime event patch to classification and resume grouping (`c22a85f`)
+- split reachability work into measurement and Rust guard (`cfa7eff`)
+- trim escalation patch and defer runtime policy surface (`ddb358e`)
+- close deferred memory-operator wiring (`72885de`)
+- move shipped patches from ISSUES.md to SHIPPED.md (`5fa6e24`)
+- add agents test doc (`7b54eac`)
+- update llm mcp test again (`a169fd5`)
+- update ISSUES.md with findings (`7a36f66`)
+- removed the finished problems on MCP (`10e982e`)
+- remove completed items in ISSUES.md (`b00cc97`)
+- add docs to improve sql and implement a tokenizer (`7ef1e5d`)
+- update tokenizer plan (`e22b916`)
+- add new tool defects for fixing (`8cd7474`)
+- update findings on new mcp run (`3751ca0`)
+
+
 ## 1.7.7 - 2026-10-05
 
 ### Features
