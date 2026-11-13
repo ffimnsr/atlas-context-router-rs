@@ -525,6 +525,48 @@ fn tool_list_matches_registry_snapshot() {
     assert_eq!(names, TOOL_REGISTRY_SNAPSHOT);
 }
 
+/// Export drift guard: the live `tools/list` set, the dispatch `is_known_tool_name`
+/// set, and the documented inventory must stay identical. A missing handler or a
+/// registry entry without dispatch support fails here instead of surfacing as an
+/// empty `tool_list` / unknown-tool error at runtime.
+#[test]
+fn exported_tools_match_dispatch_and_inventory_count() {
+    assert_eq!(
+        TOOL_REGISTRY_SNAPSHOT.len(),
+        80,
+        "documented inventory must contain exactly 80 tools"
+    );
+
+    let exported = tool_descriptors()
+        .into_iter()
+        .map(|tool| tool.name.to_string())
+        .collect::<BTreeSet<_>>();
+    let dispatch = crate::tools::dispatch::KNOWN_TOOL_NAMES
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(exported.len(), 80, "live tools/list must export 80 tools");
+    assert_eq!(
+        exported, dispatch,
+        "tools/list registry and dispatch known-name set drifted"
+    );
+    assert_eq!(
+        exported,
+        TOOL_REGISTRY_SNAPSHOT
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect::<BTreeSet<_>>(),
+        "tools/list registry and documented inventory drifted"
+    );
+    for name in crate::tools::dispatch::KNOWN_TOOL_NAMES {
+        assert!(
+            crate::tools::is_known_tool_name(name),
+            "dispatch must accept exported tool {name}"
+        );
+    }
+}
+
 #[test]
 fn tool_list_names_are_unique() {
     let list = tool_list();

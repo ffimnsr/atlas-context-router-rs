@@ -13,6 +13,21 @@ use super::registry::tool_descriptors;
 const DEFAULT_SEARCH_LIMIT: usize = 10;
 const MAX_SEARCH_LIMIT: usize = 50;
 
+/// Natural-language glue words carry no tool-name signal, so they are dropped
+/// before token scoring. Without this an intent query like
+/// "trace callers and callees" surfaces every tool whose description happens
+/// to contain "and".
+const QUERY_STOPWORDS: &[&str] = &[
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how", "if", "in", "into",
+    "is", "it", "of", "on", "or", "that", "the", "this", "to", "use", "using", "was", "what",
+    "when", "where", "which", "with",
+];
+
+/// Minimum token length for token-level fuzzy matching. Shorter tokens produce
+/// distance-1 noise (e.g. `dead` ~ `read`), so only full-name fuzzy matching is
+/// allowed for them.
+const MIN_FUZZY_TOKEN_CHARS: usize = 5;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct ToolInventoryEntry {
     pub name: String,
@@ -25,6 +40,8 @@ pub(crate) struct ToolInventoryEntry {
     pub destructive: bool,
     pub idempotent: bool,
     pub open_world: bool,
+    #[serde(rename = "inputSchema", skip_serializing_if = "Option::is_none")]
+    pub input_schema: Option<Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -79,8 +96,12 @@ pub(crate) fn tool_tool_list(args: Option<&Value>, output_format: OutputFormat) 
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
+    let include_schemas = args
+        .and_then(|value| value.get("include_schemas"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
-    let mut tools = inventory_entries();
+    let mut tools = inventory_entries(include_schemas);
     if let Some(category_filter) = category.as_ref() {
         let category_lower = category_filter.to_ascii_lowercase();
         tools.retain(|tool| tool.category.eq_ignore_ascii_case(&category_lower));
@@ -152,7 +173,7 @@ pub(crate) fn tool_tool_search(args: Option<&Value>, output_format: OutputFormat
         .unwrap_or(DEFAULT_SEARCH_LIMIT)
         .clamp(1, MAX_SEARCH_LIMIT);
 
-    let mut matches = inventory_entries()
+    let mut matches = inventory_entries(false)
         .into_iter()
         .filter_map(|tool| score_match(query, &tool))
         .collect::<Vec<_>>();
@@ -200,7 +221,7 @@ where
     }))
 }
 
-fn inventory_entries() -> Vec<ToolInventoryEntry> {
+fn inventory_entries(include_schemas: bool) -> Vec<ToolInventoryEntry> {
     let mut tools = tool_descriptors()
         .into_iter()
         .map(|tool| {
@@ -239,6 +260,7 @@ fn inventory_entries() -> Vec<ToolInventoryEntry> {
                     .and_then(Value::as_str)
                     .unwrap_or("text-only")
                     .to_owned(),
+                input_schema: include_schemas.then(|| Value::Object((*tool.input_schema).clone())),
                 read_only,
                 state_changing: !read_only,
                 destructive,
@@ -440,6 +462,7 @@ fn query_tokens(query: &str) -> impl Iterator<Item = &str> {
     query
         .split(|ch: char| ch.is_whitespace() || matches!(ch, '.' | '_' | '-'))
         .filter(|token| token.len() >= 2)
+        .filter(|token| !QUERY_STOPWORDS.contains(token))
 }
 
 fn fuzzy_name_distance(query: &str, candidate: &str) -> Option<usize> {
@@ -453,7 +476,7 @@ fn fuzzy_name_distance(query: &str, candidate: &str) -> Option<usize> {
 
 fn fuzzy_name_token_match(query: &str, candidate: &str) -> Option<(String, String, usize)> {
     query_tokens(query)
-        .filter(|token| token.len() >= 3)
+        .filter(|token| token.len() >= MIN_FUZZY_TOKEN_CHARS)
         .flat_map(|token| {
             query_tokens(candidate).filter_map(move |candidate_token| {
                 if candidate_token.contains(token) || token == candidate_token {
@@ -485,11 +508,13 @@ fn fuzzy_distance_threshold(left: &str, right: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{inventory_entries, score_match};
+    use super::{inventory_entries, score_match, tool_tool_list, tool_tool_search};
+    use crate::output::OutputFormat;
+    use serde_json::json;
 
     #[test]
     fn inventory_entries_are_sorted() {
-        let entries = inventory_entries();
+        let entries = inventory_entries(false);
         let mut names = entries
             .iter()
             .map(|entry| entry.name.as_str())
@@ -503,7 +528,7 @@ mod tests {
 
     #[test]
     fn score_match_prefers_exact_name() {
-        let entry = inventory_entries()
+        let entry = inventory_entries(false)
             .into_iter()
             .find(|tool| tool.name == "query_graph")
             .expect("query_graph inventory entry");
@@ -526,7 +551,7 @@ mod tests {
 
     #[test]
     fn score_match_supports_fuzzy_name_typos() {
-        let entry = inventory_entries()
+        let entry = inventory_entries(false)
             .into_iter()
             .find(|tool| tool.name == "query_graph")
             .expect("query_graph inventory entry");
@@ -547,7 +572,7 @@ mod tests {
 
     #[test]
     fn score_match_supports_fuzzy_token_typos() {
-        let entry = inventory_entries()
+        let entry = inventory_entries(false)
             .into_iter()
             .find(|tool| tool.name == "get_context")
             .expect("get_context inventory entry");
@@ -563,6 +588,81 @@ mod tests {
                 .score_factors
                 .iter()
                 .any(|factor| factor.factor == "fuzzy_name_token")
+        );
+    }
+
+    #[test]
+    fn score_match_ignores_stopwords() {
+        let entry = inventory_entries(false)
+            .into_iter()
+            .find(|tool| tool.name == "read_file_excerpt")
+            .expect("read_file_excerpt inventory entry");
+        assert!(
+            score_match("trace callers and callees", &entry).is_none(),
+            "stopword/glue tokens must not surface unrelated tools"
+        );
+    }
+
+    #[test]
+    fn score_match_rejects_short_fuzzy_token_noise() {
+        for name in [
+            "read_file_excerpt",
+            "read_file_around_match",
+            "read_saved_context",
+        ] {
+            let entry = inventory_entries(false)
+                .into_iter()
+                .find(|tool| tool.name == name)
+                .expect("inventory entry");
+            assert!(
+                score_match("dead code detection", &entry).is_none(),
+                "distance-1 short-token fuzzy match must not surface {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn tool_search_matches_trace_calls_for_caller_callee_intent() {
+        let response = tool_tool_search(
+            Some(&json!({ "query": "trace callers and callees", "limit": 10 })),
+            OutputFormat::Json,
+        )
+        .expect("tool_search response");
+        let names = response["structuredContent"]["matches"]
+            .as_array()
+            .expect("matches array")
+            .iter()
+            .map(|item| item["name"].as_str().expect("match name"))
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"trace_calls"));
+        assert!(names.contains(&"symbol_neighbors"));
+        assert!(!names.contains(&"read_file_excerpt"));
+    }
+
+    #[test]
+    fn tool_list_only_includes_input_schemas_on_request() {
+        let compact = tool_tool_list(None, OutputFormat::Json).expect("compact tool_list");
+        let compact_tools = compact["structuredContent"]["tools"]
+            .as_array()
+            .expect("tools array");
+        assert!(
+            compact_tools
+                .iter()
+                .all(|tool| tool.get("inputSchema").is_none())
+        );
+
+        let full = tool_tool_list(
+            Some(&json!({ "include_schemas": true })),
+            OutputFormat::Json,
+        )
+        .expect("full tool_list");
+        let full_tools = full["structuredContent"]["tools"]
+            .as_array()
+            .expect("tools array");
+        assert!(
+            full_tools
+                .iter()
+                .all(|tool| tool.get("inputSchema").is_some())
         );
     }
 }

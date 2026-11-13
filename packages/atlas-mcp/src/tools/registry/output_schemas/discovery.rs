@@ -39,7 +39,8 @@ pub(crate) fn tool_list_output_schema() -> Value {
                     "state_changing": { "type": "boolean" },
                     "destructive": { "type": "boolean" },
                     "idempotent": { "type": "boolean" },
-                    "open_world": { "type": "boolean" }
+                    "open_world": { "type": "boolean" },
+                    "inputSchema": { "type": "object" }
                 },
                 "required": [
                     "name",
@@ -146,6 +147,7 @@ pub(crate) fn tool_search_output_schema() -> Value {
 pub(crate) fn man_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({
+            "name": { "type": "string" },
             "requested_namespace": { "type": "string" },
             "requested_tool_name": { "type": "string" },
             "resolved_tool_name": { "type": "string" },
@@ -271,6 +273,7 @@ pub(crate) fn man_output_schema() -> Value {
             }
         }),
         &[
+            "name",
             "requested_namespace",
             "requested_tool_name",
             "resolved_tool_name",

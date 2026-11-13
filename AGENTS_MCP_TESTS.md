@@ -6120,23 +6120,26 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 ### Category: MCP Registry, Introspection & Tool Documentation
 #### Tool 74: `tool_list`
-**Description**: Lists visible exported MCP tools in compact runtime inventory form with input schemas and result contracts.
-**Canonical CLI Parity Command**: `./target/debug/atlas man --list --json`
+**Description**: Lists visible exported MCP tools in compact runtime inventory form with result contracts; pass `include_schemas: true` to attach each tool's `inputSchema`.
+**Canonical CLI Parity Command**: N/A — MCP-only introspection surface; call MCP `tool_list` directly.
 
 ##### Test 74.1: Full Tool Inventory Enumeration
 **Intent in Plain English**: Enumerate all exported MCP tools to verify total registry size and completeness.
 
 **MCP Arguments (JSON)**:
 ```json
-{}
+{
+  "include_schemas": true
+}
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `structuredContent.tools` count is >= 79 (80 with `trace_calls`)
-- Verify every tool descriptor has `name`, `description`, and `inputSchema`
+- Verify `structuredContent.tools` count is exactly 80
+- Verify every tool descriptor has `name`, `description`, and `result_contract`
+- Verify `include_schemas: true` adds `inputSchema` to every descriptor; omitting it keeps the inventory compact
 
 **CLI Parity Command**:
-```./target/debug/atlas man --list --json```
+```N/A — no CLI inventory verb exists; use MCP `tool_list` with `{"include_schemas": true}` for the schema-bearing inventory.```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -6158,7 +6161,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify returned tools are members of graph family (`query_graph`, `traverse_graph`, `symbol_neighbors`)
 
 **CLI Parity Command**:
-```./target/debug/atlas man --list --json```
+```N/A — no CLI inventory verb exists; use MCP `tool_list` with `{"category": "graph"}`.```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -6178,7 +6181,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify tools advertise structuredContent output schemas
 
 **CLI Parity Command**:
-```./target/debug/atlas man --list --json```
+```N/A — no CLI inventory verb exists; use MCP `tool_list`.```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -6191,7 +6194,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 #### Tool 75: `tool_search`
 **Description**: Searches visible exported MCP tools by name, title, or description with typo-tolerant fuzzy matching.
-**Canonical CLI Parity Command**: `./target/debug/atlas man --search 'trace' --json`
+**Canonical CLI Parity Command**: N/A — MCP-only introspection surface; call MCP `tool_search` directly.
 
 ##### Test 75.1: Typo-Tolerant Tool Discovery
 **Intent in Plain English**: Search for 'travers' and verify `traverse_graph` ranks at the top.
@@ -6208,7 +6211,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify similarity score is high
 
 **CLI Parity Command**:
-```./target/debug/atlas man --search 'trace' --json```
+```N/A — no CLI search verb exists; use MCP `tool_search` with `{"query": "travers"}`.```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -6228,9 +6231,10 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 **Expected Clean Output & Assertions**:
 - Verify `analyze_dead_code` returned as best match
+- Verify stopword-only and short-token fuzzy matches do not add unrelated tools
 
 **CLI Parity Command**:
-```./target/debug/atlas man --search 'trace' --json```
+```N/A — no CLI search verb exists; use MCP `tool_search` with `{"query": "dead code detection"}`.```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -6250,9 +6254,10 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 **Expected Clean Output & Assertions**:
 - Verify matches include `trace_calls` and `symbol_neighbors`
+- Verify stopwords such as `and` do not create matches
 
 **CLI Parity Command**:
-```./target/debug/atlas man --search 'trace' --json```
+```N/A — no CLI search verb exists; use MCP `tool_search` with `{"query": "trace callers and callees"}`.```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -6430,7 +6435,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 **Expected Clean Output & Assertions**:
 - Verify current repo is registered (`repo_4d07b53766d88ffd`)
 - Verify root path matches current workspace directory
-- Verify trust state is active
+- Verify trust state is trusted
 
 **CLI Parity Command**:
 ```./target/debug/atlas repo list --json```

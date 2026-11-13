@@ -17,6 +17,8 @@ const MAX_SUGGESTIONS: usize = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ToolManualDocument {
+    /// Stable tool-name alias mirroring `resolved_tool_name`.
+    pub name: String,
     pub requested_namespace: String,
     pub requested_tool_name: String,
     pub resolved_tool_name: String,
@@ -449,6 +451,7 @@ fn lookup_tool_manual(
             .any(|example| example.chars().count() >= MAX_EXAMPLE_CHARS);
 
     Ok(ToolManualDocument {
+        name: tool.name.to_string(),
         requested_namespace: namespace.to_owned(),
         requested_tool_name: tool_name.to_owned(),
         resolved_tool_name: tool.name.to_string(),
@@ -1552,6 +1555,7 @@ mod tests {
     #[test]
     fn manual_lookup_uses_exact_visible_name() {
         let doc = tool_manual("mcp", "query_graph").expect("manual doc");
+        assert_eq!(doc.name, "query_graph");
         assert_eq!(doc.resolved_tool_name, "query_graph");
         assert_eq!(doc.requested_tool_name, "query_graph");
         assert!(
@@ -1568,12 +1572,41 @@ mod tests {
     }
 
     #[test]
+    fn man_namespace_rejection_is_structured_invalid_input() {
+        let response = tool_man(
+            Some(&json!({ "namespace": "cli", "tool_name": "query_graph" })),
+            OutputFormat::Json,
+        )
+        .expect("man response");
+        assert_eq!(
+            response["structuredContent"]["code"],
+            json!("invalid_input")
+        );
+        assert_eq!(
+            response["structuredContent"]["details"]["accepted_namespaces"],
+            json!(["mcp"])
+        );
+    }
+
+    #[test]
     fn manual_lookup_suggests_nearest_visible_tools() {
         let result = lookup_tool_manual("mcp", "query_grap").expect_err("must fail");
         let ManualLookupError::UnknownTool { suggestions, .. } = result else {
             panic!("expected unknown tool error");
         };
         assert_eq!(suggestions.first().map(String::as_str), Some("query_graph"));
+    }
+
+    #[test]
+    fn manual_lookup_suggests_edit_distance_one_names() {
+        let result = lookup_tool_manual("mcp", "traverse_grah").expect_err("must fail");
+        let ManualLookupError::UnknownTool { suggestions, .. } = result else {
+            panic!("expected unknown tool error");
+        };
+        assert_eq!(
+            suggestions.first().map(String::as_str),
+            Some("traverse_graph")
+        );
     }
 
     #[test]

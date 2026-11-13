@@ -11,11 +11,12 @@ pub(super) fn tools() -> Vec<Value> {
     vec![
         json!({
                 "name": "tool_list",
-                "description": "List visible exported MCP tools in compact runtime inventory form. Use this instead of hardcoding tool tables in agent instructions; pair with tool_search and tool_help for discovery.",
+                "description": "List visible exported MCP tools in compact runtime inventory form. Use this instead of hardcoding tool tables in agent instructions; pair with tool_search and tool_help for discovery. Set include_schemas=true when you need each tool's full inputSchema.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "category": { "type": "string", "description": "Optional exact category filter: graph, content, analysis, health, memory, maintenance, or introspection." },
+                        "include_schemas": { "type": "boolean", "description": "Include each tool's full inputSchema. Default false keeps the inventory compact." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []

@@ -2,6 +2,7 @@
   "schema_version": "atlas_cli.v1",
   "command": "man",
   "data": {
+    "name": "resolve_symbol",
     "requested_namespace": "mcp",
     "requested_tool_name": "resolve_symbol",
     "resolved_tool_name": "resolve_symbol",

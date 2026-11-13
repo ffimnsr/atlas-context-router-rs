@@ -415,91 +415,99 @@ fn call_with_worker_threads_inner(
     result
 }
 
+/// Every public MCP tool the dispatch layer can execute.
+///
+/// This is the single source of truth for tool visibility: the registry must
+/// export exactly these names, and `is_known_tool_name` must accept exactly
+/// these names. A drift test enforces both directions.
+pub(crate) const KNOWN_TOOL_NAMES: &[&str] = &[
+    "list_graph_stats",
+    "repo_registry",
+    "tool_list",
+    "tool_search",
+    "tool_help",
+    "man",
+    "query_graph",
+    "batch_query_graph",
+    "get_impact_radius",
+    "get_review_context",
+    "detect_changes",
+    "build_graph",
+    "update_graph",
+    "postprocess_graph",
+    "embed_chunks",
+    "traverse_graph",
+    "trace_calls",
+    "get_minimal_context",
+    "explain_change",
+    "get_context",
+    "analyze_architecture",
+    "analyze_metrics",
+    "assess_risk",
+    "analyze_patterns",
+    "find_large_functions",
+    "find_complex_functions",
+    "find_similar_functions",
+    "find_duplicates",
+    "infer_modules",
+    "label_components",
+    "get_session_status",
+    "compact_session",
+    "resume_session",
+    "record_session_event",
+    "wake_up",
+    "search_saved_context",
+    "search_decisions",
+    "read_saved_context",
+    "save_context_artifact",
+    "get_context_stats",
+    "purge_saved_context",
+    "cross_session_search",
+    "get_global_memory",
+    "memory_store",
+    "memory_ops",
+    "memory_recall",
+    "experience_inspect",
+    "feedback_record",
+    "memoir_create",
+    "memoir_add_concept",
+    "memoir_link",
+    "memoir_inspect",
+    "overview_export",
+    "overview_ingest",
+    "overview_search",
+    "overview_show",
+    "overview_refresh_plan",
+    "symbol_neighbors",
+    "cross_file_links",
+    "concept_clusters",
+    "search_files",
+    "search_content",
+    "read_file_excerpt",
+    "get_docs_section",
+    "read_file_around_match",
+    "search_templates",
+    "search_text_assets",
+    "broker_status",
+    "get_metrics",
+    "status",
+    "doctor",
+    "db_check",
+    "debug_graph",
+    "explain_query",
+    "resolve_symbol",
+    "list_symbols",
+    "analyze_safety",
+    "analyze_remove",
+    "analyze_dead_code",
+    "analyze_dependency",
+];
+
 pub(crate) fn is_known_tool_name(name: &str) -> bool {
     match name {
         #[cfg(test)]
         "__test_sleep" | "__test_panic" => true,
-        "list_graph_stats"
-        | "repo_registry"
-        | "tool_list"
-        | "tool_search"
-        | "tool_help"
-        | "man"
-        | "query_graph"
-        | "batch_query_graph"
-        | "get_impact_radius"
-        | "get_review_context"
-        | "detect_changes"
-        | "build_graph"
-        | "update_graph"
-        | "postprocess_graph"
-        | "embed_chunks"
-        | "traverse_graph"
-        | "trace_calls"
-        | "get_minimal_context"
-        | "explain_change"
-        | "get_context"
-        | "analyze_architecture"
-        | "analyze_metrics"
-        | "assess_risk"
-        | "analyze_patterns"
-        | "find_large_functions"
-        | "find_complex_functions"
-        | "find_similar_functions"
-        | "find_duplicates"
-        | "infer_modules"
-        | "label_components"
-        | "get_session_status"
-        | "compact_session"
-        | "resume_session"
-        | "record_session_event"
-        | "wake_up"
-        | "search_saved_context"
-        | "search_decisions"
-        | "read_saved_context"
-        | "save_context_artifact"
-        | "get_context_stats"
-        | "purge_saved_context"
-        | "cross_session_search"
-        | "get_global_memory"
-        | "memory_store"
-        | "memory_ops"
-        | "memory_recall"
-        | "experience_inspect"
-        | "feedback_record"
-        | "memoir_create"
-        | "memoir_add_concept"
-        | "memoir_link"
-        | "memoir_inspect"
-        | "overview_export"
-        | "overview_ingest"
-        | "overview_search"
-        | "overview_show"
-        | "overview_refresh_plan"
-        | "symbol_neighbors"
-        | "cross_file_links"
-        | "concept_clusters"
-        | "search_files"
-        | "search_content"
-        | "read_file_excerpt"
-        | "get_docs_section"
-        | "read_file_around_match"
-        | "search_templates"
-        | "search_text_assets"
-        | "broker_status"
-        | "get_metrics"
-        | "status"
-        | "doctor"
-        | "db_check"
-        | "debug_graph"
-        | "explain_query"
-        | "resolve_symbol"
-        | "list_symbols"
-        | "analyze_safety"
-        | "analyze_remove"
-        | "analyze_dead_code"
-        | "analyze_dependency" => true,
-        _ => false,
+        _ => KNOWN_TOOL_NAMES.contains(&name),
     }
 }
 
