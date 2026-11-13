@@ -85,13 +85,50 @@ pub fn run_docs_section(cli: &Cli) -> Result<()> {
     } else {
         DocsSectionSelector::Line(line.expect("validated line selector"))
     };
-    let result = lookup_docs_section(
+    let heading_query = match &selector {
+        DocsSectionSelector::Heading(query) => Some(query.clone()),
+        DocsSectionSelector::Line(_) => None,
+    };
+    let result = match lookup_docs_section(
         &store,
         repo_root.as_path(),
         canonical.as_str(),
         selector,
         *max_bytes,
-    )?;
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            if let Some(query) = heading_query.as_deref()
+                && error.to_string().starts_with("heading not found in ")
+                && let Ok(candidates) = atlas_review::suggest_docs_headings(
+                    &store,
+                    repo_root.as_path(),
+                    canonical.as_str(),
+                    query,
+                    5,
+                )
+                && !candidates.is_empty()
+            {
+                let suggestions = candidates
+                    .iter()
+                    .map(|candidate| {
+                        format!(
+                            "- {} [{}] lines {}-{}",
+                            candidate.heading_path,
+                            candidate.title,
+                            candidate.start_line,
+                            candidate.end_line
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                // The CLI error surface prints only the first line, so
+                // suggestions go to stderr directly.
+                eprintln!("Candidates:\n{suggestions}");
+            }
+            return Err(error.into());
+        }
+    };
 
     if cli.json {
         print_json("docs_section", serde_json::to_value(&result)?)

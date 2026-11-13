@@ -484,20 +484,135 @@ fn trim_context_payload(
     token_limit: usize,
     counter: &TokenCounter,
 ) -> PayloadMeasurement {
-    loop {
+    let mut set_aside = Vec::new();
+    let measurement = loop {
         let measurement = measure_payload(result, counter);
         if measurement.bytes <= byte_limit && measurement.tokens <= token_limit {
+            break measurement;
+        }
+        if !trim_one_payload_unit_recording(result, &mut set_aside) {
             return measurement;
         }
-        if !trim_one_payload_unit(result) {
-            return measurement;
+    };
+
+    if set_aside.is_empty() {
+        return measurement;
+    }
+    refill_payload(result, set_aside, byte_limit, token_limit, counter)
+}
+
+/// A graph payload unit removed during trimming, retained so a later refill
+/// can spend leftover token/byte headroom instead of discarding useful
+/// callers, callees, or edges.
+enum SetAsideUnit {
+    Node(SelectedNode),
+    Edge(SelectedEdge),
+    File(SelectedFile),
+}
+
+/// Spend any remaining budget headroom on the units trimmed last.
+///
+/// The trim loop drops whole units in ascending priority order, so headroom
+/// below one unit's cost used to be left unused. Refilling in reverse trim
+/// order restores the highest-priority unit that still fits.
+fn refill_payload(
+    result: &mut ContextResult,
+    set_aside: Vec<SetAsideUnit>,
+    byte_limit: usize,
+    token_limit: usize,
+    counter: &TokenCounter,
+) -> PayloadMeasurement {
+    let mut accepted = measure_payload(result, counter);
+    for unit in set_aside.into_iter().rev() {
+        insert_set_aside_unit(result, &unit);
+        sort_payload_units(result);
+        let candidate = measure_payload(result, counter);
+        if candidate.bytes <= byte_limit && candidate.tokens <= token_limit {
+            accepted = candidate;
+        } else {
+            remove_set_aside_unit(result, &unit);
+        }
+    }
+    accepted
+}
+
+fn insert_set_aside_unit(result: &mut ContextResult, unit: &SetAsideUnit) {
+    match unit {
+        SetAsideUnit::Node(node) => result.nodes.push(node.clone()),
+        SetAsideUnit::Edge(edge) => result.edges.push(edge.clone()),
+        SetAsideUnit::File(file) => result.files.push(file.clone()),
+    }
+}
+
+fn remove_set_aside_unit(result: &mut ContextResult, unit: &SetAsideUnit) {
+    match unit {
+        SetAsideUnit::Node(node) => {
+            let qname = &node.node.qualified_name;
+            result
+                .nodes
+                .retain(|item| item.node.qualified_name != *qname);
+        }
+        SetAsideUnit::Edge(edge) => {
+            let edge = &edge.edge;
+            result.edges.retain(|item| {
+                item.edge.source_qn != edge.source_qn
+                    || item.edge.target_qn != edge.target_qn
+                    || item.edge.kind != edge.kind
+            });
+        }
+        SetAsideUnit::File(file) => {
+            let path = &file.path;
+            result.files.retain(|item| item.path != *path);
         }
     }
 }
 
+/// Restore deterministic rank ordering after a refill inserts a unit.
+fn sort_payload_units(result: &mut ContextResult) {
+    use crate::ranking::{compare_edge_scores, compare_file_priorities, compare_node_scores};
+
+    result.nodes.sort_by(|left, right| {
+        compare_node_scores(
+            left.relevance_score as f64,
+            right.relevance_score as f64,
+            &left.node.qualified_name,
+            &right.node.qualified_name,
+        )
+    });
+    result.edges.sort_by(|left, right| {
+        compare_edge_scores(
+            left.relevance_score as f64,
+            right.relevance_score as f64,
+            &left.edge.source_qn,
+            &right.edge.source_qn,
+            &left.edge.target_qn,
+            &right.edge.target_qn,
+        )
+    });
+    let ranking = crate::ranking::ContextRankingPrimitives::default();
+    result.files.sort_by(|left, right| {
+        compare_file_priorities(
+            ranking.selection_priority(left.selection_reason),
+            ranking.selection_priority(right.selection_reason),
+            &left.path,
+            &right.path,
+        )
+    });
+}
+
 /// Drop exactly one payload unit in deterministic priority order; returns
 /// false when nothing removable remains.
+#[cfg(test)]
 pub(super) fn trim_one_payload_unit(result: &mut ContextResult) -> bool {
+    trim_one_payload_unit_recording(result, &mut Vec::new())
+}
+
+/// Same as [`trim_one_payload_unit`], but retains graph units so the refill
+/// pass can restore anything that still fits in the remaining headroom.
+fn trim_one_payload_unit_recording(
+    result: &mut ContextResult,
+    set_aside: &mut Vec<SetAsideUnit>,
+) -> bool {
     if let Some(index) = select_saved_source_drop_index(result) {
         result.saved_context_sources.remove(index);
         return true;
@@ -515,18 +630,20 @@ pub(super) fn trim_one_payload_unit(result: &mut ContextResult) -> bool {
         return true;
     }
     if let Some(index) = select_file_drop_index(result) {
-        result.files.remove(index);
+        set_aside.push(SetAsideUnit::File(result.files.remove(index)));
         return true;
     }
     if let Some(index) = select_edge_drop_index(result) {
-        result.edges.remove(index);
+        set_aside.push(SetAsideUnit::Edge(result.edges.remove(index)));
         return true;
     }
     if let Some(index) = select_node_drop_index(result) {
-        let removed_qn = result.nodes.remove(index).node.qualified_name;
+        let removed = result.nodes.remove(index);
+        let removed_qn = removed.node.qualified_name.clone();
         result
             .edges
             .retain(|edge| edge.edge.source_qn != removed_qn && edge.edge.target_qn != removed_qn);
+        set_aside.push(SetAsideUnit::Node(removed));
         return true;
     }
     false

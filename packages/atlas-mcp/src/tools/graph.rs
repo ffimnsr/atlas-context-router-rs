@@ -774,7 +774,7 @@ pub(super) fn tool_traverse_graph(
     Ok(response)
 }
 
-pub(super) fn tool_symbol_neighbors(
+pub(crate) fn tool_symbol_neighbors(
     args: Option<&serde_json::Value>,
     repo_root: &str,
     db_path: &str,
@@ -939,7 +939,7 @@ pub(super) fn tool_symbol_neighbors(
     Ok(response)
 }
 
-pub(super) fn tool_cross_file_links(
+pub(crate) fn tool_cross_file_links(
     args: Option<&serde_json::Value>,
     repo_root: &str,
     db_path: &str,
@@ -1017,7 +1017,7 @@ pub(super) fn tool_cross_file_links(
     Ok(response)
 }
 
-pub(super) fn tool_concept_clusters(
+pub(crate) fn tool_concept_clusters(
     args: Option<&serde_json::Value>,
     repo_root: &str,
     db_path: &str,

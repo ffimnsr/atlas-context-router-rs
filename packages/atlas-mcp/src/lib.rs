@@ -95,6 +95,7 @@
 
 #[cfg(feature = "http-transport")]
 pub mod auth;
+pub mod cli_tools;
 mod completion;
 mod context;
 mod descriptors;

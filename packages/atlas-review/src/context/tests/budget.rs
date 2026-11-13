@@ -154,6 +154,65 @@ fn saved_context_cap_drops_low_ranked_sources() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn token_budget_refill_restores_units_that_still_fit() {
+    let mut store = open_store();
+    seed_graph(&mut store);
+
+    fn heuristic_tokens(result: &ContextResult) -> usize {
+        let mut clone = result.clone();
+        clone.truncation.payload = None;
+        serde_json::to_vec(&clone)
+            .map(|bytes| bytes.len().div_ceil(4))
+            .unwrap_or(usize::MAX)
+    }
+
+    let seed = store.node_by_qname("src/a.rs::fn_a").unwrap().unwrap();
+    let req = ContextRequest {
+        intent: ContextIntent::Symbol,
+        target: ContextTarget::QualifiedName {
+            qname: "src/a.rs::fn_a".to_owned(),
+        },
+        token_budget: Some(650),
+        ..ContextRequest::default()
+    };
+    let mut result = build_symbol_context(&store, seed, &req).expect("build symbol context");
+    let original = result.clone();
+    super::payload::apply_payload_budgets(
+        &mut result,
+        &BudgetPolicy::default(),
+        &TokenCounter::heuristic(4).expect("test heuristic counter"),
+        &super::payload::TokenFallbackInfo::default(),
+    );
+
+    let payload = result
+        .truncation
+        .payload
+        .expect("tight token budget must trim the payload");
+    assert!(
+        payload.tokens_estimated <= 650,
+        "refill must not exceed the token budget (emitted={})",
+        payload.tokens_estimated
+    );
+    assert!(payload.omitted_byte_count > 0, "trimming must omit bytes");
+
+    // Drop-only baseline: the same units are trimmed without the refill pass.
+    let mut manual = original;
+    while heuristic_tokens(&manual) > 650 {
+        if !super::payload::trim_one_payload_unit(&mut manual) {
+            break;
+        }
+    }
+    assert!(
+        result.edges.len() > manual.edges.len() || result.nodes.len() > manual.nodes.len(),
+        "refill must restore trimmed graph units that still fit (edges {} vs {}, nodes {} vs {})",
+        result.edges.len(),
+        manual.edges.len(),
+        result.nodes.len(),
+        manual.nodes.len()
+    );
+}
+
+#[test]
 fn token_budget_override_restricts_payload() {
     let mut store = open_store();
     seed_graph(&mut store);

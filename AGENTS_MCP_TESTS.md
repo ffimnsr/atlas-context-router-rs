@@ -103,6 +103,10 @@ Before completing a test run, verify:
    - Both tools execute deep structural mutations and acquire exclusive write locks on `.atlas/worldtree.db`.
    - Running them concurrently causes database lock contention (`database is locked`), corrupted state reads, or broken assertions in reader threads.
    - All parallel category test threads must finish first. Run Tool 79 and Tool 80 in strict sequence as the final step.
+7. **Resolve Tools by Name, Never by Heading Number**:
+   - Tool numbering and heading text in this guide have drifted between runs. Always locate a tool by its `snake_case` MCP tool name (`tool_list`, `query_graph`, …) and treat section numbers as display-only.
+8. **Bound High-Volume Tools**:
+   - `analyze_patterns` returns the largest payloads in this guide. Always call it with a small `limit` and without `verbose`; never request the full report against the real repository in one turn.
 
 
 ---
@@ -1242,7 +1246,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ### Category: Graph Traversal, Tracing & Structural Relationships
 #### Tool 13: `symbol_neighbors`
 **Description**: Returns the immediate graph neighbourhood of a symbol: callers, callees, call edge sites with source lines, test nodes, containment siblings, and import-linked nodes.
-**Canonical CLI Parity Command**: `./target/debug/atlas query 'who calls classify_graph_store_error' --json`
+**Canonical CLI Parity Command**: `./target/debug/atlas content neighbors packages/atlas-core/src/health.rs::fn::classify_graph_store_error --json`
 
 ##### Test 13.1: Inspect Callers and Callees of Core Error Classifier
 **Intent in Plain English**: Trace upward callers and downward callees of `classify_graph_store_error` with exact call site source lines.
@@ -1260,7 +1264,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify `structuredContent.call_sites` array contains 4 entries with direction ('incoming' / 'outgoing') and source lines
 
 **CLI Parity Command**:
-```./target/debug/atlas query 'who calls classify_graph_store_error' --json```
+```./target/debug/atlas content neighbors packages/atlas-core/src/health.rs::fn::classify_graph_store_error --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -1284,7 +1288,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify `structuredContent.siblings` includes `is_schema_mismatch_error` function
 
 **CLI Parity Command**:
-```./target/debug/atlas query 'who calls classify_graph_store_error' --json```
+```./target/debug/atlas content neighbors packages/atlas-core/src/health.rs::fn::classify_graph_store_error --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -1307,7 +1311,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify `structuredContent.summary.caller_count >= 1`
 
 **CLI Parity Command**:
-```./target/debug/atlas query 'who calls classify_graph_store_error' --json```
+```./target/debug/atlas content neighbors packages/atlas-core/src/clock.rs::fn::now_utc --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -1320,7 +1324,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 #### Tool 14: `traverse_graph`
 **Description**: Bi-directional graph traversal from a specific symbol (qualified name), returning all nodes and edges reachable within depth hops, capped by budget.
-**Canonical CLI Parity Command**: `./target/debug/atlas query 'classify_graph_store_error' --expand --depth 2 --json`
+**Canonical CLI Parity Command**: `./target/debug/atlas query 'classify_graph_store_error' --expand --expand-hops 2 --json`
 
 ##### Test 14.1: Bounded Bidirectional Traversal (Depth 2, Max Nodes 10)
 **Intent in Plain English**: Traverse 2 hops outward from `classify_graph_store_error` while enforcing a strict 10-node limit to avoid blowing up LLM context.
@@ -1341,7 +1345,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify `structuredContent.traversal_budget.accepted_node_budget == 10`
 
 **CLI Parity Command**:
-```./target/debug/atlas query 'classify_graph_store_error' --expand --depth 2 --json```
+```./target/debug/atlas query 'classify_graph_store_error' --expand --expand-hops 2 --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -1367,7 +1371,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify `summary.impacted_file_count == 2`
 
 **CLI Parity Command**:
-```./target/debug/atlas query 'classify_graph_store_error' --expand --depth 2 --json```
+```./target/debug/atlas query 'classify_graph_store_error' --expand --expand-hops 2 --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -1392,7 +1396,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify no transitive edges are emitted
 
 **CLI Parity Command**:
-```./target/debug/atlas query 'classify_graph_store_error' --expand --depth 2 --json```
+```./target/debug/atlas query 'classify_graph_store_error' --expand --expand-hops 2 --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -1517,7 +1521,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 #### Tool 16: `cross_file_links`
 **Description**: Finds files that reference symbols defined in the given file, ordered by coupling strength. Weak same_package edges excluded by default.
-**Canonical CLI Parity Command**: `./target/debug/atlas query --file packages/atlas-core/src/health.rs --json`
+**Canonical CLI Parity Command**: `./target/debug/atlas content links packages/atlas-core/src/health.rs --json`
 
 ##### Test 16.1: Default Strong Semantic Cross-File References
 **Intent in Plain English**: Inspect external files with direct semantic symbol references to `packages/atlas-core/src/health.rs` without fallback noise.
@@ -1534,7 +1538,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify returns structured `coupling_metric`
 
 **CLI Parity Command**:
-```./target/debug/atlas query --file packages/atlas-core/src/health.rs --json```
+```./target/debug/atlas content links packages/atlas-core/src/health.rs --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -1559,7 +1563,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify `coupling_metric >= 4.0`
 
 **CLI Parity Command**:
-```./target/debug/atlas query --file packages/atlas-core/src/health.rs --json```
+```./target/debug/atlas content links packages/atlas-core/src/health.rs --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -1584,7 +1588,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify rank 1 file is `packages/atlas-core/src/readiness.rs`
 
 **CLI Parity Command**:
-```./target/debug/atlas query --file packages/atlas-core/src/health.rs --json```
+```./target/debug/atlas content links packages/atlas-core/src/health.rs --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -1597,7 +1601,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 #### Tool 17: `concept_clusters`
 **Description**: Clusters files related to seed files by shared symbol references, returning co-dependent file groups ordered by coupling density.
-**Canonical CLI Parity Command**: `./target/debug/atlas insights patterns --json`
+**Canonical CLI Parity Command**: `./target/debug/atlas content clusters packages/atlas-core/src/health.rs --json`
 
 ##### Test 17.1: Cluster Files Around Core Health Seed
 **Intent in Plain English**: Cluster all files in the repository that share symbols with `packages/atlas-core/src/health.rs`.
@@ -1617,7 +1621,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify `clusters[0].shared_symbols` lists `packages/atlas-core/src/health.rs::fn::classify_graph_store_error`
 
 **CLI Parity Command**:
-```./target/debug/atlas insights patterns --json```
+```./target/debug/atlas content clusters packages/atlas-core/src/health.rs --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -1643,7 +1647,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify `summary.seed_file_count == 2`
 
 **CLI Parity Command**:
-```./target/debug/atlas insights patterns --json```
+```./target/debug/atlas content clusters packages/atlas-core/src/health.rs packages/atlas-core/src/readiness.rs --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -1669,7 +1673,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify clusters are strictly sorted in descending density order
 
 **CLI Parity Command**:
-```./target/debug/atlas insights patterns --json```
+```./target/debug/atlas content clusters packages/atlas-core/src/health.rs --limit 3 --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -1703,11 +1707,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 **Expected Clean Output & Assertions**:
 - Verify `structuredContent.context_files` is populated
-- Verify `structuredContent.token_count <= 1000`
+- Verify `structuredContent.payload_truncation.tokens_estimated <= 1000`
 - Verify declarations and immediate callers are included
 
 **CLI Parity Command**:
-```./target/debug/atlas context 'classify_graph_store_error' --json```
+```./target/debug/atlas context 'classify_graph_store_error' --token-budget 1000 --max-nodes 5 --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -1723,7 +1727,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 {
   "target": {
     "kind": "file",
-    "path": "packages/atlas-core/src/health.rs"
+    "file": "packages/atlas-core/src/health.rs"
   },
   "max_nodes": 10
 }
@@ -1734,7 +1738,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify caller references from `readiness.rs` are attached
 
 **CLI Parity Command**:
-```./target/debug/atlas context 'classify_graph_store_error' --json```
+```./target/debug/atlas context --file packages/atlas-core/src/health.rs --max-nodes 10 --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -1750,7 +1754,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 {
   "target": {
     "kind": "files",
-    "paths": [
+    "files": [
       "packages/atlas-core/src/health.rs",
       "docs/error_codes.md"
     ]
@@ -1764,7 +1768,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify truncation flag is boolean
 
 **CLI Parity Command**:
-```./target/debug/atlas context 'classify_graph_store_error' --json```
+```./target/debug/atlas context --files packages/atlas-core/src/health.rs docs/error_codes.md --max-nodes 15 --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -2382,8 +2386,8 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 **Agent Expectation Check**:
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
-##### Test 26.2: Refactor Safety of Private Internal Helper
-**Intent in Plain English**: Evaluate an internal private function to verify reduced blast radius.
+##### Test 26.2: Refactor Safety of Internal Helper
+**Intent in Plain English**: Evaluate an internal helper (`pub` but only used inside `atlas-core`) to verify reduced blast radius.
 
 **MCP Arguments (JSON)**:
 ```json
@@ -2397,7 +2401,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify `fan_in` is lower than public API symbols
 
 **CLI Parity Command**:
-```./target/debug/atlas insights risk packages/atlas-core/src/health.rs::fn::classify_graph_store_error --json```
+```./target/debug/atlas insights risk packages/atlas-core/src/health.rs::fn::is_schema_mismatch_error --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -2478,7 +2482,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify total impacted nodes <= 15
 
 **CLI Parity Command**:
-```./target/debug/atlas analyze remove packages/atlas-core/src/health.rs::fn::classify_graph_store_error --json```
+```./target/debug/atlas analyze remove packages/atlas-core/src/health.rs::fn::classify_graph_store_error --max-depth 2 --max-nodes 15 --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -2504,6 +2508,8 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 **CLI Parity Command**:
 ```./target/debug/atlas analyze remove packages/atlas-core/src/health.rs::fn::classify_graph_store_error --json```
+
+**CLI Scope Note**: Batch removal is MCP-only (`symbols: [...]`). The CLI analyses one symbol per invocation; run it once per symbol and combine the `impacted_symbols` sets.
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -2579,7 +2585,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify blocking callers list `classify_graph_store_error`
 
 **CLI Parity Command**:
-```./target/debug/atlas analyze dependency packages/atlas-core/src/health.rs::fn::classify_graph_store_error --json```
+```./target/debug/atlas analyze dependency packages/atlas-core/src/health.rs::fn::is_schema_mismatch_error --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -3055,11 +3061,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ---
 
 #### Tool 35: `find_complex_functions`
-**Description**: Finds complex functions repo-wide or within selected files using deterministic cyclomatic and cognitive complexity thresholds.
+**Description**: Finds complex functions repo-wide or within selected files using deterministic cyclomatic and cognitive complexity thresholds. Thresholds are inclusive: a function is reported when its score is `>=` the threshold.
 **Canonical CLI Parity Command**: `./target/debug/atlas insights complex-functions --json`
 
 ##### Test 35.1: High Cyclomatic Complexity Scan (Threshold 15)
-**Intent in Plain English**: Identify functions with cyclomatic complexity > 15 to prioritize for unit testing.
+**Intent in Plain English**: Identify functions with cyclomatic complexity >= 15 (threshold is inclusive) to prioritize for unit testing.
 
 **MCP Arguments (JSON)**:
 ```json
@@ -3072,9 +3078,10 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 **Expected Clean Output & Assertions**:
 - Verify all returned functions have cyclomatic complexity >= 15
 - Verify exact complexity score is reported
+- Verify `details.governing_threshold` names the threshold that triggered the finding and `details.threshold_kind` is `cyclomatic`
 
 **CLI Parity Command**:
-```./target/debug/atlas insights complex-functions --json```
+```./target/debug/atlas insights complex-functions --complexity-threshold 15 --limit 5 --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -3449,7 +3456,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ### Category: Companion Content & Asset Discovery
 #### Tool 40: `search_files`
 **Description**: Discovers files by name or path glob. Companion lookup for non-code assets (docs, config, SQL, Markdown, templates) after graph resolution.
-**Canonical CLI Parity Command**: `./target/debug/atlas query --files '*error_codes*' --json`
+**Canonical CLI Parity Command**: `./target/debug/atlas content files '*error_codes*' --json`
 
 ##### Test 40.1: Discover Error Code Documentation by Glob
 **Intent in Plain English**: Locate error code reference files across docs and code using glob `*error_codes*`.
@@ -3467,7 +3474,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify `summary.returned_count == 2`
 
 **CLI Parity Command**:
-```./target/debug/atlas query --files '*error_codes*' --json```
+```./target/debug/atlas content files '*error_codes*' --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -3488,10 +3495,10 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 **Expected Clean Output & Assertions**:
 - Verify all matched file paths start with `packages/atlas-repo/src/`
-- Verify finds `lib.rs` and `canonical.rs`
+- Verify finds `lib.rs` and `path.rs`
 
 **CLI Parity Command**:
-```./target/debug/atlas query --files '*error_codes*' --json```
+```./target/debug/atlas content files '*error_codes*' --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -3514,7 +3521,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify matches include root `Cargo.toml` and package manifests
 
 **CLI Parity Command**:
-```./target/debug/atlas query --files '*error_codes*' --json```
+```./target/debug/atlas content files '*error_codes*' --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -3527,7 +3534,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 #### Tool 41: `search_content`
 **Description**: Searches file contents by literal string or regex. Use as companion lookup when symbols depend on non-code text (config keys, errors, prompts).
-**Canonical CLI Parity Command**: `./target/debug/atlas query --content 'classify_graph_store_error' --json`
+**Canonical CLI Parity Command**: `./target/debug/atlas content grep 'classify_graph_store_error' --json`
 
 ##### Test 41.1: Search Exact Error String in Documentation
 **Intent in Plain English**: Search for documentation of the error code `stale_index` inside `docs` subpath.
@@ -3545,7 +3552,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify exact hit text and line numbers are returned
 
 **CLI Parity Command**:
-```./target/debug/atlas query --content 'classify_graph_store_error' --json```
+```./target/debug/atlas content grep 'classify_graph_store_error' --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -3568,7 +3575,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify finds constant definitions and references
 
 **CLI Parity Command**:
-```./target/debug/atlas query --content 'classify_graph_store_error' --json```
+```./target/debug/atlas content grep 'classify_graph_store_error' --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -3588,10 +3595,10 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `warnings` includes guidance: 'classify_graph_store_error looks like symbol name. Prefer query_graph or symbol_neighbors.'
+- Verify `warnings` includes guidance: "'classify_graph_store_error' looks like symbol name. For callers, callees, and graph context prefer query_graph or symbol_neighbors."
 
 **CLI Parity Command**:
-```./target/debug/atlas query --content 'classify_graph_store_error' --json```
+```./target/debug/atlas content grep 'classify_graph_store_error' --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -3604,7 +3611,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 #### Tool 42: `read_file_excerpt`
 **Description**: Reads bounded file content from a repo-relative path using selector (range, ranges, context) without running full content search.
-**Canonical CLI Parity Command**: `./target/debug/atlas context --file packages/atlas-core/src/health.rs --lines 62-70 --json`
+**Canonical CLI Parity Command**: `./target/debug/atlas content excerpt packages/atlas-core/src/health.rs --start-line 62 --end-line 70 --json`
 
 ##### Test 42.1: Read Exact Function Line Range
 **Intent in Plain English**: Read lines 62 to 70 of `packages/atlas-core/src/health.rs` containing `classify_graph_store_error`.
@@ -3627,7 +3634,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify `snippets[0].range == [62, 70]`
 
 **CLI Parity Command**:
-```./target/debug/atlas context --file packages/atlas-core/src/health.rs --lines 62-70 --json```
+```./target/debug/atlas content excerpt packages/atlas-core/src/health.rs --start-line 62 --end-line 70 --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -3664,7 +3671,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify snippet 2 contains `classify_graph_store_error`
 
 **CLI Parity Command**:
-```./target/debug/atlas context --file packages/atlas-core/src/health.rs --lines 62-70 --json```
+```./target/debug/atlas content excerpt packages/atlas-core/src/health.rs --start-line 62 --end-line 70 --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -3690,10 +3697,11 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 **Expected Clean Output & Assertions**:
 - Verify returned lines count == 10
+- Verify `summary.lines.selected == 50` (requested) and `summary.lines.emitted == 10`
 - Verify `truncated == true`
 
 **CLI Parity Command**:
-```./target/debug/atlas context --file packages/atlas-core/src/health.rs --lines 62-70 --json```
+```./target/debug/atlas content excerpt Cargo.toml --start-line 1 --end-line 50 --max-lines 10 --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -3706,7 +3714,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 #### Tool 43: `read_file_around_match`
 **Description**: Reads grouped snippets around literal or regex matches inside one repo-relative file, with before/after line context.
-**Canonical CLI Parity Command**: `./target/debug/atlas context --file packages/atlas-core/src/health.rs --match 'classify_graph_store_error' --json`
+**Canonical CLI Parity Command**: `./target/debug/atlas content match-context packages/atlas-core/src/health.rs 'classify_graph_store_error' --json`
 
 ##### Test 43.1: Retrieve Function Match Context Window
 **Intent in Plain English**: Read 3 lines before and 3 lines after `pub fn classify_graph_store_error` in `packages/atlas-core/src/health.rs`.
@@ -3728,7 +3736,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify range is `[59, 65]`
 
 **CLI Parity Command**:
-```./target/debug/atlas context --file packages/atlas-core/src/health.rs --match 'classify_graph_store_error' --json```
+```./target/debug/atlas content match-context packages/atlas-core/src/health.rs 'classify_graph_store_error' --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -3755,7 +3763,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify matched function is `is_schema_mismatch_error`
 
 **CLI Parity Command**:
-```./target/debug/atlas context --file packages/atlas-core/src/health.rs --match 'classify_graph_store_error' --json```
+```./target/debug/atlas content match-context packages/atlas-core/src/health.rs 'classify_graph_store_error' --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -3780,7 +3788,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify `summary.matches.returned <= 2`
 
 **CLI Parity Command**:
-```./target/debug/atlas context --file packages/atlas-core/src/health.rs --match 'classify_graph_store_error' --json```
+```./target/debug/atlas content match-context packages/atlas-core/src/health.rs 'classify_graph_store_error' --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -3883,7 +3891,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 #### Tool 45: `search_templates`
 **Description**: Discovers template files (HTML, Jinja2, Handlebars, Tera, Liquid, Pug) by extension as companion lookup for UI/view dependencies.
-**Canonical CLI Parity Command**: `./target/debug/atlas query --templates --json`
+**Canonical CLI Parity Command**: `./target/debug/atlas content templates --json`
 
 ##### Test 45.1: Discover Workspace Template Fixtures
 **Intent in Plain English**: Find template files across the repo without subpath constraint.
@@ -3899,7 +3907,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify `summary.returned_count >= 2`
 
 **CLI Parity Command**:
-```./target/debug/atlas query --templates --json```
+```./target/debug/atlas content templates --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -3921,7 +3929,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify all returned matches have `kind == 'html'`
 
 **CLI Parity Command**:
-```./target/debug/atlas query --templates --json```
+```./target/debug/atlas content templates --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -3943,7 +3951,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify all matched paths start with `packages/atlas-parser/`
 
 **CLI Parity Command**:
-```./target/debug/atlas query --templates --json```
+```./target/debug/atlas content templates --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -3956,7 +3964,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 #### Tool 46: `search_text_assets`
 **Description**: Discovers SQL, config (TOML/YAML/INI), environment (.env), and prompt files as non-code dependency companions.
-**Canonical CLI Parity Command**: `./target/debug/atlas query --text-assets --json`
+**Canonical CLI Parity Command**: `./target/debug/atlas content text-assets --json`
 
 ##### Test 46.1: Discover Repository Configuration Files
 **Intent in Plain English**: Find TOML and YAML configuration files across the repository.
@@ -3973,7 +3981,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify each item has `asset_kind == 'config'`
 
 **CLI Parity Command**:
-```./target/debug/atlas query --text-assets --json```
+```./target/debug/atlas content text-assets --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -3995,7 +4003,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify matches include `.github/workflows/ci.yml` and `.github/workflows/release.yml`
 
 **CLI Parity Command**:
-```./target/debug/atlas query --text-assets --json```
+```./target/debug/atlas content text-assets --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -4018,7 +4026,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify `matches.length <= 10`
 
 **CLI Parity Command**:
-```./target/debug/atlas query --text-assets --json```
+```./target/debug/atlas content text-assets --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -7021,6 +7029,16 @@ Run CLI: `./target/debug/atlas uri 'atlas://repo/current/symbol/packages/atlas-c
 
 **Agent Expectation Check**:
 - Confirm URI resolution handles `repo/current` alias cleanly.
+
+**Accepted URI Grammar**:
+- `atlas://repo/{repo_id}/tree/{dir}` (use `.` for the repo root)
+- `atlas://repo/{repo_id}/file/{path}`
+- `atlas://repo/{repo_id}/symbol/{qualified_name}`
+- `atlas://memories/topic/{topic}` and `atlas://memories/id/{memory_id}`
+- `atlas://memoir/{graph}/{concept}`
+- `atlas://artifacts/{source_id}/{chunk_index}`
+
+Percent-encode path segments. `?level=l0|l1|l2` is only valid on repo tree/file/symbol URIs. Bare forms (`atlas://repo`, `atlas://<repo_id>`, `atlas://file/<path>`) are rejected.
 
 
 ---

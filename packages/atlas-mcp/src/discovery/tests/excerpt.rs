@@ -134,6 +134,47 @@ fn read_file_excerpt_ignores_zero_line_when_line_ranges_is_real_selector() {
 }
 
 #[test]
+fn read_file_excerpt_accepts_ranges_alias() {
+    let (_dir, root) = make_repo(&[(
+        "src/lib.rs",
+        "fn one() {}\nfn two() {}\nfn three() {}\nfn four() {}\n",
+    )]);
+    let args = serde_json::json!({
+        "file": "src/lib.rs",
+        "selector": { "kind": "ranges", "ranges": [[1, 2], [4, 4]] },
+    });
+    let resp = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json).unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+
+    assert_eq!(v["selection_mode"], "ranges");
+    assert_eq!(v["summary"]["snippets"], 2);
+    assert_eq!(v["snippets"][0]["range"], serde_json::json!([1, 2]));
+    assert_eq!(v["snippets"][1]["range"], serde_json::json!([4, 4]));
+}
+
+#[test]
+fn read_file_excerpt_reports_requested_and_emitted_counts() {
+    let (_dir, root) = make_repo(&[(
+        "src/lib.rs",
+        "fn one() {}\nfn two() {}\nfn three() {}\nfn four() {}\n",
+    )]);
+    let args = serde_json::json!({
+        "file": "src/lib.rs",
+        "selector": { "kind": "range", "start_line": 1, "end_line": 4 },
+        "max_lines": 2,
+    });
+    let resp = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json).unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+
+    assert_eq!(v["summary"]["lines"]["selected"], 4);
+    assert_eq!(v["summary"]["lines"]["emitted"], 2);
+    assert_eq!(v["summary"]["ranges"]["requested"], 1);
+    assert_eq!(v["summary"]["ranges"]["emitted"], 1);
+}
+
+#[test]
 fn read_file_excerpt_supports_line_with_context() {
     let (_dir, root) = make_repo(&[(
         "src/lib.rs",
@@ -662,6 +703,41 @@ fn get_docs_section_returns_candidates_for_ambiguous_slug() {
     assert_eq!(v["resolved"], false);
     assert_eq!(v["candidates"][0]["heading_path"], "document.one.install");
     assert_eq!(v["candidates"][1]["heading_path"], "document.two.install");
+}
+
+#[test]
+fn get_docs_section_miss_returns_near_match_candidates() {
+    let (_dir, root) = make_repo(&[(
+        "README.md",
+        "# Overview\nintro\n## Install\nstep one\n## Usage\nrun it\n",
+    )]);
+    let db_path = seed_docs_index(
+        &root,
+        &[
+            markdown_heading("Overview", "document.overview", 1, 1),
+            markdown_heading("Install", "document.overview.install", 2, 3),
+            markdown_heading("Usage", "document.overview.usage", 2, 5),
+        ],
+    );
+    let args = serde_json::json!({
+        "file": "README.md",
+        "selector": { "kind": "heading", "heading": "document.overview.instal" },
+    });
+    let resp = tool_get_docs_section(Some(&args), &root, &db_path, OutputFormat::Json).unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+
+    assert_eq!(v["resolved"], false);
+    assert_eq!(v["query"], "document.overview.instal");
+    assert_eq!(
+        v["candidates"][0]["heading_path"],
+        "document.overview.install"
+    );
+    assert!(
+        v["summary"]["candidate_count"]
+            .as_u64()
+            .is_some_and(|count| count >= 1)
+    );
 }
 
 // -----------------------------------------------------------------------

@@ -51,6 +51,7 @@ fn run_cli() -> anyhow::Result<()> {
         Command::Trace { .. } => commands::run_trace(&cli),
         Command::Man { .. } => commands::run_man(&cli),
         Command::DocsSection { .. } => commands::run_docs_section(&cli),
+        Command::Content { .. } => commands::run_content(&cli),
         Command::Docs { .. } => commands::run_docs(&cli),
         Command::Embed { .. } => commands::run_embed(&cli),
         Command::Impact { .. } => commands::run_impact(&cli),

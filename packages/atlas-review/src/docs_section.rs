@@ -239,6 +239,95 @@ fn heading_matches(heading: &IndexedHeading, query: &str) -> bool {
             || heading.title.eq_ignore_ascii_case(normalized))
 }
 
+/// Rank headings that are close to an unmatched heading query.
+///
+/// Used by `get_docs_section` and the CLI to turn a bare "heading not found"
+/// error into actionable suggestions. Scoring prefers exact slug/title hits,
+/// then containment, then small edit distance on the last path segment.
+pub fn suggest_docs_headings(
+    store: &Store,
+    repo_root: &Utf8Path,
+    file: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<DocsSectionCandidate>> {
+    let canonical = CanonicalRepoPath::from_repo_relative(file)
+        .map_err(|error| AtlasError::Other(format!("invalid file path '{file}': {error}")))?;
+    let file = canonical.as_str().to_owned();
+    let content = std::fs::read_to_string(repo_root.join(&file)).map_err(|error| {
+        AtlasError::Other(format!("cannot read UTF-8 text file '{file}': {error}"))
+    })?;
+    let nodes = store.nodes_by_file(&file)?;
+    let headings = indexed_headings(&nodes, content.lines().count() as u32);
+    let normalized = query.trim().trim_matches('.').to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut scored: Vec<(u8, DocsSectionCandidate)> = headings
+        .into_iter()
+        .filter_map(|heading| {
+            let slug = heading.slug.to_ascii_lowercase();
+            let title = heading.title.to_ascii_lowercase();
+            // Compare the last dotted segment first so `document.overview.instal`
+            // ranks `install` above its ancestor `overview`.
+            let leaf = normalized.rsplit('.').next().unwrap_or(&normalized);
+            let score = if slug == normalized || title == normalized {
+                0
+            } else if slug == leaf || title == leaf {
+                1
+            } else if slug.contains(leaf) || leaf.contains(&slug) {
+                2
+            } else if title.contains(leaf) || leaf.contains(&title) {
+                3
+            } else if bounded_edit_distance(&slug, leaf, 3) <= 3 {
+                4
+            } else if normalized.contains(&slug) {
+                5
+            } else {
+                return None;
+            };
+            Some((score, candidate_from_heading(heading)))
+        })
+        .collect();
+    scored.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.start_line.cmp(&right.1.start_line))
+            .then_with(|| left.1.heading_path.cmp(&right.1.heading_path))
+    });
+    Ok(scored
+        .into_iter()
+        .take(limit)
+        .map(|(_, candidate)| candidate)
+        .collect())
+}
+
+/// Bounded Levenshtein distance; returns `bound + 1` once the bound is exceeded.
+fn bounded_edit_distance(left: &str, right: &str, bound: usize) -> usize {
+    let left: Vec<char> = left.chars().collect();
+    let right: Vec<char> = right.chars().collect();
+    if left.len().abs_diff(right.len()) > bound {
+        return bound + 1;
+    }
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    let mut current = vec![0usize; right.len() + 1];
+    for (i, left_char) in left.iter().enumerate() {
+        current[0] = i + 1;
+        let mut row_min = current[0];
+        for (j, right_char) in right.iter().enumerate() {
+            let substitution = previous[j] + usize::from(left_char != right_char);
+            current[j + 1] = (previous[j + 1] + 1).min(current[j] + 1).min(substitution);
+            row_min = row_min.min(current[j + 1]);
+        }
+        if row_min > bound {
+            return bound + 1;
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[right.len()]
+}
+
 fn candidate_from_heading(heading: IndexedHeading) -> DocsSectionCandidate {
     DocsSectionCandidate {
         title: heading.title,

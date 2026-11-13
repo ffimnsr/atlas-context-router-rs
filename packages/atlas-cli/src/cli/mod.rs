@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 
+mod content;
 mod experience;
 mod memoir;
 mod overview;
@@ -10,6 +11,10 @@ mod uri;
 #[cfg(test)]
 mod tests;
 
+pub use content::{
+    AssetDiscoveryArgs, ClustersArgs, ContentCommand, ExcerptArgs, FilesArgs, GrepArgs, LinksArgs,
+    MatchContextArgs, NeighborsArgs,
+};
 pub use experience::ExperienceCommand;
 pub use memoir::MemoirCommand;
 pub use overview::OverviewCommand;
@@ -213,8 +218,8 @@ pub enum Command {
         #[arg(long)]
         expand: bool,
 
-        /// Maximum edge hops when --expand is active.
-        #[arg(long, default_value_t = 1)]
+        /// Maximum edge hops when --expand is active (alias: --depth).
+        #[arg(long, default_value_t = 1, visible_alias = "depth")]
         expand_hops: u32,
 
         /// Enable fuzzy matching boost for near-miss symbol names.
@@ -373,6 +378,12 @@ pub enum Command {
         /// Maximum UTF-8 bytes to return from the section body.
         #[arg(long, default_value_t = 16_384)]
         max_bytes: usize,
+    },
+
+    /// Companion content discovery and relationship lookups.
+    Content {
+        #[command(subcommand)]
+        subcommand: ContentCommand,
     },
 
     /// Generate Markdown documentation or export dependency diagrams from the graph.
@@ -897,6 +908,20 @@ pub enum Command {
     },
 
     /// Read, list, grep, and search the canonical atlas:// URI namespace.
+    ///
+    /// Accepted URI forms (percent-encode path segments):
+    ///
+    ///   atlas://repo/{repo_id}/tree/{dir}
+    ///   atlas://repo/{repo_id}/file/{path}
+    ///   atlas://repo/{repo_id}/symbol/{qualified_name}
+    ///   atlas://memories/topic/{topic}
+    ///   atlas://memories/id/{memory_id}
+    ///   atlas://memoir/{graph}/{concept}
+    ///   atlas://artifacts/{source_id}/{chunk_index}
+    ///
+    /// `?level=l0|l1|l2` selects disclosure depth for repo tree/file/symbol
+    /// URIs. Bare `atlas://repo`, `atlas://file/<path>`, and `atlas://<repo_id>`
+    /// forms are not part of the grammar; use the canonical forms above.
     Uri {
         #[command(subcommand)]
         subcommand: UriCommand,

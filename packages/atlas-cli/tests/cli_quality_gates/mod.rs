@@ -34,6 +34,7 @@ const GIT_LOCAL_ENV_VARS: &[&str] = &[
 ];
 
 mod context;
+mod content;
 mod core;
 mod docs;
 mod resolution;

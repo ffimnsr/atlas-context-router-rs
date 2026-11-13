@@ -16,7 +16,7 @@ pub use context::{
 pub use decision_query::decision_lookup_query;
 pub use docs_section::{
     DocsSectionCandidate, DocsSectionLine, DocsSectionLookup, DocsSectionSelector,
-    lookup_docs_section,
+    lookup_docs_section, suggest_docs_headings,
 };
 pub use explain_change::{
     ExplainChangeSummary, build_explain_change_summary, empty_explain_change_summary,

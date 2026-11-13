@@ -20,6 +20,12 @@ fn wants_json_output() -> bool {
 
 fn emit_panic_report(panic_info: &PanicHookInfo<'_>, json_output: bool) {
     let detail = panic_detail(panic_info);
+    // A closed stdout reader (`atlas query foo | head`) surfaces as a
+    // `Broken pipe` write panic. Exit quietly instead of printing a panic
+    // report; Rust ignores `SIGPIPE`, so this is the only catch point.
+    if detail.contains("Broken pipe") {
+        std::process::exit(0);
+    }
     let message = user_facing_error_message(&detail, &detail);
     let stderr = std::io::stderr();
     let mut stderr = stderr.lock();
