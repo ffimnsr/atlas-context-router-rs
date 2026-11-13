@@ -306,6 +306,8 @@ pub(crate) fn read_saved_context_output_schema() -> Value {
             "source_id": { "type": "string" },
             "content": { "type": ["string", "null"] },
             "content_format": { "type": ["string", "null"] },
+            "content_verbatim": { "type": "boolean" },
+            "paging_unit": { "type": "string" },
             "chunk_offset": { "type": "integer" },
             "next_chunk_offset": { "type": ["integer", "null"] },
             "truncated": { "type": "boolean" },
@@ -376,6 +378,7 @@ pub(crate) fn save_context_artifact_output_schema() -> Value {
             "preview": { "type": ["string", "null"] },
             "inline_content": { "type": ["string", "null"] },
             "content_size_bytes": { "type": "integer" },
+            "redaction_applied": { "type": "boolean" },
             "chunk_count": { "type": "integer" },
             "resource_link": { "type": ["object", "null"] },
             "retrieval_hint": { "type": ["string", "null"] },
@@ -399,6 +402,7 @@ pub(crate) fn save_context_artifact_output_schema() -> Value {
                 },
                 "required": ["session_id", "stored", "inline", "content_type"]
             },
+            "warnings": { "type": "array", "items": { "type": "string" } },
             "atlas_provenance": { "type": "object" }
         }),
         &[

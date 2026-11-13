@@ -1207,3 +1207,49 @@ fn trie_relinks_chunks_after_stable_file_rename() {
     assert_eq!(new_scope.len(), 1);
     assert_eq!(new_scope[0].node.file_path, "src/moved/a.rs");
 }
+
+// --- traverse_from_qnames -------------------------------------------------
+
+#[test]
+fn traverse_from_qnames_finds_dependents_when_seed_set_meets_node_cap() {
+    let mut store = open_in_memory();
+    let seeds = (0..5)
+        .map(|index| {
+            make_node(
+                NodeKind::Function,
+                &format!("f{index}"),
+                &format!("a.rs::fn::f{index}"),
+                "a.rs",
+                "rust",
+            )
+        })
+        .collect::<Vec<_>>();
+    let dependent = make_node(NodeKind::Function, "b", "b.rs::fn::b", "b.rs", "rust");
+    let edge = make_edge(EdgeKind::Calls, "a.rs::fn::f0", "b.rs::fn::b", "a.rs");
+    store
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &seeds, &[edge])
+        .unwrap();
+    store
+        .replace_file_graph_for_repo("repo_test", "b.rs", "h", None, None, &[dependent], &[])
+        .unwrap();
+
+    let seed_qnames: Vec<&str> = seeds
+        .iter()
+        .map(|node| node.qualified_name.as_str())
+        .collect();
+    let result = store.traverse_from_qnames(&seed_qnames, 2, 2, 100).unwrap();
+
+    assert_eq!(
+        result.changed_nodes.len(),
+        1,
+        "seed set yields half the budget"
+    );
+    assert!(
+        result
+            .impacted_nodes
+            .iter()
+            .any(|node| node.qualified_name == "b.rs::fn::b"),
+        "dependents must survive a seed-heavy traversal"
+    );
+    assert!(result.impacted_files.contains(&"b.rs".to_string()));
+}

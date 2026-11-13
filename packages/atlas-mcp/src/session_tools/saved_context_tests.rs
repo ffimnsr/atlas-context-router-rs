@@ -693,3 +693,45 @@ fn purge_saved_context_session_target_returns_normalized_shape() {
     assert!(body["deleted_sources"].as_u64().unwrap() >= 1);
     assert!(body["deleted_chunks"].as_u64().unwrap() >= 1);
 }
+
+#[test]
+fn read_saved_context_round_trips_json_payload_verbatim() {
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+    let db_path = setup_db_path(&dir);
+    let repo_root = dir.path().to_str().unwrap();
+
+    // JSON chunking re-serializes each value under its key, so a chunk-joined
+    // read could not reconstruct the original bytes.
+    let original = serde_json::json!({
+        "status": "ok",
+        "nodes_checked": 25000,
+        "details": "graph analysis sample payload ".repeat(40),
+    })
+    .to_string();
+
+    let save_args = serde_json::json!({
+        "content": original,
+        "label": "verbatim json artifact",
+        "content_type": "application/json",
+    });
+    let saved = tool_body(
+        &tool_save_context_artifact(Some(&save_args), repo_root, &db_path, OutputFormat::Json)
+            .unwrap(),
+    );
+    let source_id = saved["source_id"].as_str().expect("indexed source id");
+
+    let read = tool_body(
+        &tool_read_saved_context(
+            Some(&serde_json::json!({ "source_id": source_id })),
+            repo_root,
+            &db_path,
+            OutputFormat::Json,
+        )
+        .unwrap(),
+    );
+    assert_eq!(read["content_verbatim"], serde_json::json!(true));
+    assert_eq!(read["paging_unit"], serde_json::json!("bytes"));
+    assert_eq!(read["content"].as_str(), Some(original.as_str()));
+    assert_eq!(read["byte_count"].as_u64(), Some(original.len() as u64));
+}

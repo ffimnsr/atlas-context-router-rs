@@ -273,6 +273,14 @@ pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
                     "properties/keep_days",
                     "For age-based cleanup: keep sources newer than this many days (default 30).",
                 ),
+                (
+                    "properties/purge_bridge_files",
+                    "Also delete pending bridge artifact files from .atlas/bridge/.",
+                ),
+                (
+                    "properties/confirm",
+                    "Non-interactive confirmation for age-based cleanup. Use when the client cannot render elicitation forms; session-scoped purge does not need it.",
+                ),
                 ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
             ]),
         ),

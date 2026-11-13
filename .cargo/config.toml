@@ -1,0 +1,7 @@
+# clap's `#[derive(Subcommand)]` expansion builds the whole `atlas` command
+# tree inside a handful of very large functions. In debug builds those frames
+# are big enough that libtest's default 2 MiB thread stack overflows while
+# parsing an unrelated command. Give test threads headroom so `cargo test`
+# exercises the real parser instead of aborting on stack exhaustion.
+[env]
+RUST_MIN_STACK = "8388608"

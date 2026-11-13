@@ -122,7 +122,7 @@ fn impact_radius_one_hop() {
 }
 
 #[test]
-fn impact_radius_caps_changed_nodes_at_max_nodes() {
+fn impact_radius_splits_node_budget_when_seed_set_exceeds_cap() {
     let mut store = open_in_memory();
     let nodes = (0..5)
         .map(|index| {
@@ -140,10 +140,54 @@ fn impact_radius_caps_changed_nodes_at_max_nodes() {
         .unwrap();
 
     let result = store.impact_radius(&["a.rs"], 1, 2, 100).unwrap();
-    assert_eq!(result.changed_nodes.len(), 2);
+    // Five seeds exceed the two-node budget, so the budget splits: half for
+    // the changed set, half reserved for impact neighbours.
+    assert_eq!(result.changed_nodes.len(), 1);
     let budget = result.traversal_budget.as_ref().expect("traversal budget");
     assert!(budget.budget_hit, "truncated seed list must set budget_hit");
     assert!(budget.emitted_node_count <= 2);
+}
+
+#[test]
+fn impact_radius_finds_dependents_when_seed_file_exceeds_node_cap() {
+    let mut store = open_in_memory();
+    // A large module contributes more seed symbols than `max_nodes`. The
+    // traversal cap must not consume the whole budget on seeds, otherwise real
+    // dependents disappear from `impacted_nodes`.
+    let seed_nodes = (0..5)
+        .map(|index| {
+            make_node(
+                NodeKind::Function,
+                &format!("f{index}"),
+                &format!("a.rs::fn::f{index}"),
+                "a.rs",
+                "rust",
+            )
+        })
+        .collect::<Vec<_>>();
+    let dependent = make_node(NodeKind::Function, "b", "b.rs::fn::b", "b.rs", "rust");
+    let edge = make_edge(EdgeKind::Calls, "a.rs::fn::f0", "b.rs::fn::b", "a.rs");
+    store
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &seed_nodes, &[edge])
+        .unwrap();
+    store
+        .replace_file_graph_for_repo("repo_test", "b.rs", "h", None, None, &[dependent], &[])
+        .unwrap();
+
+    let result = store.impact_radius(&["a.rs"], 2, 2, 100).unwrap();
+    assert_eq!(
+        result.changed_nodes.len(),
+        1,
+        "seed set yields half the node budget when it exceeds the cap"
+    );
+    assert!(
+        result
+            .impacted_nodes
+            .iter()
+            .any(|node| node.qualified_name == "b.rs::fn::b"),
+        "dependents must survive a seed-heavy file"
+    );
+    assert!(result.impacted_files.contains(&"b.rs".to_string()));
 }
 
 #[test]

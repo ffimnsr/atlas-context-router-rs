@@ -5,6 +5,7 @@ mod content;
 mod experience;
 mod memoir;
 mod overview;
+mod session_args;
 mod subcommands;
 mod uri;
 
@@ -928,9 +929,13 @@ pub enum Command {
     },
 
     /// Inspect and prune query-conditioned experience edges.
+    #[command(args_conflicts_with_subcommands = true)]
     Experience {
+        /// Canonical source or target URI (shorthand for `experience inspect`).
+        uri: Option<String>,
+
         #[command(subcommand)]
-        subcommand: ExperienceCommand,
+        subcommand: Option<ExperienceCommand>,
     },
 
     /// Record corrections on wrong analysis predictions and search past mistakes.

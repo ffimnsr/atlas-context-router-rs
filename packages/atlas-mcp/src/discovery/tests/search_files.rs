@@ -204,6 +204,28 @@ fn search_files_subpath_limits_to_subdir() {
 }
 
 #[test]
+fn search_files_honors_requested_max_results_above_default() {
+    // The discovery listing used to inherit the 20-file
+    // `review_context_extraction` default and ignore `max_results` entirely.
+    let files: Vec<(String, String)> = (0..25)
+        .map(|index| (format!("src/mod_{index:02}.rs"), String::new()))
+        .collect();
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, content)| (path.as_str(), content.as_str()))
+        .collect();
+    let (_dir, root) = make_repo(&refs);
+
+    let args = serde_json::json!({ "pattern": "*.rs", "max_results": 25 });
+    let resp = tool_search_files(Some(&args), &root, OutputFormat::Json).unwrap();
+    let v = parse_tool_json(resp);
+    assert_eq!(v["summary"]["requested_limit"], serde_json::json!(25));
+    assert_eq!(v["summary"]["result_limit"], serde_json::json!(25));
+    assert_eq!(match_paths(&v).len(), 25);
+    assert_eq!(v["truncated"], serde_json::json!(false));
+}
+
+#[test]
 fn search_files_exclude_globs_skips_matched() {
     let (_dir, root) = make_repo(&[
         ("generated/schema.sql", "-- auto"),

@@ -132,6 +132,27 @@ pub(crate) fn payload_accounting_text(payload: &PayloadTruncationMeta) -> String
     )
 }
 
+/// Unwrap the structured payload of a tool response, turning `isError` results
+/// into command errors so the CLI exit code reflects the failure.
+pub(crate) fn tool_payload(response: serde_json::Value) -> Result<serde_json::Value> {
+    if response.get("isError").and_then(serde_json::Value::as_bool) == Some(true) {
+        let message = response
+            .pointer("/structuredContent/message")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| {
+                response
+                    .pointer("/content/0/text")
+                    .and_then(serde_json::Value::as_str)
+            })
+            .unwrap_or("tool call failed");
+        anyhow::bail!("{message}");
+    }
+    Ok(response
+        .get("structuredContent")
+        .cloned()
+        .unwrap_or(response))
+}
+
 pub(crate) const MACHINE_SCHEMA_VERSION: &str = "atlas_cli.v1";
 
 pub(crate) fn json_envelope(command: &str, data: serde_json::Value) -> serde_json::Value {

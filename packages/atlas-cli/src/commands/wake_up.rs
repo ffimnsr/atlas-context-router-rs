@@ -5,8 +5,12 @@
 //! summary. All list sizes come from `[memory.wake_up]` config (or `--max-items`).
 
 use anyhow::Result;
+use serde_json::json;
 
-use atlas_agent_events::{WakeBudget, WakePackBuild, WakePackOptions, build_wake_pack};
+use atlas_agent_events::{
+    AgentEventRequest, AgentEventSource, WakeBudget, WakePackBuild, WakePackOptions,
+    build_wake_pack, record_agent_event,
+};
 
 use crate::cli::{Cli, Command};
 
@@ -32,34 +36,92 @@ pub fn run_wake_up(cli: &Cli) -> Result<()> {
         Some(max_items) => budget.with_max_items(max_items),
         None => budget,
     };
+    let max_items_value = budget.max_items;
 
     let build = build_wake_pack(&WakePackOptions {
         repo_root: &repo,
         graph_db_path: &db_path(cli, &repo),
         frontend: &frontend,
-        session_id: session,
+        session_id: session.clone(),
         agent_id: None,
         topic: topic.as_deref(),
         budget,
     });
 
+    // Record the session-start event through the shared event service. MCP
+    // `wake_up` does the same, so the CLI must not silently skip lifecycle
+    // capture or the two surfaces diverge.
+    let pack = build.pack.to_json();
+    let mut warnings = build.warnings.clone();
+    let wake_status = if build.session_status == "unavailable" {
+        "degraded"
+    } else {
+        "ok"
+    };
+    let event_recorded = match record_agent_event(AgentEventRequest {
+        repo_root: repo.clone(),
+        graph_db_path: db_path(cli, &repo),
+        frontend: frontend.clone(),
+        event: "session-start".to_owned(),
+        session_id: Some(pack["session_id"].as_str().unwrap_or_default().to_owned()),
+        agent_id: None,
+        payload: json!({
+            "tool": "wake_up",
+            "topic": topic,
+            "wake_up": { "status": wake_status, "max_items": max_items_value },
+        }),
+        source: AgentEventSource::CliFallback,
+    }) {
+        Ok(result) => json!({
+            "event": result.canonical_event,
+            "stored": result.stored,
+            "event_id": result.event_id,
+            "pending_resume": result.pending_resume,
+        }),
+        Err(error) => {
+            warnings.push(format!("wake-up session event recording failed: {error}"));
+            json!({ "stored": false, "error": error.to_string() })
+        }
+    };
+
     if cli.json {
-        print_json("wake-up", wake_up_json(&build, &repo, &frontend))?;
+        print_json(
+            "wake-up",
+            wake_up_json(
+                &build,
+                &repo,
+                &frontend,
+                wake_status,
+                &event_recorded,
+                &warnings,
+            ),
+        )?;
     } else {
         print_human(&build);
+        if !event_recorded["stored"].as_bool().unwrap_or(false) {
+            println!("Warning   : session-start event was not recorded");
+        }
     }
     Ok(())
 }
 
 /// Stable JSON output: the pack plus the same summary envelope the MCP tool
-/// emits (minus event recording, which stays on the hook/MCP surfaces).
-fn wake_up_json(build: &WakePackBuild, repo: &str, frontend: &str) -> serde_json::Value {
+/// emits.
+fn wake_up_json(
+    build: &WakePackBuild,
+    repo: &str,
+    frontend: &str,
+    wake_status: &str,
+    event_recorded: &serde_json::Value,
+    warnings: &[String],
+) -> serde_json::Value {
     let pack = build.pack.to_json();
     serde_json::json!({
         "tool": "wake-up",
         "repo_root": repo,
         "session_id": pack["session_id"],
         "frontend": frontend,
+        "agent_id": serde_json::Value::Null,
         "current_focus": pack["current_focus"],
         "recent_decisions": pack["recent_decisions"],
         "critical_memories": pack["critical_memories"],
@@ -70,6 +132,7 @@ fn wake_up_json(build: &WakePackBuild, repo: &str, frontend: &str) -> serde_json
         "graph_readiness": pack["graph_readiness"],
         "retrieval_hints": pack["retrieval_hints"],
         "generated_at": pack["generated_at"],
+        "event_recorded": event_recorded,
         "summary": {
             "status": build.session_status,
             "pending_resume": build.pending_resume,
@@ -81,8 +144,9 @@ fn wake_up_json(build: &WakePackBuild, repo: &str, frontend: &str) -> serde_json
             "changed_file_count": list_len(&pack["changed_files"]),
             "runtime_failure_count": list_len(&pack["recent_runtime_failures"]),
             "retrieval_hint_count": list_len(&pack["retrieval_hints"]),
+            "recorded": wake_status,
         },
-        "warnings": build.warnings,
+        "warnings": warnings,
     })
 }
 

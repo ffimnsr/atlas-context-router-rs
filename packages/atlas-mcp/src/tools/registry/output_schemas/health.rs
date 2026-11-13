@@ -700,8 +700,8 @@ pub(crate) fn db_check_output_schema() -> Value {
 pub(crate) fn debug_graph_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({
-            "node_counts_by_kind": { "type": "array", "items": { "type": "array" } },
-            "edge_counts_by_kind": { "type": "array", "items": { "type": "array" } },
+            "nodes_by_kind": { "type": "array", "items": { "type": "array" } },
+            "edges_by_kind": { "type": "array", "items": { "type": "array" } },
             "top_files": { "type": "array", "items": { "$ref": "#/$defs/debug_top_file" } },
             "orphan_nodes": { "type": "array", "items": { "$ref": "#/$defs/orphan_node" } },
             "dangling_edges": { "type": "array", "items": { "$ref": "#/$defs/dangling_edge_diagnostic" } },
@@ -724,8 +724,8 @@ pub(crate) fn debug_graph_output_schema() -> Value {
         }),
         &[
             "tool",
-            "node_counts_by_kind",
-            "edge_counts_by_kind",
+            "nodes_by_kind",
+            "edges_by_kind",
             "top_files",
             "orphan_nodes",
             "dangling_edges",

@@ -680,9 +680,29 @@ impl Store {
             .map(|n| n.qualified_name.clone())
             .collect();
         let mut changed_nodes = changed_nodes;
-        changed_nodes.truncate(max_nodes);
+        // `max_nodes` is a total traversal budget. When a single seed file
+        // contributes more symbols than the budget, split the budget between
+        // the changed set and its impact instead of letting the seeds consume
+        // all of it and silently drop every dependent.
+        let seed_budget = if changed_node_total >= max_nodes {
+            (max_nodes / 2).max(1)
+        } else {
+            max_nodes
+        };
+        let impact_budget = if changed_node_total >= max_nodes {
+            max_nodes.saturating_sub(seed_budget)
+        } else {
+            max_nodes.saturating_sub(changed_node_total)
+        };
+        changed_nodes.truncate(seed_budget);
 
         // Recursive CTE: bidirectional traversal, UNION deduplicates.
+        //
+        // The row cap must cover the seed rows as well as the impacted rows:
+        // the seed file can contribute more symbols than `max_nodes` (a large
+        // module easily has 30+ definitions), and a cap that only counted total
+        // rows returned nothing but seeds, leaving `impacted_nodes` empty.
+        let traversal_row_cap = max_nodes.saturating_add(changed_node_total);
         let cte_sql = format!(
             "WITH RECURSIVE impact(qn, depth) AS (
                SELECT qualified_name, 0 FROM nodes WHERE file_path IN ({placeholders})
@@ -697,7 +717,11 @@ impl Store {
                JOIN   edges  e ON e.source_qualified = i.qn
                WHERE  i.depth < ?
              )
-             SELECT DISTINCT qn FROM impact LIMIT ?"
+             SELECT DISTINCT i.qn FROM impact i
+             WHERE EXISTS (
+                 SELECT 1 FROM nodes n WHERE n.qualified_name = i.qn
+             )
+             LIMIT ?"
         );
 
         let mut all_params: Vec<Box<dyn rusqlite::types::ToSql>> = changed_paths
@@ -706,7 +730,7 @@ impl Store {
             .collect();
         all_params.push(Box::new(max_depth as i64));
         all_params.push(Box::new(max_depth as i64));
-        all_params.push(Box::new(max_nodes as i64));
+        all_params.push(Box::new(traversal_row_cap as i64));
 
         let params_ref: Vec<&dyn rusqlite::types::ToSql> =
             all_params.iter().map(|b| b.as_ref()).collect();
@@ -725,7 +749,7 @@ impl Store {
             .map(|s| s.as_str())
             .collect();
 
-        let impacted_nodes = if impacted_qns.is_empty() {
+        let mut impacted_nodes = if impacted_qns.is_empty() {
             vec![]
         } else {
             let ph = repeat_placeholders(impacted_qns.len());
@@ -745,6 +769,8 @@ impl Store {
                 .filter_map(|r| r.ok())
                 .collect()
         };
+        let impacted_node_total = impacted_nodes.len();
+        impacted_nodes.truncate(impact_budget);
 
         let impacted_files: Vec<String> = {
             let mut files: Vec<String> = impacted_nodes
@@ -805,7 +831,13 @@ impl Store {
             impacted_nodes,
             impacted_files,
             relevant_edges,
-            seed_budgets: vec![],
+            seed_budgets: vec![atlas_core::model::SeedBudgetMeta::new(
+                "changed_files",
+                changed_paths.len(),
+                changed_paths.len(),
+                true,
+                None,
+            )],
             traversal_budget: Some(atlas_core::model::TraversalBudgetMeta {
                 requested_depth,
                 accepted_depth: max_depth,
@@ -820,6 +852,7 @@ impl Store {
                     || requested_nodes != max_nodes
                     || requested_edges != max_edges
                     || changed_node_total > max_nodes
+                    || impacted_node_total > impact_budget
                     || original_edge_count > max_edges,
                 suggested_narrower_query: (original_edge_count > max_edges).then(|| {
                     format!(

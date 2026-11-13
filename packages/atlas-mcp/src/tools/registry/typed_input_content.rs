@@ -30,6 +30,10 @@ pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
                 "properties/case_sensitive",
                 "Match pattern case-sensitively (default false).",
             ),
+            (
+                "properties/max_results",
+                "Maximum files to return (default 100, clamped by the review_context_extraction.max_files policy cap).",
+            ),
             ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
         ])),
         "search_content" => Some(typed_schema_with_descriptions::<SearchContentArgsSchema>(

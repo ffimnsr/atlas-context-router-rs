@@ -40,10 +40,11 @@ pub(crate) fn search_files_output_schema() -> Value {
                 "properties": {
                     "returned_count": { "type": "integer" },
                     "result_limit": { "type": "integer" },
+                    "requested_limit": { "type": "integer" },
                     "scope": { "type": "string", "enum": ["repo_root", "subpath"] },
                     "has_matches": { "type": "boolean" }
                 },
-                "required": ["returned_count", "result_limit", "scope", "has_matches"]
+                "required": ["returned_count", "result_limit", "requested_limit", "scope", "has_matches"]
             },
             "truncated": { "type": "boolean" },
             "warnings": { "type": "array", "items": { "type": "string" } },

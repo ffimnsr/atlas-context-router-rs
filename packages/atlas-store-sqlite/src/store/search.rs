@@ -368,7 +368,20 @@ impl Store {
             .collect();
         let changed_node_total = changed_nodes.len();
         let mut changed_nodes = changed_nodes;
-        changed_nodes.truncate(max_nodes);
+        // `max_nodes` is a total traversal budget. When the seed set alone
+        // meets the cap, split the budget so impact neighbours are not dropped
+        // silently (the CTE returns seeds first, ordered by depth).
+        let seed_budget = if changed_node_total >= max_nodes {
+            (max_nodes / 2).max(1)
+        } else {
+            max_nodes
+        };
+        let impact_budget = if changed_node_total >= max_nodes {
+            max_nodes.saturating_sub(seed_budget)
+        } else {
+            max_nodes.saturating_sub(changed_node_total)
+        };
+        changed_nodes.truncate(seed_budget);
 
         // Recursive CTE: bidirectional traversal starting from seed QNs.
         let cte_sql = format!(
@@ -385,9 +398,12 @@ impl Store {
                JOIN   edges  e ON e.source_qualified = i.qn
                WHERE  i.depth < ?
              )
-             SELECT qn FROM impact
-             GROUP BY qn
-             ORDER BY MIN(depth), qn
+             SELECT i.qn FROM impact i
+             WHERE EXISTS (
+                 SELECT 1 FROM nodes n WHERE n.qualified_name = i.qn
+             )
+             GROUP BY i.qn
+             ORDER BY MIN(i.depth), i.qn
              LIMIT ?"
         );
 
@@ -397,7 +413,7 @@ impl Store {
             .collect();
         all_params.push(Box::new(max_depth as i64));
         all_params.push(Box::new(max_depth as i64));
-        all_params.push(Box::new(max_nodes as i64));
+        all_params.push(Box::new(max_nodes.saturating_add(changed_node_total) as i64));
         let params_ref: Vec<&dyn rusqlite::types::ToSql> =
             all_params.iter().map(|b| b.as_ref()).collect();
 
@@ -415,7 +431,7 @@ impl Store {
             .map(|s| s.as_str())
             .collect();
 
-        let impacted_nodes = if impacted_qns.is_empty() {
+        let mut impacted_nodes = if impacted_qns.is_empty() {
             vec![]
         } else {
             let iph = repeat_placeholders(impacted_qns.len());
@@ -435,6 +451,8 @@ impl Store {
                 .filter_map(|r| r.ok())
                 .collect()
         };
+        let impacted_node_total = impacted_nodes.len();
+        impacted_nodes.truncate(impact_budget);
 
         let impacted_files: Vec<String> = {
             let mut files: Vec<String> = impacted_nodes
@@ -469,6 +487,7 @@ impl Store {
         };
 
         let observed_nodes = changed_nodes.len() + impacted_nodes.len();
+        let accepted_seed_count = changed_nodes.len();
         budgets.record_usage(
             policy.graph_traversal.nodes,
             "graph_traversal.max_nodes",
@@ -494,7 +513,13 @@ impl Store {
             impacted_nodes,
             impacted_files,
             relevant_edges,
-            seed_budgets: vec![],
+            seed_budgets: vec![atlas_core::model::SeedBudgetMeta::new(
+                "seed_symbols",
+                seed_qnames.len(),
+                accepted_seed_count,
+                true,
+                None,
+            )],
             traversal_budget: Some(atlas_core::model::TraversalBudgetMeta {
                 requested_depth,
                 accepted_depth: max_depth,
@@ -509,6 +534,7 @@ impl Store {
                     || requested_nodes != max_nodes
                     || requested_edges != max_edges
                     || changed_node_total > max_nodes
+                    || impacted_node_total > impact_budget
                     || observed_nodes >= max_nodes
                     || original_edge_count > max_edges,
                 suggested_narrower_query: (original_edge_count > max_edges).then(|| {

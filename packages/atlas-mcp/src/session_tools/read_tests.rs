@@ -104,7 +104,13 @@ fn read_saved_context_oversized_artifact_sets_truncated_and_continuation_hint() 
         next >= 1,
         "next_chunk_offset must advance past the clipped chunk"
     );
-    assert!(body["next_chunk_id"].as_str().is_some());
+    if body["content_verbatim"].as_bool() == Some(true) {
+        // Verbatim artifacts page by byte offset, so there is no chunk id.
+        assert_eq!(body["paging_unit"], serde_json::json!("bytes"));
+        assert!(body["next_chunk_id"].is_null());
+    } else {
+        assert!(body["next_chunk_id"].as_str().is_some());
+    }
     assert!(body["chunk_clipped"].as_bool().unwrap());
     assert!(
         body["continuation_hint"]

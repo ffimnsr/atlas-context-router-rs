@@ -77,11 +77,12 @@ fn parse_experience_commands() {
     assert!(matches!(
         cli.command,
         Command::Experience {
-            subcommand: ExperienceCommand::Inspect {
+            uri: _,
+            subcommand: Some(ExperienceCommand::Inspect {
                 ref uri,
                 ref direction,
                 limit: 5
-            }
+            })
         } if uri == "atlas://repo/r/file/src%2Flib.rs" && direction == "outgoing"
     ));
 
@@ -96,10 +97,11 @@ fn parse_experience_commands() {
     assert!(matches!(
         cli.command,
         Command::Experience {
-            subcommand: ExperienceCommand::Prune {
+            uri: _,
+            subcommand: Some(ExperienceCommand::Prune {
                 older_than: 7,
                 dry_run: true
-            }
+            })
         }
     ));
 }

@@ -164,6 +164,35 @@ fn resume_session_reuses_existing_snapshot_and_marks_consumed() {
 }
 
 #[test]
+fn resume_session_rebuilds_after_snapshot_consumed() {
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+    let repo_root = dir.path().to_str().unwrap();
+    let db_path = setup_db_path(&dir);
+    let mut store = open_session_store(&db_path);
+    let session_id = seed_session_meta(&mut store, repo_root);
+    append_session_event(
+        &mut store,
+        &session_id,
+        SessionEventType::Decision,
+        serde_json::json!({"summary": "first snapshot"}),
+    );
+    store.build_resume(&session_id).unwrap();
+    drop(store);
+
+    let first =
+        tool_body(&tool_resume_session(None, repo_root, &db_path, OutputFormat::Json).unwrap());
+    assert_eq!(first["snapshot_status"], "existing_snapshot");
+    assert_eq!(first["consumed"], true);
+
+    // The consumed row must not be served again; the next call rebuilds from
+    // live events instead of returning stale snapshot metadata.
+    let second =
+        tool_body(&tool_resume_session(None, repo_root, &db_path, OutputFormat::Json).unwrap());
+    assert_eq!(second["snapshot_status"], "built_snapshot");
+}
+
+#[test]
 fn test_continuity_event_spec_known_tools() {
     let args = serde_json::json!({"text": "find foo"});
     let spec = continuity_event_spec("query_graph", Some(&args));

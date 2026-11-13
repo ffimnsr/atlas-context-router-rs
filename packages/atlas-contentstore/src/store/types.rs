@@ -209,6 +209,13 @@ pub struct SourceRow {
     pub repo_ids: Vec<String>,
     pub identity_kind: String,
     pub identity_value: String,
+    /// Verbatim artifact payload captured at save time.
+    ///
+    /// Chunk contents are retrieval-shaped (trimmed, paragraph-split, or
+    /// re-serialized JSON), so they cannot reproduce the original bytes. This
+    /// field keeps the exact payload for [`ContentStore::get_source`] consumers
+    /// such as `read_saved_context`. Legacy rows have `None`.
+    pub raw_content: Option<String>,
     pub created_at: String,
 }
 

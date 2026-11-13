@@ -393,7 +393,7 @@ pub(super) fn tools() -> Vec<Value> {
         }),
         json!({
                 "name": "experience_inspect",
-                "description": "Inspect query-conditioned experience edges touching one atlas:// URI. Report-only: edges live in session.db and are never code-graph truth (VR4).",
+                "description": "Inspect query-conditioned experience edges touching one atlas:// URI. Report-only: edges live in session.db and are never code-graph truth (VR4). The ledger stays empty until a retrieval/update workflow records edges; an empty `edges` list is a valid report, not an error.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {

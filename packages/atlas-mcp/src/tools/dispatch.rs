@@ -38,10 +38,9 @@ use super::graph::{
     tool_batch_query_graph, tool_concept_clusters, tool_cross_file_links, tool_explain_query,
     tool_query_graph, tool_symbol_neighbors, tool_traverse_graph,
 };
+use super::graph_debug::tool_debug_graph;
 use super::graph_stats::tool_list_graph_stats;
-use super::health::{
-    tool_broker_status, tool_db_check, tool_debug_graph, tool_doctor, tool_status,
-};
+use super::health::{tool_broker_status, tool_db_check, tool_doctor, tool_status};
 use super::inventory::{tool_repo_registry, tool_tool_list, tool_tool_search};
 use super::manual::{tool_help, tool_man};
 use super::metrics::tool_get_metrics;

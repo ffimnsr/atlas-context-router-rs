@@ -1,13 +1,13 @@
 use anyhow::{Context, Result};
 
-use atlas_session::{GlobalAccessEntry, GlobalWorkflowPattern};
+use atlas_session::{GlobalAccessEntry, GlobalWorkflowPattern, SessionId};
 
 use crate::cli::{Cli, Command, SessionCommand};
 
-use super::{print_json, resolve_repo};
+use super::{print_json, resolve_repo, tool_payload};
 
 pub fn run_session(cli: &Cli) -> Result<()> {
-    use atlas_session::{SessionId, SessionStore};
+    use atlas_session::SessionStore;
     use std::path::Path;
 
     let repo = resolve_repo(cli)?;
@@ -58,7 +58,9 @@ pub fn run_session(cli: &Cli) -> Result<()> {
         SessionCommand::Status {
             agent_id,
             merge_agent_partitions,
+            session,
         } => {
+            let session_id = resolve_cli_session(session, &session_id);
             let store = open_store()?;
             let meta = store.get_session_meta(&session_id)?;
             let events = store.list_events(&session_id)?;
@@ -232,7 +234,9 @@ pub fn run_session(cli: &Cli) -> Result<()> {
         SessionCommand::Resume {
             agent_id,
             merge_agent_partitions,
+            session,
         } => {
+            let session_id = resolve_cli_session(session, &session_id);
             let mut store = open_store()?;
             let snapshot = store.get_resume_snapshot(&session_id)?;
             match snapshot {
@@ -380,47 +384,182 @@ pub fn run_session(cli: &Cli) -> Result<()> {
                 }
             }
         }
-        SessionCommand::Compact => {
-            let mut store = open_store()?;
-            let result = store
-                .compact_session(&session_id)
-                .with_context(|| "cannot compact session events")?;
+        SessionCommand::Compact { session } => {
+            let session_id = resolve_cli_session(session, &session_id);
+            let args = serde_json::json!({ "session_id": session_id.as_str() });
+            let data = tool_payload(atlas_mcp::cli_tools::compact_session(
+                &args,
+                &repo,
+                &super::db_path(cli, &repo),
+            )?)?;
 
             if cli.json {
-                print_json(
-                    "session.compact",
-                    serde_json::json!({
-                        "session_id": session_id.as_str(),
-                        "events_before": result.events_before,
-                        "events_after": result.events_after,
-                        "merged": result.merged_count,
-                        "decayed": result.decayed_count,
-                        "deduplicated": result.deduplicated_count,
-                        "promoted": result.promoted_count,
-                    }),
-                )?;
-            } else if result.events_before == result.events_after && result.promoted_count == 0 {
-                println!("Session already compact ({} events).", result.events_before);
+                print_json("session.compact", data)?;
+            } else {
+                let before = data
+                    .pointer("/before_counts/events")
+                    .and_then(|v| v.as_u64());
+                let after = data
+                    .pointer("/after_counts/events")
+                    .and_then(|v| v.as_u64());
+                if data.pointer("/summary/no_op").and_then(|v| v.as_bool()) == Some(true) {
+                    println!("Session already compact ({} events).", before.unwrap_or(0));
+                } else {
+                    println!(
+                        "Session compacted: {} → {} events",
+                        before.unwrap_or(0),
+                        after.unwrap_or(0)
+                    );
+                }
+            }
+        }
+
+        SessionCommand::SaveArtifact(opts) => {
+            let session_id = resolve_cli_session(&opts.session, &session_id);
+            let mut args = serde_json::json!({
+                "content": opts.content,
+                "label": opts.label,
+                "session_id": session_id.as_str(),
+            });
+            if let Some(source_type) = &opts.source_type {
+                args["source_type"] = serde_json::Value::String(source_type.clone());
+            }
+            if let Some(content_type) = &opts.content_type {
+                args["content_type"] = serde_json::Value::String(content_type.clone());
+            }
+            let data = tool_payload(atlas_mcp::cli_tools::save_context_artifact(
+                &args,
+                &repo,
+                &super::db_path(cli, &repo),
+            )?)?;
+            if cli.json {
+                print_json("session.save-artifact", data)?;
             } else {
                 println!(
-                    "Session compacted: {} → {} events",
-                    result.events_before, result.events_after
+                    "Stored       : {}",
+                    data.get("storage_mode")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?")
                 );
-                if result.decayed_count > 0 {
-                    println!("  Decayed    : {}", result.decayed_count);
+                if let Some(source_id) = data.get("source_id").and_then(|v| v.as_str()) {
+                    println!("Source id    : {source_id}");
                 }
-                if result.merged_count > 0 {
-                    println!("  Merged     : {}", result.merged_count);
+                if let Some(preview) = data.get("preview").and_then(|v| v.as_str()) {
+                    println!("Preview      : {preview}");
                 }
-                if result.deduplicated_count > 0 {
-                    println!("  Deduplicated: {}", result.deduplicated_count);
+                if let Some(inline) = data.get("inline_content").and_then(|v| v.as_str()) {
+                    println!("Inline       : {inline}");
                 }
-                if result.promoted_count > 0 {
-                    println!("  Promoted   : {}", result.promoted_count);
+                if data.get("redaction_applied").and_then(|v| v.as_bool()) == Some(true) {
+                    println!("Warning      : sensitive-looking values were redacted");
                 }
+            }
+        }
+
+        SessionCommand::ReadArtifact(opts) => {
+            let mut args = serde_json::json!({
+                "source_id": opts.source_id,
+                "chunk_offset": opts.chunk_offset,
+            });
+            if let Some(max_bytes) = opts.max_bytes {
+                args["max_bytes"] = serde_json::json!(max_bytes);
+            }
+            let data = tool_payload(atlas_mcp::cli_tools::read_saved_context(
+                &args,
+                &repo,
+                &super::db_path(cli, &repo),
+            )?)?;
+            if cli.json {
+                print_json("session.read-artifact", data)?;
+            } else if let Some(content) = data.get("content").and_then(|v| v.as_str()) {
+                print!("{content}");
+                if data.get("truncated").and_then(|v| v.as_bool()) == Some(true) {
+                    let next = data
+                        .get("next_chunk_offset")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    println!("\n[truncated; continue with --chunk-offset {next}]");
+                }
+            } else {
+                println!(
+                    "Artifact not found: {}",
+                    data.get("access_status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("not_found")
+                );
+            }
+        }
+
+        SessionCommand::Search(opts) => {
+            let session_id = resolve_cli_session(&None, &session_id);
+            let mut args = serde_json::json!({
+                "query": opts.query,
+                "limit": opts.limit,
+                "cross_session": opts.cross_session,
+            });
+            if !opts.cross_session {
+                args["session_id"] = serde_json::Value::String(session_id.as_str().to_owned());
+            }
+            if let Some(source_type) = &opts.source_type {
+                args["source_type"] = serde_json::Value::String(source_type.clone());
+            }
+            let data = tool_payload(atlas_mcp::cli_tools::search_saved_context(
+                &args,
+                &repo,
+                &super::db_path(cli, &repo),
+            )?)?;
+            if cli.json {
+                print_json("session.search", data)?;
+            } else {
+                let count = data
+                    .pointer("/summary/match_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                println!("Saved-context matches: {count}");
+                if let Some(matches) = data.get("matches").and_then(|v| v.as_array()) {
+                    for entry in matches {
+                        println!(
+                            "  {} · {} · {}",
+                            entry
+                                .get("source_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("?"),
+                            entry
+                                .get("label")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("(no label)"),
+                            entry.get("preview").and_then(|v| v.as_str()).unwrap_or("")
+                        );
+                    }
+                }
+            }
+        }
+
+        SessionCommand::Stats(opts) => {
+            let session_id = resolve_cli_session(&opts.session, &session_id);
+            let mut args = serde_json::json!({ "session_id": session_id.as_str() });
+            if let Some(agent_id) = &opts.agent_id {
+                args["agent_id"] = serde_json::Value::String(agent_id.clone());
+            }
+            let data = tool_payload(atlas_mcp::cli_tools::get_context_stats(
+                &args,
+                &repo,
+                &super::db_path(cli, &repo),
+            )?)?;
+            if cli.json {
+                print_json("session.stats", data)?;
+            } else {
+                println!("{}", serde_json::to_string_pretty(&data)?);
             }
         }
     }
 
     Ok(())
+}
+
+fn resolve_cli_session(selector: &Option<String>, default: &SessionId) -> SessionId {
+    selector
+        .as_deref()
+        .map(|id| SessionId(id.to_owned()))
+        .unwrap_or_else(|| default.clone())
 }

@@ -17,7 +17,7 @@ use time::OffsetDateTime;
 
 use crate::cli::{Cli, Command, MemoryCommand};
 
-use super::{db_path, print_json, resolve_repo};
+use super::{db_path, print_json, resolve_repo, tool_payload};
 
 pub fn run_memory(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
@@ -37,6 +37,7 @@ pub fn run_memory(cli: &Cli) -> Result<()> {
     match sub {
         MemoryCommand::Store {
             text,
+            text_flag,
             topic,
             title,
             importance,
@@ -71,7 +72,7 @@ pub fn run_memory(cli: &Cli) -> Result<()> {
                 return Ok(());
             }
 
-            let Some(text) = text else {
+            let Some(text) = text.as_ref().or(text_flag.as_ref()).cloned() else {
                 bail!("provide memory text or --patch-id with --patch-text/--patch-file");
             };
             let importance = parse_optional_importance(importance.as_deref())?.unwrap_or_default();
@@ -213,48 +214,36 @@ pub fn run_memory(cli: &Cli) -> Result<()> {
             )?;
         }
 
-        MemoryCommand::Tui {
-            topic,
-            scope,
-            importance,
-            frontend,
-            subject_kind,
-            freshness,
-            package,
-            module,
-            file,
-            source_kind,
-            newer_than,
-            older_than,
-            limit,
-        } => {
+        MemoryCommand::Tui(opts) => {
             super::memory_tui::run_memory_tui(
                 &repo,
                 &store,
                 cli.json,
                 super::memory_tui::TuiFilters {
                     memory: MemoryListFilter {
-                        topic: topic.clone(),
-                        importance: parse_optional_importance(importance.as_deref())?,
-                        scope: parse_optional_scope(scope.as_deref())?,
+                        topic: opts.topic.clone(),
+                        importance: parse_optional_importance(opts.importance.as_deref())?,
+                        scope: parse_optional_scope(opts.scope.as_deref())?,
                         ..Default::default()
                     },
-                    frontend: frontend.clone(),
-                    subject_kind: subject_kind.clone(),
-                    freshness: freshness.clone(),
-                    package: package.clone(),
-                    module: module.clone(),
-                    file: file.clone(),
-                    source_kind: source_kind.clone(),
-                    overview_newer_than: newer_than
+                    frontend: opts.frontend.clone(),
+                    subject_kind: opts.subject_kind.clone(),
+                    freshness: opts.freshness.clone(),
+                    package: opts.package.clone(),
+                    module: opts.module.clone(),
+                    file: opts.file.clone(),
+                    source_kind: opts.source_kind.clone(),
+                    overview_newer_than: opts
+                        .newer_than
                         .as_deref()
                         .map(parse_memory_timestamp)
                         .transpose()?,
-                    overview_older_than: older_than
+                    overview_older_than: opts
+                        .older_than
                         .as_deref()
                         .map(parse_memory_timestamp)
                         .transpose()?,
-                    limit: *limit,
+                    limit: opts.limit,
                 },
             )?;
         }
@@ -606,25 +595,31 @@ pub fn run_memory(cli: &Cli) -> Result<()> {
         }
 
         MemoryCommand::Ops { memory_id } => {
-            let Some(history) = store.memory_op_history(&repo, memory_id)? else {
-                bail!("no memory with id {memory_id} in {repo}");
+            let history = store.memory_op_history(&repo, memory_id)?;
+            let found = history.is_some();
+            let (numeric_value, entries) = match history {
+                Some(history) => (history.numeric_value, history.entries),
+                None => (None, Vec::new()),
             };
 
             if cli.json {
                 print_json(
                     "memory.ops",
                     serde_json::json!({
-                        "memory_id": history.memory_id,
-                        "numeric_value": history.numeric_value,
-                        "count": history.entries.len(),
-                        "history": history.entries,
+                        "memory_id": memory_id,
+                        "found": found,
+                        "numeric_value": numeric_value,
+                        "count": entries.len(),
+                        "history": entries,
                     }),
                 )?;
-            } else if history.entries.is_empty() {
+            } else if !found {
+                println!("No memory with id {memory_id}");
+            } else if entries.is_empty() {
                 println!("No operators recorded for memory {memory_id}");
             } else {
-                println!("Operator history for memory {}:", history.memory_id);
-                for entry in &history.entries {
+                println!("Operator history for memory {memory_id}:");
+                for entry in &entries {
                     println!(
                         "  {}  {:<14} fields={}",
                         entry.at,
@@ -632,9 +627,46 @@ pub fn run_memory(cli: &Cli) -> Result<()> {
                         entry.fields.join(",")
                     );
                 }
-                if let Some(value) = history.numeric_value {
+                if let Some(value) = numeric_value {
                     println!("numeric_value : {value}");
                 }
+            }
+        }
+
+        MemoryCommand::Global(opts) => {
+            let args = serde_json::json!({
+                "limit": opts.limit,
+                "focus_symbols": opts.focus_symbols,
+                "focus_files": opts.focus_files,
+            });
+            let data = tool_payload(atlas_mcp::cli_tools::get_global_memory(
+                &args,
+                &repo,
+                &db_path(cli, &repo),
+            )?)?;
+            if cli.json {
+                print_json("memory.global", data)?;
+            } else {
+                println!("{}", serde_json::to_string_pretty(&data)?);
+            }
+        }
+
+        MemoryCommand::Decisions(opts) => {
+            let mut args = serde_json::json!({ "query": opts.query, "limit": opts.limit });
+            if opts.current_session {
+                args["session_id"] = serde_json::Value::String(
+                    SessionId::derive(&repo, "", "cli").as_str().to_owned(),
+                );
+            }
+            let data = tool_payload(atlas_mcp::cli_tools::search_decisions(
+                &args,
+                &repo,
+                &db_path(cli, &repo),
+            )?)?;
+            if cli.json {
+                print_json("memory.decisions", data)?;
+            } else {
+                println!("{}", serde_json::to_string_pretty(&data)?);
             }
         }
     }

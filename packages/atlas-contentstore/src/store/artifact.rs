@@ -286,8 +286,8 @@ impl ContentStore {
                 };
             tx.execute(
                 "INSERT OR REPLACE INTO sources (
-                     id, session_id, agent_id, source_type, label, repo_root, repo_roots_json, repo_id, repo_ids_json, identity_kind, identity_value, relative_path, parent_dir, created_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                     id, session_id, agent_id, source_type, label, repo_root, repo_roots_json, repo_id, repo_ids_json, identity_kind, identity_value, relative_path, parent_dir, raw_content, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     meta.id,
                     meta.session_id,
@@ -302,6 +302,7 @@ impl ContentStore {
                     meta.identity_value,
                     relative_path,
                     parent_dir,
+                    raw_text,
                     now,
                 ],
             )
@@ -484,7 +485,7 @@ impl ContentStore {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, session_id, agent_id, source_type, label, repo_root, repo_roots_json, repo_id, repo_ids_json, identity_kind, identity_value, created_at
+                "SELECT id, session_id, agent_id, source_type, label, repo_root, repo_roots_json, repo_id, repo_ids_json, identity_kind, identity_value, raw_content, created_at
                  FROM sources WHERE id = ?1",
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
@@ -514,7 +515,8 @@ impl ContentStore {
                 repo_ids: decode_repo_ids_json(repo_ids_json, &repo_roots, repo_id),
                 identity_kind: row.get(9).map_err(|e| AtlasError::Db(e.to_string()))?,
                 identity_value: row.get(10).map_err(|e| AtlasError::Db(e.to_string()))?,
-                created_at: row.get(11).map_err(|e| AtlasError::Db(e.to_string()))?,
+                raw_content: row.get(11).map_err(|e| AtlasError::Db(e.to_string()))?,
+                created_at: row.get(12).map_err(|e| AtlasError::Db(e.to_string()))?,
             }))
         } else {
             Ok(None)

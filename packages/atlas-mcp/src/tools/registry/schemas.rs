@@ -38,6 +38,7 @@ pub(crate) struct SearchFilesArgsSchema {
     exclude_globs: Option<Vec<String>>,
     subpath: Option<String>,
     case_sensitive: Option<bool>,
+    max_results: Option<u64>,
     output_format: Option<String>,
 }
 
@@ -872,6 +873,8 @@ pub(crate) struct PurgeSavedContextArgsSchema {
     session_id: Option<String>,
     agent_id: Option<String>,
     keep_days: Option<u64>,
+    purge_bridge_files: Option<bool>,
+    confirm: Option<bool>,
     output_format: Option<String>,
 }
 

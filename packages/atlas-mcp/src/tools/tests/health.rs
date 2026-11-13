@@ -565,7 +565,8 @@ fn debug_graph_returns_node_counts() {
     assert!(v["summary"]["node_count"].as_i64().unwrap_or(0) > 0);
     assert!(v["summary"]["edge_count"].as_i64().unwrap_or(0) > 0);
     assert!(v["summary"]["file_count"].as_i64().unwrap_or(0) > 0);
-    assert!(v.get("edge_counts_by_kind").is_some());
+    assert!(v.get("nodes_by_kind").is_some());
+    assert!(v.get("edges_by_kind").is_some());
     assert!(v.get("top_files").is_some());
 }
 

@@ -32,6 +32,8 @@ pub enum AgentEventSource {
     Hook,
     /// Instruction-driven MCP fallback capture.
     McpFallback,
+    /// Instruction-driven CLI fallback capture (`atlas wake-up`).
+    CliFallback,
 }
 
 impl AgentEventSource {
@@ -39,6 +41,7 @@ impl AgentEventSource {
         match self {
             Self::Hook => "hook",
             Self::McpFallback => "mcp_fallback",
+            Self::CliFallback => "cli_fallback",
         }
     }
 }

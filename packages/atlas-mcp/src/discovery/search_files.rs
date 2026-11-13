@@ -12,7 +12,7 @@ use crate::output::OutputFormat;
 use super::shared::{
     bool_arg, build_globset, discovery_tool_error_result, inject_budget_metadata,
     load_budget_policy, normalized_optional_subpath, render_tool_result, resolve_subpath_walk_root,
-    str_arg, string_array_arg,
+    str_arg, string_array_arg, u64_arg,
 };
 
 /// MCP tool: `search_files` — file-path discovery by glob pattern.
@@ -35,10 +35,14 @@ pub(crate) fn tool_search_files(
         let exclude_globs = string_array_arg(args, "exclude_globs")?;
         let case_sensitive = bool_arg(args, "case_sensitive").unwrap_or(false);
         let subpath = normalized_optional_subpath(str_arg(args, "subpath")?);
+        // Discovery listing has no review-context payload cost, so the caller
+        // sets the cap explicitly instead of inheriting the 20-file
+        // `review_context_extraction` default.
+        let requested_max_results = u64_arg(args, "max_results").unwrap_or(100) as usize;
         let result_limit = budgets.resolve_limit(
             policy.review_context_extraction.files,
             "review_context_extraction.max_files",
-            None,
+            Some(requested_max_results),
         );
 
         let name_matcher = build_globset(&[&pattern], case_sensitive)
@@ -84,10 +88,6 @@ pub(crate) fn tool_search_files(
         let mut truncated = false;
 
         for entry in walker.build().flatten() {
-            if matches.len() >= result_limit {
-                truncated = true;
-                break;
-            }
             let ft = match entry.file_type() {
                 Some(ft) => ft,
                 None => continue,
@@ -125,6 +125,13 @@ pub(crate) fn tool_search_files(
             let extension = full_path
                 .extension()
                 .map(|ext| ext.to_string_lossy().into_owned());
+            // Only report truncation when a real match is dropped; stopping as
+            // soon as the limit is reached over-reported `truncated: true` for
+            // result sets that exactly fit the cap.
+            if matches.len() >= result_limit {
+                truncated = true;
+                break;
+            }
             matches.push(SearchFileMatch {
                 path: rel_path,
                 file_name,
@@ -164,6 +171,7 @@ pub(crate) fn tool_search_files(
         struct SearchFilesSummary {
             returned_count: usize,
             result_limit: usize,
+            requested_limit: usize,
             scope: &'static str,
             has_matches: bool,
         }
@@ -192,6 +200,7 @@ pub(crate) fn tool_search_files(
             summary: SearchFilesSummary {
                 returned_count: result_count,
                 result_limit,
+                requested_limit: requested_max_results,
                 scope: if walk_root == repo_root { "repo_root" } else { "subpath" },
                 has_matches: result_count > 0,
             },
@@ -206,7 +215,7 @@ pub(crate) fn tool_search_files(
             &budgets.summary(
                 "review_context_extraction.max_files",
                 result_limit,
-                result_count,
+                requested_max_results.max(result_count),
             ),
         );
         Ok(response)

@@ -11,6 +11,7 @@ use serde_json::Value;
 
 use crate::output::OutputFormat;
 use crate::tool_result::{
+    ToolErrorCode, ToolErrorPayload,
     normalized_tool_result_value as build_normalized_tool_result_value, tool_execution_error_value,
 };
 use crate::tools::shared::inject_deprecated_input_fields;
@@ -36,6 +37,15 @@ fn prefix_bytes(content: &str, max_bytes: usize) -> String {
         end -= 1;
     }
     content[..end].to_owned()
+}
+
+/// Largest char boundary at or below `index`.
+fn floor_char_boundary(content: &str, index: usize) -> usize {
+    let mut end = index.min(content.len());
+    while end > 0 && !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
 }
 
 // ---------------------------------------------------------------------------
@@ -200,6 +210,87 @@ pub fn tool_read_saved_context(
         .first()
         .map(|chunk| chunk.content_type.clone())
         .unwrap_or_else(|| "text/plain".to_owned());
+
+    // Verbatim path: the chunker is lossy by design (it trims whitespace,
+    // drops blank lines, and re-serializes JSON values), so artifacts saved
+    // with a persisted raw payload are served byte-for-byte from it. Paging
+    // uses byte offsets in this mode, reported via `paging_unit`.
+    if let Some(raw) = source.raw_content.as_deref() {
+        let total_byte_count = raw.len();
+        let start = floor_char_boundary(raw, chunk_offset);
+        let end = floor_char_boundary(raw, start.saturating_add(max_bytes));
+        let content = raw[start..end].to_owned();
+        let truncated = end < total_byte_count;
+        let returned_count = usize::from(!content.is_empty());
+
+        if truncated {
+            budgets.record_usage(
+                policy.mcp_cli_payload_serialization.saved_context_bytes,
+                "mcp_cli_payload_serialization.max_saved_context_bytes",
+                max_bytes,
+                total_byte_count,
+                true,
+            );
+        }
+
+        let next_offset = truncated.then_some(end);
+        let result = serde_json::json!({
+            "tool": "read_saved_context",
+            "found": true,
+            "access_status": "ok",
+            "source_id": source.id,
+            "artifact_kind": source.source_type,
+            "identity_kind": source.identity_kind,
+            "identity_value": source.identity_value,
+            "created_at": source.created_at,
+            "session_id": source.session_id,
+            "agent_id": source.agent_id,
+            "repo_scope": {
+                "repo_roots": artifact_repo_roots,
+                "repo_count": artifact_repo_roots.len(),
+                "requested_repo_roots": requested_repo_roots,
+            },
+            "merged_agent_view": merge_agent_partitions,
+            "label": source.label,
+            "content": content,
+            "content_format": content_format,
+            "content_verbatim": true,
+            "paging_unit": "bytes",
+            "byte_count": total_byte_count,
+            "chunk_count": total_chunks,
+            "chunk_offset": start,
+            "last_included_chunk": Value::Null,
+            "last_included_chunk_id": Value::Null,
+            "returned_chunk_ids": Vec::<String>::new(),
+            "next_chunk_offset": next_offset,
+            "next_chunk_id": Value::Null,
+            "continuation_hint": next_offset.map(|next| format!(
+                "call read_saved_context with source_id={source_id} chunk_offset={next} to read more"
+            )),
+            "truncated": truncated,
+            "chunk_clipped": truncated,
+            "summary": {
+                "status": "ok",
+                "byte_count": total_byte_count,
+                "chunk_count": total_chunks,
+                "returned_chunk_count": returned_count,
+            },
+            "warnings": [],
+        });
+
+        let mut response = tool_result_value(&result, output_format)?;
+        inject_budget_metadata(
+            &mut response,
+            &budgets.summary(
+                "mcp_cli_payload_serialization.max_saved_context_bytes",
+                max_bytes,
+                requested_max_bytes.max(total_byte_count),
+            ),
+        );
+        inject_deprecated_input_fields(&mut response, &deprecated_input_fields);
+        return Ok(response);
+    }
+
     let remaining_chunks: Vec<_> = all_chunks
         .into_iter()
         .filter(|c| c.chunk_index >= chunk_offset)
@@ -280,6 +371,8 @@ pub fn tool_read_saved_context(
         "label": source.label,
         "content": content,
         "content_format": content_format,
+        "content_verbatim": false,
+        "paging_unit": "chunks",
         "byte_count": total_byte_count,
         "chunk_count": total_chunks,
         "chunk_offset": chunk_offset,
@@ -351,6 +444,12 @@ pub fn tool_purge_saved_context(
         .and_then(|a| a.get("purge_bridge_files"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    // Non-interactive confirmation for hosts that cannot render elicitation
+    // forms. Destructive cleanup still requires an explicit boolean opt-in.
+    let confirm = args
+        .and_then(|a| a.get("confirm"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let content_db = derive_content_db_path(db_path);
     let bridge_dir = derive_bridge_dir(db_path);
@@ -368,7 +467,19 @@ pub fn tool_purge_saved_context(
     let deleted_sources = if let Some(ref sid) = session_id_filter {
         cs.delete_session_sources(sid, agent_id_filter.as_deref())?
     } else {
-        if crate::runtime_context::current().is_ok() {
+        let in_mcp_request = crate::runtime_context::current().is_ok();
+        if in_mcp_request && !confirm {
+            if !crate::elicitation::supports_form_elicitation() {
+                let payload = ToolErrorPayload::new(
+                    ToolErrorCode::InvalidInput,
+                    "purge_saved_context needs interactive confirmation, but this client does not advertise the elicitation.form capability",
+                )
+                .with_tool("purge_saved_context")
+                .with_retry_guidance(
+                    "retry with confirm=true for non-interactive age-based cleanup, or pass session_id to purge one session without confirmation",
+                );
+                return tool_execution_error_value(output_format, &payload);
+            }
             match crate::elicitation::confirm_age_based_purge()? {
                 crate::elicitation::ConfirmationProgress::Confirmed => {}
                 crate::elicitation::ConfirmationProgress::Cancelled => {

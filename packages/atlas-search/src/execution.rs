@@ -129,11 +129,18 @@ pub(super) fn ranking_factors_for(
     ranking_factors
 }
 
+/// Tokenize text the same way the SQLite FTS5 `unicode61` tokenizer does for
+/// `nodes_fts`.
+///
+/// `unicode61` treats every non-alphanumeric code point — including `_` — as a
+/// token separator, so `classify_graph_store_error` is four tokens, not one.
+/// The explanation must mirror the index, otherwise `fts_phrase` advertises a
+/// phrase that never matches how the query is actually executed.
 pub(super) fn tokenize_fts(text: &str) -> Vec<String> {
     if text.trim().is_empty() {
         vec![]
     } else {
-        text.split(|c: char| !c.is_alphanumeric() && c != '_')
+        text.split(|c: char| !c.is_alphanumeric())
             .filter(|token| !token.is_empty())
             .map(str::to_owned)
             .collect()
@@ -238,7 +245,10 @@ pub fn explain_query_with_embedding(
     let hybrid_backend_available = query.hybrid && caps.hybrid_lexical_vector;
     let mode = query_execution_mode_for(query, semantic, hybrid_backend_available);
     let mut warnings: Vec<String> = Vec::new();
-    if fts_tokens.len() > 1 {
+    // Only whitespace-separated input reads as a multi-word query to the
+    // caller. Underscore-separated identifiers also tokenize into several FTS
+    // terms, but they are one symbol name and should not trigger this warning.
+    if query.text.split_whitespace().count() > 1 {
         warnings.push(
             "Multi-token text is matched as implicit AND across all tokens; this often returns zero results. Prefer a single short identifier.".to_string(),
         );
@@ -324,5 +334,27 @@ pub fn explain_query_with_embedding(
         result_count,
         matches,
         active_capabilities: caps,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokenize_fts_splits_underscores_like_unicode61() {
+        // `nodes_fts` uses the FTS5 `unicode61` tokenizer, which treats `_` as a
+        // separator. The explanation must report the same tokens the index
+        // actually matches, not one opaque identifier token.
+        assert_eq!(
+            tokenize_fts("classify_graph_store_error"),
+            vec!["classify", "graph", "store", "error"]
+        );
+    }
+
+    #[test]
+    fn tokenize_fts_keeps_alphanumeric_identifiers_whole() {
+        assert_eq!(tokenize_fts("compute"), vec!["compute"]);
+        assert!(tokenize_fts("   ").is_empty());
     }
 }

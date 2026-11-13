@@ -57,3 +57,42 @@ pub fn cross_file_links(args: &Value, repo_root: &str, db_path: &str) -> Result<
 pub fn concept_clusters(args: &Value, repo_root: &str, db_path: &str) -> Result<Value> {
     crate::tools::tool_concept_clusters(Some(args), repo_root, db_path, json_format())
 }
+
+// ---------------------------------------------------------------------------
+// Session continuity / saved-context surfaces
+// ---------------------------------------------------------------------------
+
+/// `save_context_artifact` — persist a large payload and return its pointer.
+pub fn save_context_artifact(args: &Value, repo_root: &str, db_path: &str) -> Result<Value> {
+    crate::session_tools::tool_save_context_artifact(Some(args), repo_root, db_path, json_format())
+}
+
+/// `read_saved_context` — read a saved artifact by `source_id`.
+pub fn read_saved_context(args: &Value, repo_root: &str, db_path: &str) -> Result<Value> {
+    crate::session_tools::tool_read_saved_context(Some(args), repo_root, db_path, json_format())
+}
+
+/// `search_saved_context` — search saved artifacts.
+pub fn search_saved_context(args: &Value, repo_root: &str, db_path: &str) -> Result<Value> {
+    crate::session_tools::tool_search_saved_context(Some(args), repo_root, db_path, json_format())
+}
+
+/// `get_context_stats` — saved-context storage footprint for a session.
+pub fn get_context_stats(args: &Value, repo_root: &str, db_path: &str) -> Result<Value> {
+    crate::session_tools::tool_get_context_stats(Some(args), repo_root, db_path, json_format())
+}
+
+/// `compact_session` — curate the session event ledger.
+pub fn compact_session(args: &Value, repo_root: &str, db_path: &str) -> Result<Value> {
+    crate::session_tools::tool_compact_session(Some(args), repo_root, db_path, json_format())
+}
+
+/// `get_global_memory` — cross-session global memory summary.
+pub fn get_global_memory(args: &Value, repo_root: &str, db_path: &str) -> Result<Value> {
+    crate::session_tools::tool_get_global_memory(Some(args), repo_root, db_path, json_format())
+}
+
+/// `search_decisions` — decision memory search.
+pub fn search_decisions(args: &Value, repo_root: &str, db_path: &str) -> Result<Value> {
+    crate::session_tools::tool_search_decisions(Some(args), repo_root, db_path, json_format())
+}

@@ -488,9 +488,10 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `structuredContent.nodes_by_kind.function > 3000`
-- Verify `structuredContent.nodes_by_kind.struct > 1000`
-- Verify `structuredContent.nodes_by_kind.file > 900`
+- Verify `structuredContent.nodes_by_kind` is an array of `[kind, count]` pairs
+- Verify the `function` entry count is > 3000
+- Verify the `struct` entry count is > 1000
+- Verify the `file` entry count is > 900
 
 **CLI Parity Command**:
 ```./target/debug/atlas debug-graph --json```
@@ -4437,7 +4438,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify `storage_mode` is `indexed_pointer` or `indexed_preview`
 - Verify `summary.stored == true`
 - Confirm the full payload is not echoed back into context
-- Payloads at or below the inline threshold (about 360 bytes) instead return `storage_mode: 'raw_inline'`, `source_id: null`, `summary.stored: false`
+- Payloads at or below the inline threshold (512 bytes, `ContentStoreConfig.small_output_bytes`) instead return `storage_mode: 'raw_inline'`, `source_id: null`, `summary.stored: false`
 
 **CLI Parity Command**:
 ```./target/debug/atlas session save-artifact --json```

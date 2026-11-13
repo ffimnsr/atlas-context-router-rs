@@ -82,6 +82,17 @@ fn create_form(request: FormElicitation) -> Result<ConfirmationProgress> {
     }
 }
 
+/// Whether the active MCP client can render form elicitation.
+///
+/// Returns `false` outside a request context or when the client did not
+/// advertise `elicitation.form`, letting destructive tools fail closed with an
+/// actionable error instead of a bare capability message.
+pub(crate) fn supports_form_elicitation() -> bool {
+    runtime_context::current()
+        .map(|context| context.capabilities.supports_elicitation_form)
+        .unwrap_or(false)
+}
+
 pub(crate) fn confirm_age_based_purge() -> Result<ConfirmationProgress> {
     create_form(FormElicitation {
         message: "Confirm purge of saved context across all sessions older than keep_days. This cannot be undone.".to_owned(),

@@ -291,29 +291,6 @@ pub fn tool_search_saved_context(
         ),
     );
     inject_deprecated_input_fields(&mut response, &deprecated_input_fields);
-    if !linked_decisions.is_empty() {
-        let source_ids = linked_decisions
-            .iter()
-            .flat_map(|hit| hit.decision.source_ids.iter().cloned())
-            .take(5)
-            .collect::<Vec<_>>();
-        record_mcp_decision_best_effort(
-            repo_root,
-            db_path,
-            &format!("reuse prior decision during saved-context lookup: {query}"),
-            Some("saved-context query matched stored decision memory"),
-            serde_json::json!({
-                "query": query,
-                "conclusion": "prior decision reused during saved-context lookup",
-                "source_ids": source_ids,
-                "evidence": linked_decisions.iter().take(3).map(|hit| serde_json::json!({
-                    "decision_id": hit.decision.decision_id,
-                    "summary": hit.decision.summary,
-                    "relevance_score": hit.relevance_score,
-                })).collect::<Vec<_>>(),
-            }),
-        );
-    }
     Ok(response)
 }
 
@@ -415,6 +392,14 @@ pub fn tool_save_context_artifact(
 
     let redaction_rules = load_redaction_rules(repo_root)?;
     let sanitized_content = redact_text_with_rules(content, &redaction_rules);
+    let redaction_applied = sanitized_content != content;
+    let mut warnings = Vec::new();
+    if redaction_applied {
+        warnings.push(
+            "sensitive-looking values were redacted before storage; the stored payload differs from the submitted content"
+                .to_owned(),
+        );
+    }
     let (repo_roots, deprecated_input_fields) =
         match resolve_requested_repo_roots("save_context_artifact", args, repo_root) {
             Ok(resolved) => resolved,
@@ -502,6 +487,7 @@ pub fn tool_save_context_artifact(
         "preview": preview,
         "inline_content": inline_content,
         "content_size_bytes": content_size_bytes,
+        "redaction_applied": redaction_applied,
         "chunk_count": chunk_count,
         "resource_link": resource_link,
         "retrieval_hint": retrieval_hint,
@@ -514,7 +500,8 @@ pub fn tool_save_context_artifact(
             "stored": storage_mode != "raw_inline",
             "inline": storage_mode == "raw_inline",
             "content_type": content_type,
-        }
+        },
+        "warnings": warnings,
     });
 
     let mut response = tool_result_value(&result, output_format)?;

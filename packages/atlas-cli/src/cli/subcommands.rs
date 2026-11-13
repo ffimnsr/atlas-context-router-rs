@@ -1,5 +1,10 @@
 use clap::Subcommand;
 
+use super::session_args::{
+    MemoryDecisionsArgs, MemoryGlobalArgs, MemoryTuiArgs, SessionReadArtifactArgs,
+    SessionSaveArtifactArgs, SessionSearchArgs, SessionStatsArgs,
+};
+
 /// Which install surfaces `atlas install` should set up.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum)]
 pub enum InstallMode {
@@ -287,6 +292,10 @@ pub enum SessionCommand {
 
         #[arg(long)]
         merge_agent_partitions: bool,
+
+        /// Explicit session id; defaults to the derived cli session.
+        #[arg(long)]
+        session: Option<String>,
     },
 
     /// Print the pending resume snapshot, then mark it consumed.
@@ -296,6 +305,10 @@ pub enum SessionCommand {
 
         #[arg(long)]
         merge_agent_partitions: bool,
+
+        /// Explicit session id; defaults to the derived cli session.
+        #[arg(long)]
+        session: Option<String>,
     },
 
     /// Delete the current session and all its stored events.
@@ -323,7 +336,23 @@ pub enum SessionCommand {
     /// Removes stale low-value events, merges repeated actions, deduplicates
     /// reasoning outputs, and promotes high-value events to a higher priority
     /// so they survive future eviction cycles.
-    Compact,
+    Compact {
+        /// Explicit session id; defaults to the derived cli session.
+        #[arg(long)]
+        session: Option<String>,
+    },
+
+    /// Persist a large payload as a saved-context artifact.
+    SaveArtifact(SessionSaveArtifactArgs),
+
+    /// Read a saved-context artifact and print its content verbatim.
+    ReadArtifact(SessionReadArtifactArgs),
+
+    /// Search saved-context artifacts.
+    Search(SessionSearchArgs),
+
+    /// Show saved-context storage statistics.
+    Stats(SessionStatsArgs),
 }
 
 /// Sub-commands for `atlas memory`.
@@ -333,6 +362,10 @@ pub enum MemoryCommand {
     Store {
         /// Memory body text; stored exactly as provided.
         text: Option<String>,
+
+        /// Memory body text (flag form, same as the positional argument).
+        #[arg(long = "text", conflicts_with = "patch_id")]
+        text_flag: Option<String>,
 
         /// Topic label for the memory.
         #[arg(long)]
@@ -425,59 +458,7 @@ pub enum MemoryCommand {
     },
 
     /// Browse memory, feedback, memoir, overview, health, and artifacts (read-only).
-    Tui {
-        /// Filter memories by topic (case-insensitive exact match).
-        #[arg(long)]
-        topic: Option<String>,
-
-        /// Filter memories by scope.
-        #[arg(long)]
-        scope: Option<String>,
-
-        /// Filter memories by importance level.
-        #[arg(long)]
-        importance: Option<String>,
-
-        /// Filter memories by frontend identity.
-        #[arg(long)]
-        frontend: Option<String>,
-
-        /// Filter overview records by subject kind.
-        #[arg(long)]
-        subject_kind: Option<String>,
-
-        /// Filter overview records by freshness.
-        #[arg(long)]
-        freshness: Option<String>,
-
-        /// Filter overview records by package name.
-        #[arg(long)]
-        package: Option<String>,
-
-        /// Filter overview records by module path.
-        #[arg(long)]
-        module: Option<String>,
-
-        /// Filter overview records by canonical file path.
-        #[arg(long)]
-        file: Option<String>,
-
-        /// Filter overview records by source kind.
-        #[arg(long)]
-        source_kind: Option<String>,
-
-        /// Only overview records updated after this date (YYYY-MM-DD or RFC 3339).
-        #[arg(long)]
-        newer_than: Option<String>,
-
-        /// Only overview records updated before this date (YYYY-MM-DD or RFC 3339).
-        #[arg(long)]
-        older_than: Option<String>,
-
-        /// Maximum rows rendered per section.
-        #[arg(long, default_value_t = 50)]
-        limit: usize,
-    },
+    Tui(MemoryTuiArgs),
 
     /// List stored memories with filters; sorted by updated_at DESC.
     List {
@@ -588,6 +569,12 @@ pub enum MemoryCommand {
         /// Exact memory id to inspect.
         memory_id: String,
     },
+
+    /// Show the cross-session global memory summary for this repo.
+    Global(MemoryGlobalArgs),
+
+    /// Search persisted decision memory for prior conclusions.
+    Decisions(MemoryDecisionsArgs),
 }
 
 /// Sub-commands for `atlas feedback` (ICM-C).

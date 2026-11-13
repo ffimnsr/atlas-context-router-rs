@@ -14,7 +14,7 @@ use crate::cli::{
     GrepArgs, LinksArgs, MatchContextArgs, NeighborsArgs,
 };
 
-use super::{db_path, print_json, resolve_repo};
+use super::{db_path, print_json, resolve_repo, tool_payload};
 
 pub fn run_content(cli: &Cli) -> Result<()> {
     let Command::Content { subcommand } = &cli.command else {
@@ -44,23 +44,6 @@ fn store_path(cli: &Cli) -> Result<(String, String)> {
     let root = find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
     let db = db_path(cli, &repo);
     Ok((root.to_string(), db))
-}
-
-/// Unwrap the structured payload of a tool response, turning `isError` results
-/// into command errors so the CLI exit code reflects the failure.
-fn tool_payload(response: Value) -> Result<Value> {
-    if response.get("isError").and_then(Value::as_bool) == Some(true) {
-        let message = response
-            .pointer("/structuredContent/message")
-            .and_then(Value::as_str)
-            .or_else(|| response.pointer("/content/0/text").and_then(Value::as_str))
-            .unwrap_or("tool call failed");
-        anyhow::bail!("{message}");
-    }
-    Ok(response
-        .get("structuredContent")
-        .cloned()
-        .unwrap_or(response))
 }
 
 fn emit(cli: &Cli, command: &str, data: &Value, render: fn(&Value) -> String) -> Result<()> {

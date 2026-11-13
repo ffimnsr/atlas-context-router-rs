@@ -58,9 +58,14 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "011_content_index_hot_paths",
         up_sql: include_str!("migrations/011_content_index_hot_paths.sql"),
     },
+    Migration {
+        version: 12,
+        name: "012_source_raw_content",
+        up_sql: include_str!("migrations/012_source_raw_content.sql"),
+    },
 ];
 
-pub const LATEST_VERSION: i32 = 11;
+pub const LATEST_VERSION: i32 = 12;
 
 pub const MIGRATION_SET: MigrationSet = MigrationSet {
     db_kind: "context",

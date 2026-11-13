@@ -400,8 +400,12 @@ pub fn tool_resume_session(
 
     let (snapshot, snapshot_status): (ResumeSnapshot, &str) =
         match store.get_resume_snapshot(&session_id)? {
-            Some(s) => (s, "existing_snapshot"),
-            None => (store.build_resume(&session_id)?, "built_snapshot"),
+            // A consumed row is stale by contract: it was already handed to an
+            // agent. Rebuild from live events instead of serving it again, so
+            // `get_session_status.resume_snapshot_exists` and `resume_session`
+            // agree on whether a pending snapshot exists.
+            Some(s) if !s.consumed => (s, "existing_snapshot"),
+            _ => (store.build_resume(&session_id)?, "built_snapshot"),
         };
     let snapshot_view =
         store.build_resume_view(&session_id, agent_id.as_deref(), merge_agent_partitions)?;

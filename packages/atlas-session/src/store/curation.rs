@@ -66,6 +66,28 @@ pub(super) fn compact_session_events(
     let events = store.list_events(session_id)?;
     let events_before = events.len();
 
+    // Idempotency guard: when nothing has been recorded since the previous
+    // compaction, curation cannot produce a different outcome. Without this, a
+    // second pass decays the SESSION_SUMMARY row the first pass appended and
+    // reports removals for an unchanged ledger.
+    if let Some(meta) = store.get_session_meta(session_id)?
+        && let Some(last) = meta
+            .last_compaction_at
+            .as_deref()
+            .filter(|last| !last.is_empty())
+        && events.iter().all(|event| event.created_at.as_str() <= last)
+    {
+        return Ok(CurationResult {
+            events_before,
+            events_after: events_before,
+            merged_count: 0,
+            decayed_count: 0,
+            deduplicated_count: 0,
+            promoted_count: 0,
+            no_op: true,
+        });
+    }
+
     // Collect event IDs to delete, grouped by curation category.
     let mut decay_ids: Vec<i64> = Vec::new();
     let mut merge_ids: Vec<i64> = Vec::new();
