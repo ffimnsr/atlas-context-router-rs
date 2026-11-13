@@ -1095,6 +1095,16 @@ impl<'s> ReasoningEngine<'s> {
             })
             .map(|(node, _)| node.clone())
             .collect();
+        // A caller with several inbound edge kinds appears once per edge. Dedupe
+        // by qualified name so blocker counts and cleanups describe distinct
+        // callers.
+        let mut blocking = blocking;
+        blocking.sort_by(|left, right| {
+            left.file_path
+                .cmp(&right.file_path)
+                .then_with(|| left.qualified_name.cmp(&right.qualified_name))
+        });
+        blocking.dedup_by(|left, right| left.qualified_name == right.qualified_name);
 
         let has_low_confidence = inbound.iter().any(|(_, edge)| edge.confidence < 0.5);
 
@@ -1112,7 +1122,12 @@ impl<'s> ReasoningEngine<'s> {
         let mut suggested_cleanups: Vec<String> = blocking
             .iter()
             .take(5)
-            .map(|node| format!("remove reference in `{}`", node.file_path))
+            .map(|node| {
+                format!(
+                    "remove the reference to `{qname}` from caller `{}` in `{}`",
+                    node.qualified_name, node.file_path
+                )
+            })
             .collect();
         if has_low_confidence && removable {
             suggested_cleanups

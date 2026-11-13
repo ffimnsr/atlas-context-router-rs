@@ -521,6 +521,14 @@ fn large_function_file_scope_and_mode_filtering_work() {
         complex_only.candidates[0].qualified_name,
         "src/complex.rs::fn::knot"
     );
+    assert_ne!(
+        complex_only.candidates[0].threshold_kind, "loc",
+        "mode=complex hit below the LOC threshold must report the complexity metric"
+    );
+    assert!(matches!(
+        complex_only.candidates[0].threshold_kind.as_str(),
+        "cyclomatic_complexity" | "cognitive_complexity" | "nesting_depth"
+    ));
 
     let large_only = engine
         .find_large_functions(

@@ -111,7 +111,21 @@ impl<'s> InsightsEngine<'s> {
     }
 
     pub fn pattern_report(&self, findings: Vec<InsightFinding>) -> PatternReport {
-        let findings = self.prepare_pattern_findings(findings);
+        self.pattern_report_with_limit(findings, None)
+    }
+
+    /// Pattern report whose per-category fair share is derived from the caller's
+    /// requested page size, not only the config-wide `max_findings` ceiling.
+    ///
+    /// Without this, a `limit: 3` request still caps each category at
+    /// `max_findings / 4` and the first page is dominated by repeated-chain
+    /// findings.
+    pub fn pattern_report_with_limit(
+        &self,
+        findings: Vec<InsightFinding>,
+        limit: Option<usize>,
+    ) -> PatternReport {
+        let findings = self.prepare_pattern_findings(findings, limit);
         PatternReport {
             summary: InsightSummary::from_findings(&findings, self.generated_at.clone()),
             findings,
@@ -145,14 +159,24 @@ impl<'s> InsightsEngine<'s> {
     /// bottleneck, isolated-structure, orphan, and deep-chain findings out of
     /// every score-ranked trim. Cap each category to a fair share, then fill any
     /// remaining slots from the already-sorted overflow.
-    fn prepare_pattern_findings(&self, findings: Vec<InsightFinding>) -> Vec<InsightFinding> {
+    fn prepare_pattern_findings(
+        &self,
+        findings: Vec<InsightFinding>,
+        requested_limit: Option<usize>,
+    ) -> Vec<InsightFinding> {
         let mut findings = findings
             .into_iter()
             .filter(|finding| !self.is_ignored_finding(finding))
             .collect::<Vec<_>>();
         sort_insight_findings(&mut findings);
 
-        let per_category = (self.config.max_findings / 4).max(1);
+        // Fair-share against the page the caller will actually see, capped by
+        // the configured ceiling. `max_findings / 4` alone makes small pages
+        // score-dominated by one category.
+        let effective_limit = requested_limit
+            .unwrap_or(self.config.max_findings)
+            .clamp(1, self.config.max_findings.max(1));
+        let per_category = (effective_limit / 4).max(1);
         let mut counts = BTreeMap::<String, usize>::new();
         let mut kept = Vec::with_capacity(findings.len().min(self.config.max_findings));
         let mut deferred = Vec::new();

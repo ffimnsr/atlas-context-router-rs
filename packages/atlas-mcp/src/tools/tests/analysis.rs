@@ -422,6 +422,72 @@ fn find_large_functions_matches_direct_report_json() {
 }
 
 #[test]
+fn analyze_dead_code_blocker_count_matches_emitted_blockers() {
+    let fixture = setup_mcp_fixture();
+    let repo_id = atlas_repo::stable_repo_id(Utf8Path::new(&fixture.repo_root));
+    let mut store = Store::open(&fixture.db_path).expect("open store");
+    let dead_nodes = (0..3)
+        .map(|index| {
+            let mut node = make_node(
+                NodeKind::Struct,
+                &format!("Dead{index}"),
+                &format!("src/dead.rs::struct::Dead{index}"),
+                "src/dead.rs",
+            );
+            node.modifiers = None;
+            node
+        })
+        .collect::<Vec<_>>();
+    store
+        .replace_file_graph_for_repo(
+            &repo_id,
+            "src/dead.rs",
+            "hash:dead",
+            Some("rust"),
+            None,
+            &dead_nodes,
+            &[],
+        )
+        .expect("insert dead nodes");
+
+    let args = serde_json::json!({"limit": 1, "output_format": "json"});
+    let resp = call("analyze_dead_code", Some(&args), "/repo", &fixture.db_path)
+        .expect("analyze_dead_code call");
+    let text = unwrap_tool_text(resp);
+    let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    let emitted = value["blockers"].as_array().map_or(0, Vec::len);
+    assert_eq!(value["summary"]["blocker_count"], emitted);
+    assert_eq!(value["summary"]["total_blocker_count"], 3);
+}
+
+#[test]
+fn analyze_metrics_compact_surfaces_distributions_and_scope() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({"limit": 5, "output_format": "json"});
+    let resp = call("analyze_metrics", Some(&args), "/repo", &fixture.db_path)
+        .expect("analyze_metrics call");
+    let text = unwrap_tool_text(resp);
+    let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert_eq!(value["graph_summary"]["scope"], "post_filter");
+    assert!(
+        value["graph_summary"]["raw_node_count"]
+            .as_u64()
+            .is_some_and(|raw| raw >= value["graph_summary"]["node_count"].as_u64().unwrap_or(0)),
+        "raw counts must be reported alongside filtered counts: {value}"
+    );
+    assert!(
+        value["metric_distributions"]
+            .as_array()
+            .is_some_and(|distributions| distributions
+                .iter()
+                .any(|distribution| distribution["metric_name"] == "cyclomatic_complexity")),
+        "cyclomatic distribution must be surfaced: {value}"
+    );
+}
+
+#[test]
 fn analyze_architecture_matches_direct_report_json() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "verbose": true, "output_format": "json" });
@@ -445,9 +511,44 @@ fn analyze_architecture_matches_direct_report_json() {
     direct_value["summary"]["generated_at"] = tool_value["summary"]["generated_at"].clone();
     direct_value["counts"] =
         serde_json::to_value(&direct.counts).expect("serialize architecture counts");
+    direct_value["modules"] =
+        serde_json::json!(crate::tools::analysis_payloads::architecture_modules_json(
+            &direct.modules,
+            direct.modules.len()
+        ));
+    direct_value["module_edges"] = serde_json::json!(
+        crate::tools::analysis_payloads::architecture_module_edges_json(
+            &direct.edges,
+            direct.edges.len()
+        )
+    );
 
     assert_eq!(tool_value, direct_value);
     assert_provenance(&resp, "/repo", &fixture.db_path);
+}
+
+#[test]
+fn analyze_architecture_compact_lists_module_couplings() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({ "output_format": "json" });
+    let resp = call(
+        "analyze_architecture",
+        Some(&args),
+        "/repo",
+        &fixture.db_path,
+    )
+    .expect("analyze_architecture compact call");
+    let text = unwrap_tool_text(resp);
+    let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert!(
+        value["modules"]
+            .as_array()
+            .is_some_and(|modules| !modules.is_empty()),
+        "compact payload must list module coupling rows"
+    );
+    assert!(value["module_edges"].is_array());
+    assert!(value["details_omitted"].as_bool().unwrap_or(false));
 }
 
 #[test]
@@ -466,14 +567,13 @@ fn analyze_metrics_matches_direct_report_json() {
     let mut direct_value = serde_json::to_value(&direct.report).expect("serialize report");
     direct_value["summary"]["generated_at"] = tool_value["summary"]["generated_at"].clone();
     let graph_summary = &direct.metrics.graph_summary;
-    direct_value["graph_summary"] = serde_json::json!({
-        "node_count": graph_summary.node_count,
-        "edge_count": graph_summary.edge_count,
-        "density": graph_summary.density,
-        "average_degree": graph_summary.average_degree,
-        "diameter": graph_summary.diameter,
-        "diameter_scope": graph_summary.diameter_scope,
-    });
+    direct_value["graph_summary"] =
+        crate::tools::analysis_payloads::metric_graph_summary_json(graph_summary);
+    direct_value["metric_distributions"] =
+        serde_json::json!(crate::tools::analysis_payloads::metric_distributions_json(
+            &direct.metrics.distributions,
+            direct.metrics.distributions.len(),
+        ));
 
     assert_eq!(tool_value, direct_value);
     assert_provenance(&resp, "/repo", &fixture.db_path);
@@ -641,6 +741,17 @@ fn r4_insight_tools_keep_full_report_in_json_structured_content() {
         serde_json::to_value(&architecture_analysis.report).expect("serialize architecture report");
     architecture["counts"] =
         serde_json::to_value(&architecture_analysis.counts).expect("serialize architecture counts");
+    architecture["modules"] =
+        serde_json::json!(crate::tools::analysis_payloads::architecture_modules_json(
+            &architecture_analysis.modules,
+            architecture_analysis.modules.len(),
+        ));
+    architecture["module_edges"] = serde_json::json!(
+        crate::tools::analysis_payloads::architecture_module_edges_json(
+            &architecture_analysis.edges,
+            architecture_analysis.edges.len(),
+        )
+    );
     assert_json_structured_content_matches_direct_report(
         "analyze_architecture",
         serde_json::json!({ "verbose": true }),
@@ -651,14 +762,13 @@ fn r4_insight_tools_keep_full_report_in_json_structured_content() {
     let mut metrics =
         serde_json::to_value(&metrics_analysis.report).expect("serialize metrics report");
     let graph_summary = &metrics_analysis.metrics.graph_summary;
-    metrics["graph_summary"] = serde_json::json!({
-        "node_count": graph_summary.node_count,
-        "edge_count": graph_summary.edge_count,
-        "density": graph_summary.density,
-        "average_degree": graph_summary.average_degree,
-        "diameter": graph_summary.diameter,
-        "diameter_scope": graph_summary.diameter_scope,
-    });
+    metrics["graph_summary"] =
+        crate::tools::analysis_payloads::metric_graph_summary_json(graph_summary);
+    metrics["metric_distributions"] =
+        serde_json::json!(crate::tools::analysis_payloads::metric_distributions_json(
+            &metrics_analysis.metrics.distributions,
+            metrics_analysis.metrics.distributions.len(),
+        ));
     assert_json_structured_content_matches_direct_report(
         "analyze_metrics",
         serde_json::json!({ "verbose": true }),

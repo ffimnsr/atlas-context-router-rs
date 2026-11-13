@@ -201,7 +201,7 @@ pub fn run_insights(cli: &Cli) -> Result<()> {
             }
             InsightsCommand::Patterns { limit } => {
                 let mut report = engine
-                    .analyze_patterns(&repo)
+                    .analyze_patterns_with_limit(&repo, *limit)
                     .context("pattern analysis failed")?;
                 apply_finding_limit(&mut report.findings, &mut report.summary, *limit);
 

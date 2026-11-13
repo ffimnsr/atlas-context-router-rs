@@ -389,12 +389,20 @@ fn dependency_removal_blocked_by_reference() {
             NodeKind::Function,
         ),
     ];
-    let edges = vec![edge(
-        "src/b.rs::consumer",
-        "src/a.rs::dep_a",
-        EdgeKind::Calls,
-        "src/b.rs",
-    )];
+    let edges = vec![
+        edge(
+            "src/b.rs::consumer",
+            "src/a.rs::dep_a",
+            EdgeKind::Calls,
+            "src/b.rs",
+        ),
+        edge(
+            "src/b.rs::consumer",
+            "src/a.rs::dep_a",
+            EdgeKind::References,
+            "src/b.rs",
+        ),
+    ];
     seed_graph(&mut store, nodes, edges);
 
     let engine = ReasoningEngine::new(&store);
@@ -403,7 +411,17 @@ fn dependency_removal_blocked_by_reference() {
         !result.removable,
         "dep_a is still referenced — not removable"
     );
-    assert!(!result.blocking_references.is_empty());
+    assert_eq!(
+        result.blocking_references.len(),
+        1,
+        "a caller with two inbound edge kinds is one blocking reference"
+    );
+    assert_eq!(result.suggested_cleanups.len(), 1);
+    assert!(
+        result.suggested_cleanups[0].contains("src/b.rs::consumer"),
+        "cleanup must name the caller: {:?}",
+        result.suggested_cleanups
+    );
 }
 
 #[test]

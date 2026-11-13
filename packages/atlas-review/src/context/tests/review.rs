@@ -26,6 +26,93 @@ fn review_context_changed_files_become_direct_targets() {
 }
 
 #[test]
+fn review_context_exact_dir_prunes_changed_file_seeds() {
+    let mut store = open_store();
+    seed_graph(&mut store);
+
+    let mut req = review_request(vec!["src/a.rs".to_string(), "tests/test_a.rs".to_string()]);
+    req.exact_dir = Some("tests".to_string());
+    let result = ContextEngine::new(&store).build(&req).unwrap();
+
+    assert!(
+        result
+            .nodes
+            .iter()
+            .all(|node| node.node.file_path == "tests/test_a.rs"),
+        "out-of-scope seeds and neighbors must be pruned: {:?}",
+        result
+            .nodes
+            .iter()
+            .map(|node| node.node.file_path.as_str())
+            .collect::<Vec<_>>()
+    );
+    let seed = &result.seed_budgets[0];
+    assert_eq!(seed.requested_seed_count, 2);
+    assert_eq!(seed.accepted_seed_count, 1);
+}
+
+#[test]
+fn review_context_fair_shares_changed_symbols_across_files() {
+    let mut store = open_store();
+    let docs_nodes = (0..20)
+        .map(|index| {
+            make_node(
+                &format!("docs.md::heading::h{index}"),
+                &format!("h{index}"),
+                "docs.md",
+                NodeKind::Module,
+                None,
+            )
+        })
+        .collect::<Vec<_>>();
+    let code_nodes = (0..3)
+        .map(|index| {
+            make_node(
+                &format!("src/a.rs::fn::f{index}"),
+                &format!("f{index}"),
+                "src/a.rs",
+                NodeKind::Function,
+                None,
+            )
+        })
+        .collect::<Vec<_>>();
+    store
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "docs.md",
+            "hd",
+            Some("markdown"),
+            None,
+            &docs_nodes,
+            &[],
+        )
+        .unwrap();
+    store
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "src/a.rs",
+            "hc",
+            Some("rust"),
+            None,
+            &code_nodes,
+            &[],
+        )
+        .unwrap();
+
+    let mut req = review_request(vec!["docs.md".to_string(), "src/a.rs".to_string()]);
+    req.max_nodes = Some(10);
+    let result = ContextEngine::new(&store).build(&req).unwrap();
+
+    let files = result
+        .files
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect::<Vec<_>>();
+    assert!(files.contains(&"docs.md"), "files: {files:?}");
+    assert!(files.contains(&"src/a.rs"), "files: {files:?}");
+}
+
+#[test]
 fn review_context_impacted_nodes_tagged_impact_neighbor() {
     let mut store = open_store();
     seed_graph(&mut store);

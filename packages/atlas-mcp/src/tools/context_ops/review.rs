@@ -94,7 +94,22 @@ pub(crate) fn tool_get_review_context(
         engine
     };
     let result = engine.build(&request).context("context engine failed")?;
-    let file_refs: Vec<&str> = resolved.files.iter().map(String::as_str).collect();
+    // The engine already filters selected evidence by scope; mirror that filter
+    // on the reported changed-file seeds and the independent impact query so
+    // out-of-scope files do not reappear in `changed_files` or the boundary
+    // summary.
+    let scope = atlas_review::ContextScope::from_request(&request)?;
+    let scoped_files: Vec<String> = if scope.is_active() {
+        resolved
+            .files
+            .iter()
+            .filter(|path| scope.contains(path))
+            .cloned()
+            .collect()
+    } else {
+        resolved.files.clone()
+    };
+    let file_refs: Vec<&str> = scoped_files.iter().map(String::as_str).collect();
     let review_impact = store
         .impact_radius(
             &file_refs,
@@ -119,6 +134,25 @@ pub(crate) fn tool_get_review_context(
     } else {
         result.budget.clone()
     };
+    // Traversal accounting must describe the payload that is actually emitted.
+    // The traversal stage runs before node/edge trimming, so its counters can
+    // otherwise disagree with the packaged arrays (for example 40/70 reported
+    // against an 8-node / 0-edge payload).
+    let emitted_nodes = packaged_value
+        .get("nodes")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let emitted_edges = packaged_value
+        .get("edges")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    if let Some(budget) = packaged_value
+        .get_mut("traversal_budget")
+        .and_then(Value::as_object_mut)
+    {
+        budget.insert("emitted_node_count".to_owned(), json!(emitted_nodes));
+        budget.insert("emitted_edge_count".to_owned(), json!(emitted_edges));
+    }
     let changed_symbols = packaged_value
         .get("nodes")
         .and_then(Value::as_array)
@@ -180,7 +214,7 @@ pub(crate) fn tool_get_review_context(
             &repo_aliases,
         ),
     );
-    normalized_payload.insert("changed_files".to_owned(), json!(resolved.files.clone()));
+    normalized_payload.insert("changed_files".to_owned(), json!(scoped_files.clone()));
     normalized_payload.insert("changed_symbols".to_owned(), Value::Array(changed_symbols));
     normalized_payload.insert("neighbors".to_owned(), Value::Array(neighbors.clone()));
     // Alias retained for the documented review contract (`impacted_neighbors`).

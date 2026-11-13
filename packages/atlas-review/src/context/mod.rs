@@ -46,6 +46,7 @@ pub use self::build::build_context;
 pub use self::resolve::{
     ResolvedTarget, normalize_qn_kind_tokens, resolve_target, resolve_target_scoped,
 };
+pub use self::scope::ContextScope;
 
 use self::content::retrieve_content_assets;
 use self::experience::apply_experience_shortcuts;
@@ -53,7 +54,7 @@ use self::overview::overviews_for_context;
 use self::payload::apply_payload_budgets;
 use self::rank::{rank_context, trim_context};
 use self::saved::retrieve_saved_context;
-use self::scope::{ContextScope, apply_context_scope};
+use self::scope::apply_context_scope;
 use self::slim::slim_context_metadata;
 use self::spans::apply_code_spans;
 use self::sufficiency::{

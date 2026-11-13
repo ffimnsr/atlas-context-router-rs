@@ -45,6 +45,20 @@ pub(super) fn tool_analyze_architecture(
         0,
         limit,
     );
+    let module_limit = limit.unwrap_or(20);
+    let modules =
+        super::analysis_payloads::architecture_modules_json(&analysis.modules, module_limit);
+    let module_edges =
+        super::analysis_payloads::architecture_module_edges_json(&analysis.edges, module_limit);
+    let modules_truncated = analysis.modules.len() > module_limit;
+    let full_modules = super::analysis_payloads::architecture_modules_json(
+        &analysis.modules,
+        analysis.modules.len(),
+    );
+    let full_module_edges = super::analysis_payloads::architecture_module_edges_json(
+        &analysis.edges,
+        analysis.edges.len(),
+    );
 
     let compact = compact_insight_report(
         &analysis.report.summary,
@@ -56,6 +70,9 @@ pub(super) fn tool_analyze_architecture(
             "module_count": analysis.modules.len(),
             "module_edge_count": analysis.edges.len(),
             "counts": analysis.counts,
+            "modules": modules.clone(),
+            "module_edges": module_edges.clone(),
+            "modules_truncated": modules_truncated,
             "findings_offset": offset,
             "findings_total_available": total_available,
         }),
@@ -63,6 +80,8 @@ pub(super) fn tool_analyze_architecture(
     let mut full_payload = serde_json::to_value(&analysis.report)?;
     if let Some(object) = full_payload.as_object_mut() {
         object.insert("counts".to_owned(), json!(analysis.counts));
+        object.insert("modules".to_owned(), json!(full_modules));
+        object.insert("module_edges".to_owned(), json!(full_module_edges));
     }
     insight_report_response(
         &full_payload,
@@ -103,14 +122,11 @@ pub(super) fn tool_analyze_metrics(
         analysis.report.atlas_freshness.as_ref(),
         json!({
             "tool": "analyze_metrics",
-            "graph_summary": {
-                "node_count": analysis.metrics.graph_summary.node_count,
-                "edge_count": analysis.metrics.graph_summary.edge_count,
-                "density": analysis.metrics.graph_summary.density,
-                "average_degree": analysis.metrics.graph_summary.average_degree,
-                "diameter": analysis.metrics.graph_summary.diameter,
-                "diameter_scope": analysis.metrics.graph_summary.diameter_scope,
-            },
+            "graph_summary": super::analysis_payloads::metric_graph_summary_json(&analysis.metrics.graph_summary),
+            "metric_distributions": super::analysis_payloads::metric_distributions_json(
+                &analysis.metrics.distributions,
+                20,
+            ),
             "node_metric_count": analysis.metrics.node_metrics.len(),
             "file_metric_count": analysis.metrics.file_metrics.len(),
             "module_metric_count": analysis.metrics.module_metrics.len(),
@@ -122,14 +138,14 @@ pub(super) fn tool_analyze_metrics(
     if let Some(object) = full_payload.as_object_mut() {
         object.insert(
             "graph_summary".to_owned(),
-            json!({
-                "node_count": analysis.metrics.graph_summary.node_count,
-                "edge_count": analysis.metrics.graph_summary.edge_count,
-                "density": analysis.metrics.graph_summary.density,
-                "average_degree": analysis.metrics.graph_summary.average_degree,
-                "diameter": analysis.metrics.graph_summary.diameter,
-                "diameter_scope": analysis.metrics.graph_summary.diameter_scope,
-            }),
+            super::analysis_payloads::metric_graph_summary_json(&analysis.metrics.graph_summary),
+        );
+        object.insert(
+            "metric_distributions".to_owned(),
+            json!(super::analysis_payloads::metric_distributions_json(
+                &analysis.metrics.distributions,
+                analysis.metrics.distributions.len(),
+            )),
         );
     }
     insight_report_response(
@@ -212,16 +228,16 @@ pub(super) fn tool_analyze_patterns(
         atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root)).unwrap_or_default();
     let engine = InsightsEngine::new(&store, config.insights.clone())
         .context("cannot initialize insights engine")?;
-    let mut report = engine
-        .analyze_patterns(repo_root)
-        .context("pattern analysis failed")?;
-    // Repeated-chain findings carry one occurrence payload per match; collapse
-    // them before paging so even verbose callers get a bounded report.
-    collapse_repeated_chain_details(&mut report.findings);
     let offset = u64_arg(args, "offset").unwrap_or(0) as usize;
     let limit = u64_arg(args, "max_findings")
         .or_else(|| u64_arg(args, "limit"))
         .map(|value| value as usize);
+    let mut report = engine
+        .analyze_patterns_with_limit(repo_root, limit)
+        .context("pattern analysis failed")?;
+    // Repeated-chain findings carry one occurrence payload per match; collapse
+    // them before paging so even verbose callers get a bounded report.
+    collapse_repeated_chain_details(&mut report.findings);
     let (total_available, offset) =
         paginate_findings(&mut report.findings, &mut report.summary, offset, limit);
 
@@ -848,7 +864,8 @@ pub(super) fn tool_analyze_dead_code(
             "summary": {
                 "status": "ok",
                 "candidate_count": total_available,
-                "blocker_count": total_blocker_count,
+                "blocker_count": 0,
+                "total_blocker_count": total_blocker_count,
                 "certainty_counts": certainty_counts,
             },
             "truncated": total_available > limit,
@@ -900,6 +917,9 @@ pub(super) fn tool_analyze_dead_code(
             })
         })
         .collect();
+    // The summary count must describe the emitted blocker array, not the full
+    // candidate set (which also feeds `total_blocker_count`).
+    let emitted_blocker_count = blockers.len();
 
     let payload = serde_json::json!({
         "tool": "analyze_dead_code",
@@ -915,7 +935,8 @@ pub(super) fn tool_analyze_dead_code(
         "summary": {
             "status": "ok",
             "candidate_count": total_available,
-            "blocker_count": total_blocker_count,
+            "blocker_count": emitted_blocker_count,
+            "total_blocker_count": total_blocker_count,
             "omitted_count": omitted,
             "certainty_counts": certainty_counts,
         },

@@ -125,6 +125,13 @@ pub(super) fn labels_for_file(file_path: &str) -> Vec<ComponentLabelMatch> {
     let mut labels = Vec::new();
     add_component_label(
         &mut labels,
+        file_path.starts_with("packages/atlas-core/"),
+        "core",
+        1.0,
+        "file path under packages/atlas-core",
+    );
+    add_component_label(
+        &mut labels,
         file_path.starts_with("packages/atlas-cli/"),
         "cli",
         1.0,

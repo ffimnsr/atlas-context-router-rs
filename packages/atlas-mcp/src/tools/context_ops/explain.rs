@@ -1,4 +1,5 @@
 use super::*;
+use crate::tools::analysis_bounds::enforce_payload_ceiling;
 
 pub(crate) fn tool_explain_change(
     args: Option<&serde_json::Value>,
@@ -116,11 +117,43 @@ pub(crate) fn tool_explain_change(
     payload.remove("impacted_node_count");
     payload.remove("summary_text");
 
+    // Bound the explain payload like the review/context tools do. Without this
+    // the response can exceed the MCP byte cap while `max_nodes` only bounds the
+    // underlying traversal. The explain payload is a report shape (changed
+    // symbols, chains, components) rather than the context node/edge arrays, so
+    // use the generic array-ceiling trimmer instead of the context trimmer.
+    let mut payload_value = Value::Object(payload);
+    let response_budget_limit = policy
+        .mcp_cli_payload_serialization
+        .mcp_response_bytes
+        .default_limit
+        .saturating_sub(400);
+    payload_value = enforce_payload_ceiling(payload_value, response_budget_limit)?;
+    let response_truncated = payload_value
+        .get("truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    // The generic ceiling trimmer reports through top-level keys that are not
+    // part of the explain_change contract; the normalized response carries its
+    // own `truncated` flag.
+    if let Some(object) = payload_value.as_object_mut() {
+        object.remove("truncated");
+        object.remove("budget_hit");
+        object.remove("dropped_item_count");
+        object.remove("payload_bytes");
+        object.remove("payload_byte_limit");
+    }
+    let stage_budget = summary.budget.clone();
+    let mut payload = as_object_map(payload_value);
+
     insert_change_source_payload(&mut payload, &resolved);
     let dropped_items = summary.noise_reduction.dropped_nodes
         + summary.noise_reduction.dropped_edges
         + summary.noise_reduction.dropped_files;
-    let truncated = summary.budget.budget_hit || summary.budget.partial || dropped_items > 0;
+    let truncated = summary.budget.budget_hit
+        || summary.budget.partial
+        || dropped_items > 0
+        || response_truncated;
     let mut response = build_normalized_success_response(
         "explain_change",
         Value::Object(payload),
@@ -130,5 +163,6 @@ pub(crate) fn tool_explain_change(
         truncated.then_some("explain change capped by node, edge, or payload budget"),
     )?;
     inject_deprecated_input_fields(&mut response, &deprecated_change_source_fields);
+    inject_budget_metadata(&mut response, &stage_budget);
     Ok(response)
 }

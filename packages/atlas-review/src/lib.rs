@@ -11,7 +11,8 @@ pub mod query_parser;
 mod ranking;
 
 pub use context::{
-    ContextEngine, ResolvedTarget, build_context, normalize_qn_kind_tokens, resolve_target,
+    ContextEngine, ContextScope, ResolvedTarget, build_context, normalize_qn_kind_tokens,
+    resolve_target,
 };
 pub use decision_query::decision_lookup_query;
 pub use docs_section::{

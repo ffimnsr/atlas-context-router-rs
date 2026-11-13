@@ -635,6 +635,48 @@ fn label_components_assigns_cli_and_review_labels() {
 }
 
 #[test]
+fn label_components_keeps_core_label_alongside_diagnostics() {
+    let repo_root = make_repo_root();
+    let file = "packages/atlas-core/src/health.rs";
+    let qn = "packages/atlas-core/src/health.rs::fn::select_graph_health_error_code";
+    write_repo_file(&repo_root, file, "fn select_graph_health_error_code() {}\n");
+
+    let health = node(
+        0,
+        "select_graph_health_error_code",
+        qn,
+        file,
+        NodeKind::Function,
+    );
+    let mut store = make_store();
+    seed_graph(&mut store, vec![health], vec![]);
+    let engine = insights_engine(&store);
+    let analysis = engine
+        .label_components(
+            &repo_root,
+            ComponentLabelRequest {
+                files: None,
+                symbols: Some(vec![qn.to_owned()]),
+                limit: Some(10),
+            },
+        )
+        .expect("component labeling");
+
+    let assignment = analysis
+        .assignments
+        .iter()
+        .find(|assignment| assignment.qualified_name.as_deref() == Some(qn))
+        .expect("symbol assignment");
+    let labels = assignment
+        .labels
+        .iter()
+        .map(|label| label.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(labels.contains(&"core"), "labels: {labels:?}");
+    assert!(labels.contains(&"diagnostics"), "labels: {labels:?}");
+}
+
+#[test]
 fn label_components_symbols_filter_skips_repo_file_rows() {
     let repo_root = make_repo_root();
     write_repo_file(

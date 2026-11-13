@@ -15,7 +15,8 @@ use crate::output::OutputFormat;
 use crate::tool_result::normalized_tool_result_value;
 
 use super::shared::{
-    inject_budget_metadata, load_budget_policy, open_store, resolve_kind_alias, str_arg, u64_arg,
+    bool_arg, inject_budget_metadata, load_budget_policy, open_store, resolve_kind_alias, str_arg,
+    u64_arg,
 };
 
 /// Default page size when `limit` is omitted.
@@ -81,6 +82,7 @@ fn list_symbols_payload(
     language: Option<&str>,
     subpath: Option<&str>,
     repo_id: Option<&str>,
+    include_synthetic: bool,
     truncated: bool,
 ) -> serde_json::Value {
     let returned = symbols.len();
@@ -108,6 +110,7 @@ fn list_symbols_payload(
             "language": language,
             "subpath": subpath,
             "repo_id": repo_id,
+            "include_synthetic": include_synthetic,
         },
         "truncated": truncated,
         "warnings": [],
@@ -159,6 +162,9 @@ pub(super) fn tool_list_symbols(
     let requested_limit = u64_arg(args, "limit").unwrap_or(DEFAULT_LIST_LIMIT as u64) as usize;
     let limit = requested_limit.clamp(1, MAX_LIST_LIMIT);
     let offset = u64_arg(args, "offset").unwrap_or(0) as usize;
+    // Synthetic owner/workspace metadata rows live under `.atlas/synthetic/`
+    // and are hidden by default. Opt in to make package owners listable.
+    let include_synthetic = bool_arg(args, "include_synthetic").unwrap_or(false);
 
     let store = open_store(db_path)?;
     let filter = NodeListFilter {
@@ -168,7 +174,7 @@ pub(super) fn tool_list_symbols(
         repo_id: repo_id.as_deref(),
         exact_dir: exact_dir.as_deref(),
         exclude_subpaths: &exclude_subpaths,
-        include_synthetic: false,
+        include_synthetic,
     };
     let page = store
         .list_nodes(&filter, limit, offset)
@@ -194,6 +200,7 @@ pub(super) fn tool_list_symbols(
             language.as_deref(),
             subpath.as_deref(),
             repo_id.as_deref(),
+            include_synthetic,
             truncated,
         );
         let rendered = serde_json::to_vec(&candidate)?.len();

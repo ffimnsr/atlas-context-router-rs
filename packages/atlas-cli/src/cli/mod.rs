@@ -296,6 +296,10 @@ pub enum Command {
         #[arg(long)]
         repo_id: Option<String>,
 
+        /// Include synthetic owner/workspace metadata nodes under `.atlas/synthetic/`.
+        #[arg(long)]
+        include_synthetic: bool,
+
         /// Maximum symbols per page.
         #[arg(long, default_value_t = 100)]
         limit: usize,

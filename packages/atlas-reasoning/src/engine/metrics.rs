@@ -109,6 +109,14 @@ pub struct MetricGraphSummary {
     pub average_degree: f64,
     pub diameter: usize,
     pub diameter_scope: String,
+    /// Scope qualifier for `node_count`/`edge_count`.
+    ///
+    /// Metrics apply the `insights.ignore_files` / `ignore_modules` /
+    /// `ignore_node_kinds` filters, so these counts are post-filter. Raw graph
+    /// counts are reported separately to keep the two scopes explicit.
+    pub scope: String,
+    pub raw_node_count: usize,
+    pub raw_edge_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -193,7 +201,13 @@ impl<'s> InsightsEngine<'s> {
             &module_metrics,
             &distributions,
         );
-        let graph_summary = build_metric_graph_summary(&snapshot, &node_metrics);
+        let graph_stats = store.stats()?;
+        let graph_summary = build_metric_graph_summary(
+            &snapshot,
+            &node_metrics,
+            graph_stats.node_count.max(0) as usize,
+            graph_stats.edge_count.max(0) as usize,
+        );
 
         Ok(MetricsAnalysis {
             metrics: CodeHealthMetrics {
@@ -877,8 +891,26 @@ fn build_metric_findings(
         });
     }
 
+    // Distribution outliers can duplicate a node-metric finding for the same
+    // subject and metric (for example high fan-in). Emit the node-metric row
+    // once and skip the duplicate so small pages are not wasted on repeats.
+    let node_metric_keys: HashSet<(String, String)> = findings
+        .iter()
+        .filter(|finding| finding.category == "node_metrics")
+        .filter_map(|finding| {
+            let rest = finding.id.strip_prefix("metrics:")?;
+            let (metric_name, qualified_name) = rest.split_once(':')?;
+            Some((metric_name.to_owned(), qualified_name.to_owned()))
+        })
+        .collect();
+
     for distribution in distributions {
         for outlier in &distribution.outliers {
+            if node_metric_keys
+                .contains(&(distribution.metric_name.clone(), outlier.subject_id.clone()))
+            {
+                continue;
+            }
             findings.push(InsightFinding {
                 id: format!(
                     "metrics:distribution:{}:{}",
@@ -1413,6 +1445,8 @@ fn percentile(sorted_values: &[f64], percentile: f64) -> f64 {
 fn build_metric_graph_summary(
     snapshot: &GraphSnapshot,
     node_metrics: &[NodeMetric],
+    raw_node_count: usize,
+    raw_edge_count: usize,
 ) -> MetricGraphSummary {
     let node_count = snapshot.nodes.len();
     let edge_count = snapshot.edges.len();
@@ -1454,6 +1488,9 @@ fn build_metric_graph_summary(
         average_degree,
         diameter: module_graph_diameter(&adjacency),
         diameter_scope: "module_graph".to_owned(),
+        scope: "post_filter".to_owned(),
+        raw_node_count,
+        raw_edge_count,
     }
 }
 

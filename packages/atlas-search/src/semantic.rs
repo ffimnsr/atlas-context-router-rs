@@ -365,12 +365,6 @@ pub fn cluster_by_shared_symbols(
 
     // Map: file_path → set of shared symbol qnames.
     let mut file_to_symbols: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
-    // Map: (seed_a, seed_b) → shared symbols; keeps seed↔seed coupling visible
-    // instead of dropping the other seed from the result set.
-    let mut seed_pair_symbols: std::collections::BTreeMap<
-        (String, String),
-        std::collections::HashSet<String>,
-    > = std::collections::BTreeMap::new();
     let mut total_targets_per_seed: HashMap<&str, usize> = HashMap::new();
 
     for &seed in seed_files {
@@ -385,16 +379,13 @@ pub fn cluster_by_shared_symbols(
             if co_file == seed {
                 continue;
             }
+            // Seeds are the query, not cluster members. Returning a "cluster"
+            // whose members are exactly the seed files is a pseudo-cluster and
+            // hides the real related-file groups.
             if seed_files.contains(&co_file.as_str()) {
-                let key = if seed < co_file.as_str() {
-                    (seed.to_owned(), co_file)
-                } else {
-                    (co_file, seed.to_owned())
-                };
-                seed_pair_symbols.entry(key).or_default().insert(sym);
-            } else {
-                file_to_symbols.entry(co_file).or_default().insert(sym);
+                continue;
             }
+            file_to_symbols.entry(co_file).or_default().insert(sym);
         }
     }
 
@@ -416,22 +407,7 @@ pub fn cluster_by_shared_symbols(
         })
         .collect();
 
-    // Seed↔seed coupling: emit one merged concept per seed pair so multi-seed
-    // queries surface cross-seed relationships instead of hiding them.
-    for ((left, right), symbol_set) in seed_pair_symbols {
-        if symbol_set.is_empty() {
-            continue;
-        }
-        let shared_count = symbol_set.len();
-        let mut shared_symbols: Vec<String> = symbol_set.into_iter().collect();
-        shared_symbols.sort();
-        let density = shared_count as f64 / total_targets as f64;
-        concepts.push(FileConcept {
-            files: vec![left, right],
-            shared_symbols,
-            density,
-        });
-    }
+    // Seed↔seed coupling is not a cluster: seeds are the query inputs.
 
     // Sort by density × shared count then truncate.
     concepts.sort_by(|a, b| {
@@ -757,6 +733,53 @@ mod tests {
         let store = Store::open(db.to_str().unwrap()).unwrap();
         let concepts = cluster_by_shared_symbols(&store, &[], 10).unwrap();
         assert!(concepts.is_empty());
+    }
+
+    #[test]
+    fn cluster_by_shared_symbols_never_returns_seed_only_clusters() {
+        let mut store = Store::open(":memory:").unwrap();
+        store.migrate().unwrap();
+        let target = "src/lib.rs::fn::shared";
+        store
+            .replace_file_graph_for_repo(
+                TEST_REPO_ID,
+                "src/lib.rs",
+                "hash-lib",
+                Some("rust"),
+                None,
+                &[test_node("src/lib.rs", target)],
+                &[],
+            )
+            .unwrap();
+        for file in ["src/a.rs", "src/b.rs", "src/c.rs"] {
+            let qn = format!("{file}::fn::caller");
+            store
+                .replace_file_graph_for_repo(
+                    TEST_REPO_ID,
+                    file,
+                    "hash",
+                    Some("rust"),
+                    None,
+                    &[test_node(file, &qn)],
+                    &[test_edge(file, &qn, target, "verified", "direct")],
+                )
+                .unwrap();
+        }
+
+        let concepts = cluster_by_shared_symbols(&store, &["src/a.rs", "src/b.rs"], 10).unwrap();
+        assert!(
+            concepts.iter().all(|cluster| cluster
+                .files
+                .iter()
+                .all(|file| file != "src/a.rs" && file != "src/b.rs")),
+            "seed files must not appear as cluster members: {concepts:?}"
+        );
+        assert!(
+            concepts
+                .iter()
+                .any(|cluster| cluster.files == vec!["src/c.rs".to_owned()]),
+            "non-seed related file must still be returned"
+        );
     }
 
     #[test]

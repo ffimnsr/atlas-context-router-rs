@@ -158,6 +158,67 @@ fn pattern_report_keeps_category_diversity_before_trimming() {
 }
 
 #[test]
+fn pattern_report_limit_drives_category_fair_share() {
+    let summary = InsightsGraphSummary {
+        graph_stats: GraphStats {
+            file_count: 1,
+            node_count: 1,
+            edge_count: 0,
+            nodes_by_kind: vec![],
+            languages: vec!["rust".to_owned()],
+            last_indexed_at: None,
+        },
+        atlas_provenance: ProvenanceMeta {
+            indexed_file_count: 1,
+            last_indexed_at: None,
+        },
+        atlas_freshness: None,
+    };
+    let config = atlas_engine::config::InsightsConfig {
+        max_findings: 50,
+        ..Default::default()
+    };
+    let engine = InsightsEngine::from_summary(summary, config);
+
+    let mut findings = Vec::new();
+    for index in 0..5 {
+        let mut repeated = sample_insight(
+            &format!("chain-{index}"),
+            "src/a.rs",
+            "crate::a",
+            InsightSeverity::High,
+        );
+        repeated.category = "pattern_repeated_chain".to_owned();
+        repeated.score = 900.0 - index as f64;
+        findings.push(repeated);
+    }
+    for index in 0..5 {
+        let mut centrality = sample_insight(
+            &format!("hub-{index}"),
+            "src/b.rs",
+            "crate::b",
+            InsightSeverity::Medium,
+        );
+        centrality.category = "pattern_centrality".to_owned();
+        centrality.score = 5.0 - index as f64 * 0.1;
+        findings.push(centrality);
+    }
+
+    let report = engine.pattern_report_with_limit(findings, Some(4));
+    let first_page = report.findings.iter().take(4).collect::<Vec<_>>();
+    assert!(
+        first_page
+            .iter()
+            .any(|finding| finding.category == "pattern_centrality"),
+        "small pages must keep category diversity: {:?}",
+        first_page
+            .iter()
+            .map(|finding| finding.category.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn ignore_files_glob_matches_markdown_and_json_across_directories() {
     use super::super::insights::{build_ignore_files_glob, path_matches_ignore_list};
 

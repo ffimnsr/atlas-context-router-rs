@@ -680,6 +680,14 @@ impl Store {
             .map(|n| n.qualified_name.clone())
             .collect();
         let mut changed_nodes = changed_nodes;
+        // Deterministic order before any budget split so a truncated seed set is
+        // reproducible across runs.
+        changed_nodes.sort_by(|left, right| {
+            left.file_path
+                .cmp(&right.file_path)
+                .then_with(|| left.line_start.cmp(&right.line_start))
+                .then_with(|| left.qualified_name.cmp(&right.qualified_name))
+        });
         // `max_nodes` is a total traversal budget. When a single seed file
         // contributes more symbols than the budget, split the budget between
         // the changed set and its impact instead of letting the seeds consume
@@ -694,7 +702,11 @@ impl Store {
         } else {
             max_nodes.saturating_sub(changed_node_total)
         };
-        changed_nodes.truncate(seed_budget);
+        // Fair-share the seed budget across changed files. A docs file can carry
+        // dozens of heading nodes; a naive row-order truncation would spend the
+        // whole budget on it and report zero changed symbols for code files in
+        // the same delta.
+        changed_nodes = fair_share_nodes_by_file(changed_nodes, seed_budget);
 
         // Recursive CTE: bidirectional traversal, UNION deduplicates.
         //
@@ -866,4 +878,49 @@ impl Store {
         Self::sort_impact_result(&mut result);
         Ok(result)
     }
+}
+
+/// Round-robin select up to `budget` nodes across the distinct files in
+/// `nodes`, preserving each file's own order.
+///
+/// Seed fairness matters for review/impact context: one changed file with many
+/// symbols (for example a markdown file with dozens of heading nodes) must not
+/// consume the entire changed-symbol budget and hide the code files in the
+/// same delta.
+fn fair_share_nodes_by_file(nodes: Vec<Node>, budget: usize) -> Vec<Node> {
+    if nodes.len() <= budget {
+        return nodes;
+    }
+    let mut groups: Vec<Vec<Node>> = Vec::new();
+    let mut group_index: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for node in nodes {
+        match group_index.get(&node.file_path) {
+            Some(index) => groups[*index].push(node),
+            None => {
+                group_index.insert(node.file_path.clone(), groups.len());
+                groups.push(vec![node]);
+            }
+        }
+    }
+
+    let mut selected = Vec::with_capacity(budget);
+    let mut depth = 0;
+    while selected.len() < budget {
+        let mut progressed = false;
+        for group in &groups {
+            if let Some(node) = group.get(depth) {
+                selected.push(node.clone());
+                progressed = true;
+                if selected.len() == budget {
+                    break;
+                }
+            }
+        }
+        if !progressed {
+            break;
+        }
+        depth += 1;
+    }
+    selected
 }

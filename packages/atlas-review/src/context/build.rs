@@ -82,7 +82,21 @@ pub(super) fn build_review_context(
     request: &ContextRequest,
     policy: &BudgetPolicy,
 ) -> Result<ContextResult> {
-    let changed_paths = extract_changed_paths(request);
+    let all_changed_paths = extract_changed_paths(request);
+    // Directory scope must prune the changed-file seed set, not only the
+    // already-selected evidence. Otherwise an out-of-scope file still seeds
+    // traversal and appears in `changed_files`.
+    let scope = super::scope::ContextScope::from_request(request)?;
+    let changed_paths: Vec<String> = if scope.is_active() {
+        all_changed_paths
+            .iter()
+            .filter(|path| scope.contains(path))
+            .cloned()
+            .collect()
+    } else {
+        all_changed_paths.clone()
+    };
+    let scope_filtered_count = all_changed_paths.len().saturating_sub(changed_paths.len());
     let accepted_paths: Vec<String> = changed_paths
         .iter()
         .take(policy.graph_traversal.seed_files.default_limit)
@@ -195,14 +209,21 @@ pub(super) fn build_review_context(
         truncation: TruncationMeta::none(),
         seed_budgets: vec![SeedBudgetMeta::new(
             "changed_files",
-            changed_paths.len(),
+            all_changed_paths.len(),
             accepted_paths.len(),
             true,
-            (changed_paths.len() > accepted_paths.len()).then(|| {
-                format!(
-                    "narrow changed file list to {} file(s) or query one package/path",
-                    accepted_paths.len()
-                )
+            (all_changed_paths.len() > accepted_paths.len()).then(|| {
+                if scope_filtered_count > 0 {
+                    format!(
+                        "{} changed file(s) outside the active directory scope were excluded",
+                        scope_filtered_count
+                    )
+                } else {
+                    format!(
+                        "narrow changed file list to {} file(s) or query one package/path",
+                        accepted_paths.len()
+                    )
+                }
             }),
         )],
         traversal_budget: impact.traversal_budget.clone(),

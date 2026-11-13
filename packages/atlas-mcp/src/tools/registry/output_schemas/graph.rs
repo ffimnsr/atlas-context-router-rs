@@ -54,9 +54,10 @@ pub(crate) fn list_symbols_output_schema() -> Value {
                     "kind": { "type": ["string", "null"] },
                     "language": { "type": ["string", "null"] },
                     "subpath": { "type": ["string", "null"] },
-                    "repo_id": { "type": ["string", "null"] }
+                    "repo_id": { "type": ["string", "null"] },
+                    "include_synthetic": { "type": "boolean" }
                 },
-                "required": ["kind", "language", "subpath", "repo_id"]
+                "required": ["kind", "language", "subpath", "repo_id", "include_synthetic"]
             },
             "truncated": { "type": "boolean" },
             "warnings": { "type": "array", "items": { "type": "string" } }

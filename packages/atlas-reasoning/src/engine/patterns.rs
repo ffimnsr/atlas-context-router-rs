@@ -18,6 +18,16 @@ impl<'s> InsightsEngine<'s> {
         &self,
         repo_root: impl AsRef<std::path::Path>,
     ) -> Result<PatternReport> {
+        self.analyze_patterns_with_limit(repo_root, None)
+    }
+
+    /// Analyze patterns with an explicit caller page size so category diversity
+    /// is computed against the page the caller will see.
+    pub fn analyze_patterns_with_limit(
+        &self,
+        repo_root: impl AsRef<std::path::Path>,
+        limit: Option<usize>,
+    ) -> Result<PatternReport> {
         let store = self.store().ok_or_else(|| {
             AtlasError::Other("pattern analysis requires a store-backed insights engine".to_owned())
         })?;
@@ -31,7 +41,7 @@ impl<'s> InsightsEngine<'s> {
         findings.extend(build_centrality_findings(self, &node_metrics));
         findings.extend(build_deep_chain_findings(self, &snapshot));
 
-        Ok(self.pattern_report(findings))
+        Ok(self.pattern_report_with_limit(findings, limit))
     }
 }
 

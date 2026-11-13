@@ -969,7 +969,7 @@ pub(crate) fn tool_cross_file_links(
         .into_iter()
         .enumerate()
         .map(|(idx, l)| {
-            let coupling_metric = (l.strength * 10.0).round() / 10.0;
+            let coupling_metric = super::analysis_payloads::round_one_decimal(l.strength);
             json!({
                 "file": l.to_file,
                 "via_symbols": l.via_symbols,
@@ -994,8 +994,8 @@ pub(crate) fn tool_cross_file_links(
         "linked_files": linked_files,
         "coupling_metric": {
             "linked_file_count": linked_files.len(),
-            "max_strength": max_strength,
-            "total_strength": ((total_strength * 10.0).round() / 10.0),
+            "max_strength": super::analysis_payloads::round_metric(max_strength * 10.0),
+            "total_strength": super::analysis_payloads::round_metric(total_strength * 10.0),
         },
         "summary": {
             "status": "ok",

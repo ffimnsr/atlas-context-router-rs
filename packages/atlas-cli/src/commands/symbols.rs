@@ -24,6 +24,7 @@ pub fn run_symbols(cli: &Cli) -> Result<()> {
         exact_dir,
         exclude_subpaths,
         repo_id,
+        include_synthetic,
         limit,
         offset,
         allow_stale,
@@ -38,6 +39,7 @@ pub fn run_symbols(cli: &Cli) -> Result<()> {
             exact_dir,
             exclude_subpaths,
             repo_id,
+            include_synthetic,
             limit,
             offset,
             allow_stale,
@@ -51,6 +53,7 @@ pub fn run_symbols(cli: &Cli) -> Result<()> {
             exact_dir.clone(),
             exclude_subpaths.clone(),
             repo_id.clone(),
+            *include_synthetic,
             *limit,
             *offset,
             *allow_stale,
@@ -131,7 +134,7 @@ pub fn run_symbols(cli: &Cli) -> Result<()> {
         repo_id: repo_id.as_deref(),
         exact_dir: exact_dir.as_deref(),
         exclude_subpaths: &exclude_subpaths,
-        include_synthetic: false,
+        include_synthetic,
     };
     let page = store
         .list_nodes(&filter, limit, offset)
@@ -148,6 +151,7 @@ pub fn run_symbols(cli: &Cli) -> Result<()> {
                     "exact_dir": exact_dir,
                     "exclude_subpaths": exclude_subpaths,
                     "repo_id": repo_id,
+                    "include_synthetic": include_synthetic,
                 },
                 "symbols": page
                     .nodes

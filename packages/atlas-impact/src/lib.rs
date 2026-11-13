@@ -294,9 +294,11 @@ fn compute_test_impact(base: &ImpactResult) -> TestImpactResult {
     let mut uncovered_changed_nodes: Vec<Node> = base
         .changed_nodes
         .iter()
-        .filter(|n| {
-            !n.is_test && n.kind != NodeKind::Test && !tested_qns.contains(&n.qualified_name)
-        })
+        // Only callable/type symbols can carry test coverage. Container nodes
+        // (file, package, module/heading, import) would otherwise report every
+        // docs-only delta as an uncovered code change and escalate risk.
+        .filter(|n| is_testable_change_kind(n.kind))
+        .filter(|n| !n.is_test && !tested_qns.contains(&n.qualified_name))
         .cloned()
         .collect();
     uncovered_changed_nodes.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
@@ -305,6 +307,20 @@ fn compute_test_impact(base: &ImpactResult) -> TestImpactResult {
         affected_tests,
         uncovered_changed_nodes,
     }
+}
+
+/// Node kinds whose changes can be covered by tests.
+fn is_testable_change_kind(kind: NodeKind) -> bool {
+    matches!(
+        kind,
+        NodeKind::Class
+            | NodeKind::Interface
+            | NodeKind::Struct
+            | NodeKind::Enum
+            | NodeKind::Function
+            | NodeKind::Method
+            | NodeKind::Trait
+    )
 }
 
 fn test_adjacent_qns(base: &ImpactResult, test_impact: &TestImpactResult) -> HashSet<String> {
@@ -667,6 +683,26 @@ mod tests {
             .iter()
             .any(|n| n.qualified_name == "a.rs::fn::foo");
         assert!(found);
+    }
+
+    #[test]
+    fn docs_only_change_reports_no_uncovered_symbols() {
+        // Markdown headings are `module` nodes. They cannot be test-covered, so
+        // a docs-only delta must not produce coverage gaps or medium risk.
+        let heading = make_node(
+            NodeKind::Module,
+            "docs.md::heading::document.intro",
+            "docs.md",
+            false,
+        );
+        let base = base_result(vec![heading], vec![], vec![]);
+        let result = analyze(base);
+
+        assert!(
+            result.test_impact.uncovered_changed_nodes.is_empty(),
+            "container nodes must not count as untested code symbols"
+        );
+        assert_eq!(result.risk_level, RiskLevel::Low);
     }
 
     #[test]

@@ -71,6 +71,62 @@ fn list_symbols_accepts_kind_aliases_and_filters() {
 }
 
 #[test]
+fn list_symbols_include_synthetic_opt_in() {
+    let fixture = setup_mcp_fixture();
+    let repo_id = atlas_repo::stable_repo_id(Utf8Path::new(&fixture.repo_root));
+    let mut store = Store::open(&fixture.db_path).expect("open store");
+    let package = Node {
+        kind: NodeKind::Package,
+        name: "cargo:packages/atlas-core/Cargo.toml".to_owned(),
+        qualified_name: "package::cargo:packages/atlas-core/Cargo.toml".to_owned(),
+        file_path: ".atlas/synthetic/packages/atlas-core/Cargo.toml".to_owned(),
+        ..make_node(
+            NodeKind::Package,
+            "cargo:packages/atlas-core/Cargo.toml",
+            "package::cargo:packages/atlas-core/Cargo.toml",
+            ".atlas/synthetic/packages/atlas-core/Cargo.toml",
+        )
+    };
+    store
+        .replace_file_graph_for_repo(
+            &repo_id,
+            ".atlas/synthetic/packages/atlas-core/Cargo.toml",
+            "hash:synthetic",
+            Some("toml"),
+            None,
+            &[package],
+            &[],
+        )
+        .expect("insert synthetic owner");
+
+    let hidden = list_symbols(&fixture, serde_json::json!({}));
+    let hidden_symbols = hidden["structuredContent"]["symbols"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        hidden_symbols
+            .iter()
+            .all(|symbol| symbol["file"] != ".atlas/synthetic/packages/atlas-core/Cargo.toml")
+    );
+
+    let shown = list_symbols(&fixture, serde_json::json!({"include_synthetic": true}));
+    assert_eq!(
+        shown["structuredContent"]["filters"]["include_synthetic"],
+        true
+    );
+    assert!(
+        shown["structuredContent"]["symbols"]
+            .as_array()
+            .is_some_and(|symbols| symbols.iter().any(|symbol| {
+                symbol["file"] == ".atlas/synthetic/packages/atlas-core/Cargo.toml"
+            })),
+        "synthetic owner must be listed when opted in: {}",
+        shown["structuredContent"]
+    );
+}
+
+#[test]
 fn list_symbols_clamps_page_size_and_reports_budget() {
     let fixture = setup_mcp_fixture();
 

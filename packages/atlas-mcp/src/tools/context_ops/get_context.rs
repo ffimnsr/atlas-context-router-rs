@@ -251,10 +251,7 @@ pub(crate) fn tool_get_context(
             (query, hits)
         })
         .filter(|(_, hits)| !hits.is_empty());
-    if let Some((query, hits)) = linked_decisions.as_ref() {
-        packaged_value["linked_decisions"] = decision_hits_json(hits);
-        packaged_value["decision_lookup_query"] = serde_json::Value::String(query.clone());
-    }
+    let mut linked_decisions_omitted = 0usize;
     let context_files: Vec<String> = match &request.target {
         ContextTarget::ChangedFiles { paths } => paths.clone(),
         ContextTarget::FilePath { path } => vec![path.clone()],
@@ -291,6 +288,34 @@ pub(crate) fn tool_get_context(
     } else {
         result.budget.clone()
     };
+    // Linked decisions are supporting evidence, not graph context. Attach them
+    // only after the response budget is enforced so they can never evict graph
+    // callers, and drop the tail that no longer fits.
+    if let Some((query, hits)) = linked_decisions.as_ref() {
+        let decisions = decision_hits_json(hits)
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let mut accepted: Vec<Value> = Vec::new();
+        for decision in decisions {
+            accepted.push(decision);
+            packaged_value["linked_decisions"] = Value::Array(accepted.clone());
+            packaged_value["decision_lookup_query"] = Value::String(query.clone());
+            if serde_json::to_vec(&packaged_value)?.len() > response_budget_limit {
+                accepted.pop();
+                linked_decisions_omitted += 1;
+                break;
+            }
+        }
+        if accepted.is_empty() {
+            if let Some(object) = packaged_value.as_object_mut() {
+                object.remove("linked_decisions");
+                object.remove("decision_lookup_query");
+            }
+        } else {
+            packaged_value["linked_decisions"] = Value::Array(accepted);
+        }
+    }
     let mode = match &request.target {
         ContextTarget::ChangedFiles { .. } => "change_context",
         ContextTarget::FilePath { .. } => "file_context",
@@ -510,6 +535,11 @@ pub(crate) fn tool_get_context(
     };
     if let Some(warning) = content_warning {
         warnings.push(warning);
+    }
+    if linked_decisions_omitted > 0 {
+        warnings.push(format!(
+            "{linked_decisions_omitted} linked decision(s) omitted to keep graph context within the response budget"
+        ));
     }
 
     let mut response = build_normalized_success_response(

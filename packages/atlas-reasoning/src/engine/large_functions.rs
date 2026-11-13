@@ -448,48 +448,43 @@ fn candidate_to_finding(
 }
 
 fn governing_threshold(candidate: &LargeFunctionCandidate) -> (usize, &'static str) {
-    let loc_excess = candidate.loc.saturating_sub(candidate.threshold);
-    let cyclomatic_excess = candidate
-        .cyclomatic_complexity
-        .zip(candidate.complexity_threshold)
-        .map(|(value, threshold)| value.saturating_sub(threshold))
-        .unwrap_or(0);
-    let cognitive_excess = candidate
-        .cognitive_complexity
-        .zip(candidate.cognitive_threshold)
-        .map(|(value, threshold)| value.saturating_sub(threshold))
-        .unwrap_or(0);
-    let nesting_excess = candidate
-        .max_nesting_depth
-        .zip(candidate.nesting_threshold)
-        .map(|(value, threshold)| value.saturating_sub(threshold))
-        .unwrap_or(0);
-
-    let mut governing = (candidate.threshold, "loc");
-    let mut best = loc_excess;
-    for (excess, threshold, kind) in [
+    // Only metrics that actually met their threshold can govern. Within that
+    // set, the largest excess wins; ties keep the first (loc, then cyclomatic,
+    // cognitive, nesting). A `mode=complex` hit whose LOC stays below the LOC
+    // threshold therefore reports the complexity metric instead of `loc`.
+    let mut governing: Option<(usize, usize, &'static str)> = None;
+    for (value, threshold, kind) in [
+        (Some(candidate.loc), candidate.threshold, "loc"),
         (
-            cyclomatic_excess,
+            candidate.cyclomatic_complexity,
             candidate.complexity_threshold.unwrap_or_default(),
             "cyclomatic_complexity",
         ),
         (
-            cognitive_excess,
+            candidate.cognitive_complexity,
             candidate.cognitive_threshold.unwrap_or_default(),
             "cognitive_complexity",
         ),
         (
-            nesting_excess,
+            candidate.max_nesting_depth,
             candidate.nesting_threshold.unwrap_or_default(),
             "nesting_depth",
         ),
     ] {
-        if excess > best {
-            best = excess;
-            governing = (threshold, kind);
+        let Some(value) = value else {
+            continue;
+        };
+        if value < threshold {
+            continue;
+        }
+        let excess = value - threshold;
+        if governing.is_none_or(|(best, _, _)| excess > best) {
+            governing = Some((excess, threshold, kind));
         }
     }
     governing
+        .map(|(_, threshold, kind)| (threshold, kind))
+        .unwrap_or((candidate.threshold, "loc"))
 }
 
 fn ranking_reason(input: RankingReasonInput) -> String {

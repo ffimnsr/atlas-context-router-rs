@@ -38,8 +38,8 @@ pub use large_functions::{
     LargeFunctionRequest,
 };
 pub use metrics::{
-    CodeHealthMetrics, FileMetric, MetricDistribution, MetricOutlier, MetricValue, MetricsAnalysis,
-    ModuleMetric, NodeMetric,
+    CodeHealthMetrics, FileMetric, MetricDistribution, MetricGraphSummary, MetricOutlier,
+    MetricValue, MetricsAnalysis, ModuleMetric, NodeMetric,
 };
 pub use risk::{
     RiskAssessmentAnalysis, RiskAssessmentTarget, RiskClassification, RiskFactorContribution,

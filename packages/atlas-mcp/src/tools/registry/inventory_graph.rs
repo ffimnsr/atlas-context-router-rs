@@ -207,6 +207,9 @@ pub(super) fn tools() -> Vec<Value> {
                         "language": { "type": "string",  "description": "Filter by language (e.g. 'rust', 'python')." },
                         "subpath":  { "type": "string",  "description": "Restrict results to nodes whose file_path starts with this prefix (e.g. 'src/auth', 'packages/atlas-core')." },
                         "repo_id":  { "type": "string",  "description": "Restrict results to one repo by stable repo id in multi-repo graphs." },
+                        "exact_dir": { "type": "string", "description": "Non-recursive scope: only symbols whose parent directory is exactly this canonical repo-relative path." },
+                        "exclude_subpaths": { "type": "array", "items": { "type": "string" }, "description": "Canonical subpath prefixes to exclude (repeatable)." },
+                        "include_synthetic": { "type": "boolean", "description": "Include synthetic owner/workspace metadata nodes under `.atlas/synthetic/` (Cargo package owners). Default false." },
                         "limit":    { "type": "integer", "description": "Maximum symbols per page (default 100, max 500)." },
                         "offset":   { "type": "integer", "description": "Number of matching symbols to skip before this page (default 0)." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }

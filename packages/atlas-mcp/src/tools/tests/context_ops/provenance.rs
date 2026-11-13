@@ -86,6 +86,78 @@ fn get_review_context_json_includes_changed_symbol_evidence() {
 }
 
 #[test]
+fn get_review_context_reports_neighbors_and_consistent_traversal_counts() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "change_source": { "kind": "files", "files": ["src/service.rs"] },
+        "max_nodes": 20,
+        "output_format": "json"
+    });
+    let resp = call(
+        "get_review_context",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("get_review_context");
+    let text = unwrap_tool_text(resp);
+    let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert!(
+        value["changed_symbols"]
+            .as_array()
+            .is_some_and(|symbols| !symbols.is_empty()),
+        "changed_symbols must not be empty: {value}"
+    );
+    assert!(
+        value["impacted_neighbors"]
+            .as_array()
+            .is_some_and(|neighbors| !neighbors.is_empty()),
+        "impacted_neighbors must be populated: {value}"
+    );
+    let nodes = value["nodes"].as_array().map_or(0, Vec::len);
+    let edges = value["edges"].as_array().map_or(0, Vec::len);
+    assert_eq!(value["traversal_budget"]["emitted_node_count"], nodes);
+    assert_eq!(value["traversal_budget"]["emitted_edge_count"], edges);
+    assert_eq!(
+        value["critical_edges"].as_array().map_or(0, Vec::len),
+        edges
+    );
+}
+
+#[test]
+fn explain_change_docs_only_delta_reports_no_coverage_gaps() {
+    let fixture = setup_git_mcp_fixture();
+    write_repo_file(
+        std::path::Path::new(&fixture.repo_root),
+        "README.md",
+        "# Overview\nchanged docs\n## Install\nstep\n",
+    );
+    let args = serde_json::json!({
+        "change_source": { "kind": "working_tree" },
+        "output_format": "json"
+    });
+    let resp = call(
+        "explain_change",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("explain_change");
+    let text = unwrap_tool_text(resp);
+    let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert_eq!(value["risk_level"], "low", "payload: {value}");
+    assert!(
+        value["coverage_gaps"]
+            .as_array()
+            .is_some_and(|gaps| gaps.is_empty()),
+        "docs-only delta must not report coverage gaps: {value}"
+    );
+    assert_eq!(value["test_impact"]["uncovered_symbol_count"], 0);
+}
+
+#[test]
 fn get_context_includes_provenance() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "target": { "kind": "query", "query": "compute" }, "output_format": "json" });

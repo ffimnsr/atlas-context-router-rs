@@ -191,6 +191,53 @@ fn impact_radius_finds_dependents_when_seed_file_exceeds_node_cap() {
 }
 
 #[test]
+fn impact_radius_fair_shares_seed_budget_across_changed_files() {
+    let mut store = open_in_memory();
+    // A docs file contributes many heading (module) nodes while a code file
+    // contributes only a few functions. Row-order truncation would spend the
+    // whole seed budget on the docs file.
+    let docs_nodes = (0..20)
+        .map(|index| {
+            make_node(
+                NodeKind::Module,
+                &format!("h{index}"),
+                &format!("docs.md::heading::h{index}"),
+                "docs.md",
+                "markdown",
+            )
+        })
+        .collect::<Vec<_>>();
+    let code_nodes = (0..3)
+        .map(|index| {
+            make_node(
+                NodeKind::Function,
+                &format!("f{index}"),
+                &format!("src/a.rs::fn::f{index}"),
+                "src/a.rs",
+                "rust",
+            )
+        })
+        .collect::<Vec<_>>();
+    store
+        .replace_file_graph_for_repo("repo_test", "docs.md", "h", None, None, &docs_nodes, &[])
+        .unwrap();
+    store
+        .replace_file_graph_for_repo("repo_test", "src/a.rs", "h", None, None, &code_nodes, &[])
+        .unwrap();
+
+    let result = store
+        .impact_radius(&["docs.md", "src/a.rs"], 1, 10, 100)
+        .unwrap();
+    let files = result
+        .changed_nodes
+        .iter()
+        .map(|node| node.file_path.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    assert!(files.contains("docs.md"), "docs seeds: {files:?}");
+    assert!(files.contains("src/a.rs"), "code seeds: {files:?}");
+}
+
+#[test]
 fn impact_radius_cyclic_graph_terminates() {
     let mut store = open_in_memory();
     // a → b → a (cycle)
