@@ -186,7 +186,7 @@ fn insights_complex_functions_returns_structured_report() {
     assert_eq!(value["command"], json!("insights_complex_functions"));
     assert_eq!(data["mode"], json!("complex"));
     assert_eq!(data["summary"]["total_findings"], json!(1));
-    assert_eq!(data["findings"][0]["category"], json!("large_functions"));
+    assert_eq!(data["findings"][0]["category"], json!("complex_functions"));
     assert_eq!(
         data["findings"][0]["details"]["qualified_name"],
         json!("src/lib.rs::fn::knot")

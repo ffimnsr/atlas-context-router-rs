@@ -58,6 +58,8 @@ pub struct SimilarFunctionReportResult {
     #[serde(flatten)]
     pub report: PatternReport,
     pub matches: Vec<SimilarFunctionMatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_candidates_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -76,7 +78,33 @@ impl SimilarFunctionAnalysis {
             thresholds: self.thresholds.clone(),
             report: self.report.clone(),
             matches: self.matches.clone(),
+            no_candidates_hint: self.no_candidates_hint(),
         }
+    }
+
+    /// Structured explanation for an empty `matches` list.
+    ///
+    /// Returning an empty payload with no reason forced callers to guess
+    /// whether the symbol was missing or the threshold was simply too high.
+    pub fn no_candidates_hint(&self) -> Option<String> {
+        if !self.matches.is_empty() {
+            return None;
+        }
+        if self
+            .report
+            .findings
+            .iter()
+            .any(|finding| finding.id.starts_with("similar_function:unresolved:"))
+        {
+            return Some(
+                "symbol did not resolve to a callable in the current graph snapshot; run query_graph or resolve_symbol first"
+                    .to_owned(),
+            );
+        }
+        Some(format!(
+            "no candidate callables met the similarity floor ({:.2}); lower min_score or widen include_same_file",
+            self.thresholds.low
+        ))
     }
 }
 
@@ -156,6 +184,12 @@ pub struct InferredModule {
     pub root_paths: Vec<String>,
     pub owned_symbols: Vec<String>,
     pub node_count: usize,
+    #[serde(default)]
+    pub public_symbol_count: usize,
+    #[serde(default)]
+    pub internal_symbol_count: usize,
+    #[serde(default)]
+    pub export_ratio: f64,
     pub file_count: usize,
     pub outbound_dependencies: Vec<String>,
     pub inbound_dependencies: Vec<String>,

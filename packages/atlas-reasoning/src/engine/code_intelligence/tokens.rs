@@ -14,7 +14,13 @@ pub(super) fn symbol_summary(node: &Node, module_id: String) -> InsightSymbolSum
 }
 
 pub(super) fn is_callable_node(node: &Node) -> bool {
-    matches!(node.kind, NodeKind::Function | NodeKind::Method)
+    // Test functions are callables too. `find_duplicates { include_tests: true }`
+    // and test-fixture clone detection depend on these reaching the candidate
+    // set; the per-call test filter removes them when the caller opts out.
+    matches!(
+        node.kind,
+        NodeKind::Function | NodeKind::Method | NodeKind::Test
+    )
 }
 
 pub(super) fn parse_arity(params: Option<&str>) -> usize {

@@ -69,14 +69,17 @@ pub(crate) fn tool_get_minimal_context(
         risk_flags.push("test_impact");
     }
 
+    let immediate_impact = json!({
+        "impacted_symbols": packaged.impacted_nodes,
+        "impacted_files": packaged.impacted_files,
+        "relevant_edges": packaged.relevant_edges,
+    });
+
     let payload = json!({
         "change_source": change_source_json(&resolved),
         "changed_symbols": packaged.changed_nodes,
-        "immediate_impact": {
-            "impacted_symbols": packaged.impacted_nodes,
-            "impacted_files": packaged.impacted_files,
-            "relevant_edges": packaged.relevant_edges,
-        },
+        "immediate_impact": immediate_impact.clone(),
+        "impact_summary": immediate_impact,
         "risk_flags": risk_flags,
         "summary": {
             "changed_file_count": changed_file_paths.len(),

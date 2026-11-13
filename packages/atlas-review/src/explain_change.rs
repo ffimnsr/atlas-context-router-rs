@@ -275,8 +275,17 @@ pub fn build_explain_change_summary(
         ));
     }
     if let Some(workflow) = &workflow {
-        if let Some(headline) = &workflow.headline {
-            summary_parts.push(headline.clone());
+        // Derive counts from the sections that survived trimming. The
+        // workflow headline can describe pre-trim totals, which made the
+        // summary claim components/call chains that were not emitted.
+        if !workflow.impacted_components.is_empty() {
+            summary_parts.push(format!(
+                "{} affected component(s).",
+                workflow.impacted_components.len()
+            ));
+        }
+        if !workflow.call_chains.is_empty() {
+            summary_parts.push(format!("{} call chain(s).", workflow.call_chains.len()));
         }
         if let Some(ripple) = workflow.ripple_effects.first() {
             summary_parts.push(ripple.clone());

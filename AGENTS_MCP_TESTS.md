@@ -2531,7 +2531,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 **Expected Clean Output & Assertions**:
 - Verify `structuredContent.removable == false`
 - Verify `structuredContent.blocking_callers` contains `packages/atlas-core/src/readiness.rs::fn::derive_integrity_state`
-- Verify `structuredContent.confidence_tier == 'Definite'`
+- Verify `structuredContent.confidence_tier` reports the analysis confidence (`low`/`medium`/`high`), not an edge certainty tier
 
 **CLI Parity Command**:
 ```./target/debug/atlas analyze dependency packages/atlas-core/src/health.rs::fn::classify_graph_store_error --json```
@@ -2607,7 +2607,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 **Expected Clean Output & Assertions**:
 - Verify `candidates` length <= 5
-- Verify candidates carry certainty tiers ('definite' / 'probable' / 'speculative')
+- Verify candidates carry the raw `certainty` (`high`/`medium`) plus the canonical `certainty_class` (`'definite'` / `'probable'` / `'speculative'`)
 - Verify test functions and entrypoints are excluded
 
 **CLI Parity Command**:
@@ -2653,7 +2653,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify summary reports counts grouped by certainty tier
+- Verify summary reports `certainty_counts` grouped by certainty tier over the full candidate set (not the paged preview)
 
 **CLI Parity Command**:
 ```./target/debug/atlas analyze dead-code --json```
@@ -2972,7 +2972,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ---
 
 #### Tool 34: `find_large_functions`
-**Description**: Finds large or complex functions repo-wide or within selected files using deterministic LOC and complexity thresholds.
+**Description**: Finds large or complex functions repo-wide or within selected files using deterministic LOC and complexity thresholds. Default mode is `large-or-complex`, which returns a function when any of LOC, cyclomatic complexity, cognitive complexity, or nesting depth meets its threshold; pass `mode: "large"` to gate on LOC only or `mode: "complex"` to gate on complexity only.
 **Canonical CLI Parity Command**: `./target/debug/atlas insights large-functions --json`
 
 ##### Test 34.1: Repo-Wide Large Functions Discovery

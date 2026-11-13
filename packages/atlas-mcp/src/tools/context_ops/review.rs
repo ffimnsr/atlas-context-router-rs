@@ -150,10 +150,24 @@ pub(crate) fn tool_get_review_context(
             object.insert("artifact_kind".to_owned(), json!("saved_context"));
             Value::Object(object)
         })
+        .chain(
+            packaged_value
+                .get("content_assets")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|asset| {
+                    let mut object = as_object_map(asset);
+                    object.insert("artifact_kind".to_owned(), json!("content_asset"));
+                    Value::Object(object)
+                }),
+        )
         .collect::<Vec<_>>();
     let repo_aliases = repo_aliases_by_id(repo_root);
     let mut normalized_payload = as_object_map(packaged_value.clone());
     normalized_payload.remove("saved_context_sources");
+    normalized_payload.remove("content_assets");
     normalized_payload.insert(
         "changed_repos".to_owned(),
         changed_repo_summary_json(
@@ -168,7 +182,9 @@ pub(crate) fn tool_get_review_context(
     );
     normalized_payload.insert("changed_files".to_owned(), json!(resolved.files.clone()));
     normalized_payload.insert("changed_symbols".to_owned(), Value::Array(changed_symbols));
-    normalized_payload.insert("neighbors".to_owned(), Value::Array(neighbors));
+    normalized_payload.insert("neighbors".to_owned(), Value::Array(neighbors.clone()));
+    // Alias retained for the documented review contract (`impacted_neighbors`).
+    normalized_payload.insert("impacted_neighbors".to_owned(), Value::Array(neighbors));
     normalized_payload.insert("critical_edges".to_owned(), critical_edges);
     normalized_payload.insert("artifacts".to_owned(), Value::Array(artifacts));
     normalized_payload.insert(

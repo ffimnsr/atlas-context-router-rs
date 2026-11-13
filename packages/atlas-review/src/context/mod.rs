@@ -413,6 +413,7 @@ impl<'a> ContextEngine<'a> {
         let node_limit = result.request.max_nodes.unwrap_or(DEFAULT_MAX_NODES);
         let edge_limit = result.request.max_edges.unwrap_or(DEFAULT_MAX_EDGES);
         let file_limit = result.request.max_files.unwrap_or(DEFAULT_MAX_FILES);
+        let prefix = extraction_budget_prefix(effective_request.intent);
         budgets.record_usage(
             self.budget_policy.review_context_extraction.nodes,
             "review_context_extraction.max_nodes",
@@ -437,11 +438,23 @@ impl<'a> ContextEngine<'a> {
         record_seed_budget_reports(&mut budgets, &result);
         record_payload_budget_reports(&mut budgets, &result, &self.budget_policy);
         result.budget = budgets.summary(
-            "review_context_extraction.max_nodes",
+            format!("{prefix}.max_nodes"),
             node_limit,
             result.nodes.len(),
         );
         Ok(result)
+    }
+}
+
+fn extraction_budget_prefix(intent: atlas_core::model::ContextIntent) -> &'static str {
+    match intent {
+        atlas_core::model::ContextIntent::Review => "review_context_extraction",
+        atlas_core::model::ContextIntent::File => "file_context_extraction",
+        atlas_core::model::ContextIntent::Impact
+        | atlas_core::model::ContextIntent::ImpactAnalysis
+        | atlas_core::model::ContextIntent::RefactorSafety
+        | atlas_core::model::ContextIntent::DependencyRemoval => "impact_context_extraction",
+        _ => "context_extraction",
     }
 }
 

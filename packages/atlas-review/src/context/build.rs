@@ -48,10 +48,18 @@ pub fn build_context(
         ResolvedTarget::Node(node) => build_symbol_context(store, *node, request),
         ResolvedTarget::File(path) => {
             let nodes = store.nodes_by_file(&path)?;
-            match nodes.into_iter().next() {
-                Some(first_node) => build_symbol_context(store, first_node, request),
-                None => Ok(build_not_found_result(request, vec![])),
+            if nodes.is_empty() {
+                return Ok(build_not_found_result(request, vec![]));
             }
+            // A file target is a seed for every symbol it contains; returning
+            // only the first node dropped sibling definitions and all callers.
+            let expanded = ContextRequest {
+                target: ContextTarget::ChangedSymbols {
+                    qnames: nodes.into_iter().map(|node| node.qualified_name).collect(),
+                },
+                ..request.clone()
+            };
+            build_impact_context(store, &expanded, policy)
         }
         ResolvedTarget::Ambiguous(meta) => Ok(build_ambiguous_result(request, meta)),
         ResolvedTarget::NotFound { suggestions } => {
@@ -73,11 +81,18 @@ pub(super) fn build_review_context(
         .collect();
 
     let max_depth = request.depth.unwrap_or(2);
-    // Internal traversal over-reads using the central policy budget; the
-    // caller-facing `request.max_nodes` cap is enforced by `trim_context` and
-    // by the MCP packaging layer. Using the caller cap here would starve the
-    // ranker of impacted neighbors whenever the direct-target set fills it.
-    let traversal_max_nodes = policy.graph_traversal.nodes.default_limit;
+    // Respect an explicit caller cap so `max_nodes` bounds the traversal, not
+    // just the final trim. Ask for one extra node so `trim_context` can keep a
+    // reserved neighbor slot alongside the changed symbols.
+    let traversal_max_nodes = match request.max_nodes {
+        // Over-read enough to include at least one impacted neighbor beyond the
+        // changed-symbol set; `trim_context` then reserves a neighbor slot.
+        Some(cap) => cap
+            .saturating_mul(2)
+            .max(cap.saturating_add(8))
+            .min(policy.graph_traversal.nodes.max_limit),
+        None => policy.graph_traversal.nodes.default_limit,
+    };
     let traversal_max_edges = policy.graph_traversal.edges.default_limit;
 
     let impact = store.impact_radius(

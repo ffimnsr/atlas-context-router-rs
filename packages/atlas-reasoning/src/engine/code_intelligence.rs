@@ -17,7 +17,11 @@ use super::helpers;
 
 const SIMILARITY_HIGH_THRESHOLD: f64 = 0.72;
 const SIMILARITY_MEDIUM_THRESHOLD: f64 = 0.55;
-const SIMILARITY_LOW_THRESHOLD: f64 = 0.40;
+// Recalibrated after fixing the pre-cap candidate window: genuine sibling
+// helpers land near 0.22-0.30 because name/signature overlap alone can be
+// low even when the bodies match. The old 0.40 floor made the band
+// unreachable for real near-duplicates in this workspace.
+const SIMILARITY_LOW_THRESHOLD: f64 = 0.22;
 
 const SIMILAR_SHINGLE_SIZE: usize = 3;
 const DUPLICATE_SHINGLE_SIZE: usize = 4;

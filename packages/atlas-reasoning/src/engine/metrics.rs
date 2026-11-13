@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::Path;
 
@@ -101,12 +101,23 @@ pub struct MetricDistribution {
     pub outliers: Vec<MetricOutlier>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct MetricGraphSummary {
+    pub node_count: usize,
+    pub edge_count: usize,
+    pub density: f64,
+    pub average_degree: f64,
+    pub diameter: usize,
+    pub diameter_scope: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct CodeHealthMetrics {
     pub node_metrics: Vec<NodeMetric>,
     pub file_metrics: Vec<FileMetric>,
     pub module_metrics: Vec<ModuleMetric>,
     pub distributions: Vec<MetricDistribution>,
+    pub graph_summary: MetricGraphSummary,
 }
 
 #[derive(Debug, Clone)]
@@ -182,6 +193,7 @@ impl<'s> InsightsEngine<'s> {
             &module_metrics,
             &distributions,
         );
+        let graph_summary = build_metric_graph_summary(&snapshot, &node_metrics);
 
         Ok(MetricsAnalysis {
             metrics: CodeHealthMetrics {
@@ -189,6 +201,7 @@ impl<'s> InsightsEngine<'s> {
                 file_metrics,
                 module_metrics,
                 distributions,
+                graph_summary,
             },
             report: self.metrics_report(findings),
         })
@@ -1395,4 +1408,78 @@ fn percentile(sorted_values: &[f64], percentile: f64) -> f64 {
         let weight = rank - lower_index as f64;
         sorted_values[lower_index] * (1.0 - weight) + sorted_values[upper_index] * weight
     }
+}
+
+fn build_metric_graph_summary(
+    snapshot: &GraphSnapshot,
+    node_metrics: &[NodeMetric],
+) -> MetricGraphSummary {
+    let node_count = snapshot.nodes.len();
+    let edge_count = snapshot.edges.len();
+    let density = if node_count > 1 {
+        edge_count as f64 / (node_count as f64 * (node_count - 1) as f64)
+    } else {
+        0.0
+    };
+    let average_degree = if node_count == 0 {
+        0.0
+    } else {
+        edge_count as f64 / node_count as f64
+    };
+
+    let module_by_qname = node_metrics
+        .iter()
+        .map(|metric| (metric.node.qualified_name.clone(), metric.module_id.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut adjacency = BTreeMap::<String, BTreeSet<String>>::new();
+    for edge in &snapshot.edges {
+        let (Some(source), Some(target)) = (
+            module_by_qname.get(&edge.source_qn),
+            module_by_qname.get(&edge.target_qn),
+        ) else {
+            continue;
+        };
+        if source != target {
+            adjacency
+                .entry(source.clone())
+                .or_default()
+                .insert(target.clone());
+        }
+    }
+
+    MetricGraphSummary {
+        node_count,
+        edge_count,
+        density,
+        average_degree,
+        diameter: module_graph_diameter(&adjacency),
+        diameter_scope: "module_graph".to_owned(),
+    }
+}
+
+/// Longest shortest path over the directed module graph. The module graph is
+/// small (tens of nodes) whereas the symbol graph is tens of thousands, so this
+/// bounded BFS is safe to run per metrics request.
+fn module_graph_diameter(adjacency: &BTreeMap<String, BTreeSet<String>>) -> usize {
+    let mut diameter = 0usize;
+    for start in adjacency.keys() {
+        let mut distances = HashMap::<&str, usize>::new();
+        let mut queue = VecDeque::<&str>::new();
+        distances.insert(start.as_str(), 0);
+        queue.push_back(start.as_str());
+        while let Some(current) = queue.pop_front() {
+            let distance = distances[current];
+            let Some(nexts) = adjacency.get(current) else {
+                continue;
+            };
+            for next in nexts {
+                if !distances.contains_key(next.as_str()) {
+                    distances.insert(next.as_str(), distance + 1);
+                    queue.push_back(next.as_str());
+                    diameter = diameter.max(distance + 1);
+                }
+            }
+        }
+    }
+    diameter
 }

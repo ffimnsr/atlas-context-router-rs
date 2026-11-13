@@ -16,10 +16,14 @@
   "context_files": [
     "src/lib.rs"
   ],
+  "truncation_reason": "context capped by node, edge, file, or payload budget",
   "detail_controls": {
     "agent_id": null,
+    "tests": false,
     "code_spans": false,
     "imports": true,
+    "include_ranking_evidence": false,
+    "include_telemetry": false,
     "max_edges": 0,
     "max_files": 1,
     "max_nodes": 1,
@@ -30,10 +34,7 @@
       "code_spans",
       "neighbors"
     ],
-    "semantic": false,
-    "tests": false,
-    "include_telemetry": false,
-    "include_ranking_evidence": false
+    "semantic": false
   },
   "edge_count": 0,
   "edges": [],
@@ -84,6 +85,11 @@
       "reason": "direct_target"
     }
   ],
+  "repo_provenance": {
+    "repo_fingerprint": "<repo_fingerprint>",
+    "repo_id": "<repo_id>",
+    "repo_root": "<repo_root>"
+  },
   "safe_to_answer": true,
   "seed_budgets": [
     {
@@ -96,24 +102,18 @@
       "seed_kind": "changed_files"
     }
   ],
+  "truncated": true,
   "tool": "get_context",
   "traversal_budget": {
     "accepted_depth": 3,
     "accepted_edge_budget": 500,
-    "accepted_node_budget": 200,
+    "accepted_node_budget": 9,
     "budget_hit": false,
     "emitted_edge_count": 8,
     "emitted_node_count": 7,
     "omitted_edge_count": 0,
     "requested_depth": 3,
     "requested_edge_budget": 500,
-    "requested_node_budget": 200
-  },
-  "truncated": true,
-  "truncation_reason": "context capped by node, edge, file, or payload budget",
-  "repo_provenance": {
-    "repo_id": "<repo_id>",
-    "repo_fingerprint": "<repo_fingerprint>",
-    "repo_root": "<repo_root>"
+    "requested_node_budget": 9
   }
 }

@@ -104,6 +104,9 @@ pub(super) fn compact_modules(modules: &[InferredModule]) -> Vec<Value> {
                 "module_id": module.module_id,
                 "display_name": module.display_name,
                 "node_count": module.node_count,
+                "public_symbol_count": module.public_symbol_count,
+                "internal_symbol_count": module.internal_symbol_count,
+                "export_ratio": module.export_ratio,
                 "file_count": module.file_count,
                 "root_paths_preview": module
                     .root_paths

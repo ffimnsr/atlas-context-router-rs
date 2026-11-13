@@ -279,6 +279,10 @@ pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
                 "When true, also query the content store for saved artifacts relevant to this request and include them in the result (default false).",
             ),
             (
+                "properties/include_content_assets",
+                "Merge non-code retrieval assets (docs, config, SQL, prompts) into `assets`. Defaults to true when the file/files target includes a non-code path.",
+            ),
+            (
                 "properties/session_id",
                 "Restrict saved-context retrieval to artifacts from this session and apply a same-session relevance boost.",
             ),

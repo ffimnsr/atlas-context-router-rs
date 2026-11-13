@@ -142,6 +142,8 @@ pub(crate) fn insight_report_output_schema() -> Value {
         with_compact_insight_fields(serde_json::json!({
             "summary": { "$ref": "#/$defs/insight_summary" },
             "findings": { "type": "array", "items": { "$ref": "#/$defs/insight_finding" } },
+            "counts": { "type": "object" },
+            "graph_summary": { "type": "object" },
             "atlas_provenance": {
                 "type": "object",
                 "additionalProperties": false,
@@ -204,6 +206,7 @@ pub(crate) fn similar_function_report_output_schema() -> Value {
             "summary": { "$ref": "#/$defs/insight_summary" },
             "findings": { "type": "array", "items": { "$ref": "#/$defs/insight_finding" } },
             "matches": { "type": "array", "items": { "type": "object" } },
+            "no_candidates_hint": { "type": ["string", "null"] },
             "atlas_provenance": {
                 "type": "object",
                 "additionalProperties": false,
@@ -277,7 +280,24 @@ pub(crate) fn inferred_module_report_output_schema() -> Value {
         with_compact_insight_fields(serde_json::json!({
             "summary": { "$ref": "#/$defs/insight_summary" },
             "findings": { "type": "array", "items": { "$ref": "#/$defs/insight_finding" } },
-            "modules": { "type": "array", "items": { "type": "object" } },
+            "modules": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "module_id": { "type": "string" },
+                        "display_name": { "type": "string" },
+                        "node_count": { "type": "integer" },
+                        "public_symbol_count": { "type": "integer" },
+                        "internal_symbol_count": { "type": "integer" },
+                        "export_ratio": { "type": "number" },
+                        "file_count": { "type": "integer" },
+                        "confidence": { "type": "number" },
+                        "explicit": { "type": "boolean" }
+                    },
+                    "required": ["module_id", "node_count", "public_symbol_count", "internal_symbol_count", "export_ratio", "file_count"]
+                }
+            },
             "atlas_provenance": {
                 "type": "object",
                 "additionalProperties": false,
@@ -376,6 +396,7 @@ pub(crate) fn analyze_remove_output_schema() -> Value {
             "probable_impacts": { "type": "array", "items": { "type": "object" } },
             "weak_impacts": { "type": "array", "items": { "type": "object" } },
             "tests": { "type": "array", "items": { "type": "object" } },
+            "impacted_files": { "type": "array", "items": { "type": "string" } },
             "uncertainty_flags": { "type": "array", "items": { "type": "string" } },
             "summary": { "type": "object" },
             "warnings": { "type": "array", "items": { "type": "object" } },
@@ -430,6 +451,7 @@ pub(crate) fn analyze_dependency_output_schema() -> Value {
             "symbol": { "type": "string" },
             "removable": { "type": "boolean" },
             "blocking_references": { "type": "array", "items": { "type": "object" } },
+            "blocking_callers": { "type": "array", "items": { "type": "object" } },
             "confidence_tier": { "type": "string" },
             "suggested_cleanups": { "type": "array", "items": { "type": "string" } },
             "summary": { "type": "object" },

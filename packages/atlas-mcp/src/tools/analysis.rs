@@ -55,12 +55,17 @@ pub(super) fn tool_analyze_architecture(
             "tool": "analyze_architecture",
             "module_count": analysis.modules.len(),
             "module_edge_count": analysis.edges.len(),
+            "counts": analysis.counts,
             "findings_offset": offset,
             "findings_total_available": total_available,
         }),
     );
+    let mut full_payload = serde_json::to_value(&analysis.report)?;
+    if let Some(object) = full_payload.as_object_mut() {
+        object.insert("counts".to_owned(), json!(analysis.counts));
+    }
     insight_report_response(
-        &analysis.report,
+        &full_payload,
         compact,
         output_format,
         verbose,
@@ -98,6 +103,14 @@ pub(super) fn tool_analyze_metrics(
         analysis.report.atlas_freshness.as_ref(),
         json!({
             "tool": "analyze_metrics",
+            "graph_summary": {
+                "node_count": analysis.metrics.graph_summary.node_count,
+                "edge_count": analysis.metrics.graph_summary.edge_count,
+                "density": analysis.metrics.graph_summary.density,
+                "average_degree": analysis.metrics.graph_summary.average_degree,
+                "diameter": analysis.metrics.graph_summary.diameter,
+                "diameter_scope": analysis.metrics.graph_summary.diameter_scope,
+            },
             "node_metric_count": analysis.metrics.node_metrics.len(),
             "file_metric_count": analysis.metrics.file_metrics.len(),
             "module_metric_count": analysis.metrics.module_metrics.len(),
@@ -105,8 +118,22 @@ pub(super) fn tool_analyze_metrics(
             "findings_total_available": total_available,
         }),
     );
+    let mut full_payload = serde_json::to_value(&analysis.report)?;
+    if let Some(object) = full_payload.as_object_mut() {
+        object.insert(
+            "graph_summary".to_owned(),
+            json!({
+                "node_count": analysis.metrics.graph_summary.node_count,
+                "edge_count": analysis.metrics.graph_summary.edge_count,
+                "density": analysis.metrics.graph_summary.density,
+                "average_degree": analysis.metrics.graph_summary.average_degree,
+                "diameter": analysis.metrics.graph_summary.diameter,
+                "diameter_scope": analysis.metrics.graph_summary.diameter_scope,
+            }),
+        );
+    }
     insight_report_response(
-        &analysis.report,
+        &full_payload,
         compact,
         output_format,
         verbose,
@@ -366,6 +393,7 @@ pub(super) fn tool_find_similar_functions(
             "source": analysis.source,
             "thresholds": analysis.thresholds,
             "matches": analysis.matches,
+            "no_candidates_hint": analysis.no_candidates_hint(),
         }),
     );
     insight_report_response(
@@ -682,6 +710,12 @@ pub(super) fn tool_analyze_remove(
             "file": node.file_path,
             "line": node.line_start,
         })).collect::<Vec<_>>(),
+        "impacted_files": result
+            .impacted_files
+            .iter()
+            .take(max_files)
+            .cloned()
+            .collect::<Vec<_>>(),
         "uncertainty_flags": result.uncertainty_flags,
         "summary": {
             "status": "ok",
@@ -736,8 +770,9 @@ pub(super) fn tool_analyze_dead_code(
             .map(|resolved| resolved.canonical)
             .unwrap_or(raw)
     });
-    // Compact default: 50 candidates. Caller may raise with `limit`.
-    let requested_limit = u64_arg(args, "limit").unwrap_or(50) as usize;
+    // Compact default: 100 candidates, matching the CLI default so both
+    // surfaces page identically. Caller may raise with `limit`.
+    let requested_limit = u64_arg(args, "limit").unwrap_or(100) as usize;
     let summary = bool_arg(args, "summary").unwrap_or(false);
     let exclude_kind_strs = string_array_arg(args, "exclude_kind").unwrap_or_default();
     // Accept the same kind aliases as `list_symbols` (`fn`, `record`, ...);
@@ -762,14 +797,28 @@ pub(super) fn tool_analyze_dead_code(
     let trimming = AnalysisTrimmingPrimitives::default();
     let allowlist_refs: Vec<&str> = allowlist.iter().map(String::as_str).collect();
     let mut candidates = engine
-        .detect_dead_code(
-            &allowlist_refs,
-            subpath.as_deref(),
-            Some(limit),
-            &exclude_kinds,
-        )
+        .detect_dead_code(&allowlist_refs, subpath.as_deref(), None, &exclude_kinds)
         .context("detect_dead_code failed")?;
     sort_dead_code_candidates(&mut candidates, &ranking);
+    // Summary totals must describe the full candidate set, not the paged
+    // preview. Compute them before the caller-facing limit is applied.
+    let total_available = candidates.len();
+    let mut certainty_counts = std::collections::BTreeMap::<String, usize>::new();
+    for candidate in &candidates {
+        *certainty_counts
+            .entry(candidate.certainty.to_string())
+            .or_default() += 1;
+    }
+    let total_blocker_count = candidates
+        .iter()
+        .map(|candidate| candidate.blockers.len())
+        .sum::<usize>();
+    if candidates.len() > limit {
+        candidates = std::mem::take(&mut candidates)
+            .into_iter()
+            .take(limit)
+            .collect();
+    }
 
     if summary {
         let payload = serde_json::json!({
@@ -785,10 +834,11 @@ pub(super) fn tool_analyze_dead_code(
             "blockers": [],
             "summary": {
                 "status": "ok",
-                "candidate_count": candidates.len(),
-                "blocker_count": 0,
+                "candidate_count": total_available,
+                "blocker_count": total_blocker_count,
+                "certainty_counts": certainty_counts,
             },
-            "truncated": false,
+            "truncated": total_available > limit,
             "warnings": [],
         });
         let mut response = tool_result_value(&payload, output_format)?;
@@ -797,7 +847,7 @@ pub(super) fn tool_analyze_dead_code(
             &budgets.summary(
                 "query_candidates_and_seeds.max_candidates",
                 limit,
-                candidates.len(),
+                total_available,
             ),
         );
         return Ok(response);
@@ -819,6 +869,7 @@ pub(super) fn tool_analyze_dead_code(
                     "line": c.node.line_start,
                 },
                 "certainty": c.certainty.to_string(),
+                "certainty_class": dead_code_certainty_class(c.certainty),
                 "reasons": c.reasons,
                 "blockers": c.blockers,
             })
@@ -850,11 +901,12 @@ pub(super) fn tool_analyze_dead_code(
         "blockers": blockers,
         "summary": {
             "status": "ok",
-            "candidate_count": candidates.len(),
-            "blocker_count": candidates.iter().map(|c| c.blockers.len()).sum::<usize>(),
+            "candidate_count": total_available,
+            "blocker_count": total_blocker_count,
             "omitted_count": omitted,
+            "certainty_counts": certainty_counts,
         },
-        "truncated": omitted > 0,
+        "truncated": omitted > 0 || total_available > limit,
         "warnings": [],
     });
     let mut response = tool_result_value(&payload, output_format)?;
@@ -863,7 +915,7 @@ pub(super) fn tool_analyze_dead_code(
         &budgets.summary(
             "query_candidates_and_seeds.max_candidates",
             limit,
-            candidates.len(),
+            total_available,
         ),
     );
     Ok(response)
@@ -909,7 +961,8 @@ pub(super) fn tool_analyze_dependency(
         "tool": "analyze_dependency",
         "symbol": result.target_qname,
         "removable": result.removable,
-        "blocking_references": blocking_preview,
+        "blocking_references": blocking_preview.clone(),
+        "blocking_callers": blocking_preview,
         "confidence_tier": result.confidence.to_string(),
         "suggested_cleanups": result.suggested_cleanups,
         "summary": {
@@ -922,4 +975,14 @@ pub(super) fn tool_analyze_dependency(
     let mut response = tool_result_value(&payload, output_format)?;
     inject_budget_metadata(&mut response, &result.budget);
     Ok(response)
+}
+
+/// Canonical certainty vocabulary used by the test guide; the raw
+/// `certainty` field keeps the `ConfidenceTier` spelling for compatibility.
+fn dead_code_certainty_class(tier: atlas_core::ConfidenceTier) -> &'static str {
+    match tier {
+        atlas_core::ConfidenceTier::High => "definite",
+        atlas_core::ConfidenceTier::Medium => "probable",
+        atlas_core::ConfidenceTier::Low => "speculative",
+    }
 }

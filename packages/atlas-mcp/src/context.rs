@@ -7,9 +7,9 @@
 
 use atlas_core::BudgetReport;
 use atlas_core::model::{
-    ContextOverview, ContextRankingEvidence, ContextResult, ContextSourceMix, ContextTelemetry,
-    Edge, ImpactResult, Node, PayloadTruncationMeta, RepoProvenance, SavedContextSource,
-    SeedBudgetMeta, SelectedEdge, SelectedNode, TraversalBudgetMeta,
+    ContentAsset, ContextOverview, ContextRankingEvidence, ContextResult, ContextSourceMix,
+    ContextTelemetry, Edge, ImpactResult, Node, PayloadTruncationMeta, RepoProvenance,
+    SavedContextSource, SeedBudgetMeta, SelectedEdge, SelectedNode, TraversalBudgetMeta,
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -176,6 +176,10 @@ pub struct PackagedContextResult<'a> {
     /// Only present when `include_saved_context` was `true` in the request.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub saved_context_sources: Vec<PackagedSavedSource<'a>>,
+    /// Non-code retrieval assets merged next to graph targets (docs, config,
+    /// SQL, prompts). Only present when content lookup ran.
+    #[serde(skip_serializing_if = "<[ContentAsset]>::is_empty")]
+    pub content_assets: &'a [ContentAsset],
     /// ICM-G7 overview memory records (preview-only).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub overviews: Vec<ContextOverview>,
@@ -349,6 +353,7 @@ pub fn package_context_result(
                     .flatten(),
             })
             .collect(),
+        content_assets: &result.content_assets,
         overviews: result.overviews.clone(),
         seed_budgets: &result.seed_budgets,
         traversal_budget: result.traversal_budget.as_ref(),

@@ -443,6 +443,8 @@ fn analyze_architecture_matches_direct_report_json() {
         .expect("direct analysis");
     let mut direct_value = serde_json::to_value(&direct.report).expect("serialize report");
     direct_value["summary"]["generated_at"] = tool_value["summary"]["generated_at"].clone();
+    direct_value["counts"] =
+        serde_json::to_value(&direct.counts).expect("serialize architecture counts");
 
     assert_eq!(tool_value, direct_value);
     assert_provenance(&resp, "/repo", &fixture.db_path);
@@ -463,6 +465,15 @@ fn analyze_metrics_matches_direct_report_json() {
     let direct = engine.analyze_metrics("/repo").expect("direct analysis");
     let mut direct_value = serde_json::to_value(&direct.report).expect("serialize report");
     direct_value["summary"]["generated_at"] = tool_value["summary"]["generated_at"].clone();
+    let graph_summary = &direct.metrics.graph_summary;
+    direct_value["graph_summary"] = serde_json::json!({
+        "node_count": graph_summary.node_count,
+        "edge_count": graph_summary.edge_count,
+        "density": graph_summary.density,
+        "average_degree": graph_summary.average_degree,
+        "diameter": graph_summary.diameter,
+        "diameter_scope": graph_summary.diameter_scope,
+    });
 
     assert_eq!(tool_value, direct_value);
     assert_provenance(&resp, "/repo", &fixture.db_path);
@@ -616,26 +627,31 @@ fn r4_insight_tools_keep_full_report_in_json_structured_content() {
     let engine = InsightsEngine::new(&store, atlas_engine::config::InsightsConfig::default())
         .expect("insights engine");
 
-    let architecture = serde_json::to_value(
-        &engine
-            .analyze_architecture("/repo")
-            .expect("architecture direct")
-            .report,
-    )
-    .expect("serialize architecture report");
+    let architecture_analysis = engine
+        .analyze_architecture("/repo")
+        .expect("architecture direct");
+    let mut architecture =
+        serde_json::to_value(&architecture_analysis.report).expect("serialize architecture report");
+    architecture["counts"] =
+        serde_json::to_value(&architecture_analysis.counts).expect("serialize architecture counts");
     assert_json_structured_content_matches_direct_report(
         "analyze_architecture",
         serde_json::json!({ "verbose": true }),
         architecture,
     );
 
-    let metrics = serde_json::to_value(
-        &engine
-            .analyze_metrics("/repo")
-            .expect("metrics direct")
-            .report,
-    )
-    .expect("serialize metrics report");
+    let metrics_analysis = engine.analyze_metrics("/repo").expect("metrics direct");
+    let mut metrics =
+        serde_json::to_value(&metrics_analysis.report).expect("serialize metrics report");
+    let graph_summary = &metrics_analysis.metrics.graph_summary;
+    metrics["graph_summary"] = serde_json::json!({
+        "node_count": graph_summary.node_count,
+        "edge_count": graph_summary.edge_count,
+        "density": graph_summary.density,
+        "average_degree": graph_summary.average_degree,
+        "diameter": graph_summary.diameter,
+        "diameter_scope": graph_summary.diameter_scope,
+    });
     assert_json_structured_content_matches_direct_report(
         "analyze_metrics",
         serde_json::json!({ "verbose": true }),

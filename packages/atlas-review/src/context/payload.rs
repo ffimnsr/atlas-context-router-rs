@@ -230,18 +230,33 @@ fn context_budget_name(
         return Some("mcp_cli_payload_serialization.max_context_payload_bytes".to_owned());
     }
     if result.truncation.nodes_dropped > 0 {
-        return Some("review_context_extraction.max_nodes".to_owned());
+        return Some(format!("{}.max_nodes", context_budget_prefix(result)));
     }
     if result.truncation.edges_dropped > 0 {
-        return Some("review_context_extraction.max_edges".to_owned());
+        return Some(format!("{}.max_edges", context_budget_prefix(result)));
     }
     if result.truncation.files_dropped > 0 {
-        return Some("review_context_extraction.max_files".to_owned());
+        return Some(format!("{}.max_files", context_budget_prefix(result)));
     }
     if result.truncation.content_assets_dropped > 0 {
         return Some("content_saved_context_lookup.max_content_assets".to_owned());
     }
     None
+}
+
+/// Budget names follow the active intent so a symbol/file request does not
+/// report `review_context_extraction.*` for a non-review budget.
+fn context_budget_prefix(result: &ContextResult) -> &'static str {
+    use atlas_core::model::ContextIntent;
+    match result.request.intent {
+        ContextIntent::Review => "review_context_extraction",
+        ContextIntent::File => "file_context_extraction",
+        ContextIntent::Impact
+        | ContextIntent::ImpactAnalysis
+        | ContextIntent::RefactorSafety
+        | ContextIntent::DependencyRemoval => "impact_context_extraction",
+        _ => "context_extraction",
+    }
 }
 
 /// Map a payload measurement plus load-time fallback info into JSON metadata.

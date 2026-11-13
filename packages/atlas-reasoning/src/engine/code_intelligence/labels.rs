@@ -22,6 +22,7 @@ impl<'s> InsightsEngine<'s> {
             .into_iter()
             .collect::<BTreeSet<_>>();
         let limit = request.limit.unwrap_or(self.config().max_findings);
+        let has_explicit_symbols = !explicit_symbols.is_empty();
 
         let mut assignments = Vec::new();
         let mut file_paths = snapshot
@@ -30,19 +31,24 @@ impl<'s> InsightsEngine<'s> {
             .cloned()
             .collect::<BTreeSet<_>>();
         file_paths.extend(explicit_files.iter().cloned());
-        for file_path in file_paths {
-            if !explicit_files.is_empty() && !explicit_files.contains(&file_path) {
-                continue;
+        // When the caller asks for explicit symbols, file-level rows would
+        // flood the result with every labelled file in the repo and evict the
+        // requested symbols at the limit boundary.
+        if !has_explicit_symbols {
+            for file_path in file_paths {
+                if !explicit_files.is_empty() && !explicit_files.contains(&file_path) {
+                    continue;
+                }
+                let labels = labels_for_file(&file_path);
+                if labels.is_empty() {
+                    continue;
+                }
+                assignments.push(ComponentLabelAssignment {
+                    file_path: file_path.clone(),
+                    qualified_name: None,
+                    labels,
+                });
             }
-            let labels = labels_for_file(&file_path);
-            if labels.is_empty() {
-                continue;
-            }
-            assignments.push(ComponentLabelAssignment {
-                file_path: file_path.clone(),
-                qualified_name: None,
-                labels,
-            });
         }
 
         for node in &snapshot.nodes {
@@ -50,6 +56,12 @@ impl<'s> InsightsEngine<'s> {
                 continue;
             }
             if !explicit_files.is_empty() && !explicit_files.contains(&node.file_path) {
+                continue;
+            }
+            // The file-level assignment above already represents file nodes;
+            // emitting them again as `qualified_name` rows double-counts
+            // against `limit` (observed as the same path appearing twice).
+            if node.kind == NodeKind::File || node.qualified_name == node.file_path {
                 continue;
             }
             let labels = labels_for_symbol(node);
@@ -64,8 +76,11 @@ impl<'s> InsightsEngine<'s> {
         }
 
         assignments.sort_by(|left, right| {
-            left.file_path
-                .cmp(&right.file_path)
+            let left_explicit = assignment_is_explicit(left, &explicit_files, &explicit_symbols);
+            let right_explicit = assignment_is_explicit(right, &explicit_files, &explicit_symbols);
+            right_explicit
+                .cmp(&left_explicit)
+                .then_with(|| left.file_path.cmp(&right.file_path))
                 .then_with(|| left.qualified_name.cmp(&right.qualified_name))
         });
         if assignments.len() > limit {
@@ -84,6 +99,18 @@ impl<'s> InsightsEngine<'s> {
             assignments,
         })
     }
+}
+
+fn assignment_is_explicit(
+    assignment: &ComponentLabelAssignment,
+    explicit_files: &BTreeSet<String>,
+    explicit_symbols: &BTreeSet<String>,
+) -> bool {
+    assignment
+        .qualified_name
+        .as_ref()
+        .is_some_and(|qname| explicit_symbols.contains(qname))
+        || explicit_files.contains(&assignment.file_path)
 }
 
 pub(super) fn labels_for_file(file_path: &str) -> Vec<ComponentLabelMatch> {

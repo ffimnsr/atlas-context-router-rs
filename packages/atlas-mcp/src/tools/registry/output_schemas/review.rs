@@ -240,7 +240,9 @@ pub(crate) fn get_impact_radius_output_schema() -> Value {
             "seed_files": { "type": "array", "items": { "type": "string" } },
             "changed_symbols": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
             "impacted_symbols": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
+            "affected_nodes": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
             "impacted_files": { "type": "array", "items": { "type": "string" } },
+            "affected_files": { "type": "array", "items": { "type": "string" } },
             "summary": {
                 "type": "object",
                 "additionalProperties": false,
@@ -386,6 +388,7 @@ pub(crate) fn get_review_context_output_schema() -> Value {
             "changed_files": { "type": "array", "items": { "type": "string" } },
             "changed_symbols": { "type": "array", "items": { "$ref": "#/$defs/packaged_selected_node" } },
             "neighbors": { "type": "array", "items": { "$ref": "#/$defs/packaged_selected_node" } },
+            "impacted_neighbors": { "type": "array", "items": { "$ref": "#/$defs/packaged_selected_node" } },
             "critical_edges": { "type": "array", "items": { "$ref": "#/$defs/packaged_selected_edge" } },
             "risk_summary": { "$ref": "#/$defs/review_risk_summary" },
             "boundary_summary": { "$ref": "#/$defs/boundary_summary" },
@@ -466,6 +469,16 @@ pub(crate) fn get_minimal_context_output_schema() -> Value {
             "change_source": { "$ref": "#/$defs/change_source" },
             "changed_symbols": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
             "immediate_impact": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "impacted_symbols": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
+                    "impacted_files": { "type": "array", "items": { "type": "string" } },
+                    "relevant_edges": { "type": "array", "items": { "$ref": "#/$defs/compact_edge" } }
+                },
+                "required": ["impacted_symbols", "impacted_files", "relevant_edges"]
+            },
+            "impact_summary": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {

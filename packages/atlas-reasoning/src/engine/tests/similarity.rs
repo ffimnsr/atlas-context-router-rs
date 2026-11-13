@@ -575,3 +575,103 @@ fn label_components_assigns_cli_and_review_labels() {
                 .any(|label| label.label == "review_context")
     }));
 }
+
+#[test]
+fn label_components_symbols_filter_skips_repo_file_rows() {
+    let repo_root = make_repo_root();
+    write_repo_file(
+        &repo_root,
+        "packages/atlas-cli/src/commands/changes.rs",
+        "pub fn render_review() {}\n",
+    );
+    write_repo_file(&repo_root, "src/core.rs", "pub fn core() {}\n");
+
+    let review = node(
+        0,
+        "render_review",
+        "packages/atlas-cli/src/commands/changes.rs::fn::render_review",
+        "packages/atlas-cli/src/commands/changes.rs",
+        NodeKind::Function,
+    );
+    let core = node(
+        0,
+        "core",
+        "src/core.rs::fn::core",
+        "src/core.rs",
+        NodeKind::Function,
+    );
+    let mut store = make_store();
+    seed_graph(&mut store, vec![review, core], vec![]);
+    let engine = insights_engine(&store);
+    let analysis = engine
+        .label_components(
+            &repo_root,
+            ComponentLabelRequest {
+                files: None,
+                symbols: Some(vec![
+                    "packages/atlas-cli/src/commands/changes.rs::fn::render_review".to_owned(),
+                ]),
+                limit: Some(10),
+            },
+        )
+        .expect("component labeling");
+
+    assert!(!analysis.assignments.is_empty());
+    assert!(
+        analysis
+            .assignments
+            .iter()
+            .all(|assignment| assignment.qualified_name.is_some()),
+        "symbol-filtered labeling must not emit repo-wide file rows: {:?}",
+        analysis.assignments
+    );
+    assert!(analysis.assignments.iter().all(|assignment| {
+        assignment.file_path == "packages/atlas-cli/src/commands/changes.rs"
+    }));
+}
+
+#[test]
+fn infer_modules_reports_public_internal_counts() {
+    let repo_root = make_repo_root();
+    write_repo_file(
+        &repo_root,
+        "packages/atlas-cli/src/lib.rs",
+        "pub fn cli() {}\nfn hidden() {}\n",
+    );
+
+    let mut public = node(
+        0,
+        "cli",
+        "packages/atlas-cli/src/lib.rs::fn::cli",
+        "packages/atlas-cli/src/lib.rs",
+        NodeKind::Function,
+    );
+    public.modifiers = Some("pub".to_owned());
+    let private = node(
+        0,
+        "hidden",
+        "packages/atlas-cli/src/lib.rs::fn::hidden",
+        "packages/atlas-cli/src/lib.rs",
+        NodeKind::Function,
+    );
+
+    let mut store = make_store();
+    seed_graph(&mut store, vec![public, private], vec![]);
+    attach_owner(
+        &mut store,
+        "packages/atlas-cli/src/lib.rs",
+        "packages/atlas-cli/Cargo.toml",
+    );
+    let engine = insights_engine(&store);
+    let analysis = engine.infer_modules(&repo_root).expect("module inference");
+    let module = analysis
+        .modules
+        .iter()
+        .find(|module| module.module_id == "cargo:packages/atlas-cli/Cargo.toml")
+        .expect("cli module");
+
+    assert_eq!(module.node_count, 2);
+    assert_eq!(module.public_symbol_count, 1);
+    assert_eq!(module.internal_symbol_count, 1);
+    assert!((module.export_ratio - 0.5).abs() < f64::EPSILON);
+}

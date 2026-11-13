@@ -110,7 +110,7 @@ pub(super) fn rank_similar_function_matches(
     include_same_file: bool,
     thresholds: &SimilarityThresholds,
 ) -> Vec<SimilarFunctionMatch> {
-    let mut candidates = fingerprints
+    let mut eligible = fingerprints
         .iter()
         .filter(|candidate| candidate.summary.qualified_name != source.summary.qualified_name)
         .filter(|candidate| candidate.summary.language == source.summary.language)
@@ -119,7 +119,27 @@ pub(super) fn rank_similar_function_matches(
             include_same_file || candidate.summary.file_path != source.summary.file_path
         })
         .filter(|candidate| source.arity.abs_diff(candidate.arity) <= 1)
-        .take(MAX_SIMILAR_CANDIDATES_PER_SOURCE)
+        .collect::<Vec<_>>();
+
+    // Rank by a cheap prefilter *before* applying the per-source window.
+    // Taking the first N fingerprints (ordered by file path) permanently hid
+    // every callable in later packages, so genuine clones in `atlas-mcp` or
+    // `atlas-cli` were unreachable for sources earlier in the snapshot.
+    eligible.sort_by(|left, right| {
+        similar_prefilter_score(source, right)
+            .total_cmp(&similar_prefilter_score(source, left))
+            .then_with(|| {
+                left.summary
+                    .qualified_name
+                    .cmp(&right.summary.qualified_name)
+            })
+    });
+    if eligible.len() > MAX_SIMILAR_CANDIDATES_PER_SOURCE {
+        eligible.truncate(MAX_SIMILAR_CANDIDATES_PER_SOURCE);
+    }
+
+    let mut candidates = eligible
+        .into_iter()
         .filter_map(|candidate| build_similar_match(source, candidate, min_score, thresholds))
         .collect::<Vec<_>>();
 
@@ -139,6 +159,21 @@ pub(super) fn rank_similar_function_matches(
         candidates.truncate(limit);
     }
     candidates
+}
+
+/// Cheap candidate prefilter used before the per-source window cap.
+///
+/// Uses only bounded token-set comparisons (name, signature, size) so the
+/// expensive full scoring pass still runs on at most
+/// `MAX_SIMILAR_CANDIDATES_PER_SOURCE` candidates.
+pub(super) fn similar_prefilter_score(
+    source: &CallableFingerprint,
+    candidate: &CallableFingerprint,
+) -> f64 {
+    let name_overlap = jaccard(&source.name_tokens, &candidate.name_tokens);
+    let signature_overlap = jaccard(&source.signature_tokens, &candidate.signature_tokens);
+    let size_overlap = overlap_ratio(source.loc, candidate.loc);
+    (name_overlap * 0.25) + (signature_overlap * 0.45) + (size_overlap * 0.30)
 }
 
 pub(super) fn build_similar_match(

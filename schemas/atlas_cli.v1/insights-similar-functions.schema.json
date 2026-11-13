@@ -18,6 +18,7 @@
         "summary": { "type": "object", "additionalProperties": false, "required": ["total_findings", "generated_at"], "properties": { "total_findings": { "type": "integer", "minimum": 0 }, "highest_severity": { "type": ["string", "null"], "enum": ["info", "low", "medium", "high", null] }, "generated_at": { "type": "string" } } },
         "findings": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
         "matches": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "no_candidates_hint": { "type": ["string", "null"] },
         "atlas_provenance": { "type": "object", "additionalProperties": false, "required": ["indexed_file_count"], "properties": { "indexed_file_count": { "type": "integer", "minimum": 0 }, "last_indexed_at": { "type": ["string", "null"] } } },
         "atlas_freshness": { "type": ["object", "null"], "additionalProperties": true }
       }

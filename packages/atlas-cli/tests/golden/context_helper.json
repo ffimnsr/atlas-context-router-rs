@@ -290,7 +290,7 @@
   },
   "budget_status": "within_budget",
   "budget_hit": false,
-  "budget_name": "review_context_extraction.max_nodes",
+  "budget_name": "context_extraction.max_nodes",
   "budget_limit": 50,
   "budget_observed": 3,
   "partial": false,

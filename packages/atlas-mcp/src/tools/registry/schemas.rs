@@ -586,6 +586,7 @@ pub(crate) struct GetContextArgsSchema {
     neighbors: Option<bool>,
     semantic: Option<bool>,
     include_saved_context: Option<bool>,
+    include_content_assets: Option<bool>,
     session_id: Option<String>,
     agent_id: Option<String>,
     merge_agent_partitions: Option<bool>,

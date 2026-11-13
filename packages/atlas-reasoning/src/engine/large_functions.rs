@@ -148,7 +148,7 @@ impl<'s> InsightsEngine<'s> {
         let candidates = rank_large_function_candidates(self, &snapshot, &node_metrics, &request)?;
         let findings = candidates
             .iter()
-            .map(candidate_to_finding)
+            .map(|candidate| candidate_to_finding(candidate, request.mode))
             .collect::<Vec<_>>();
         let report = self.large_function_report(findings);
         let report_qnames = report
@@ -345,7 +345,10 @@ fn rank_large_function_candidates(
     Ok(candidates)
 }
 
-fn candidate_to_finding(candidate: &LargeFunctionCandidate) -> InsightFinding {
+fn candidate_to_finding(
+    candidate: &LargeFunctionCandidate,
+    mode: LargeFunctionMode,
+) -> InsightFinding {
     let severity = if candidate.loc >= candidate.threshold.saturating_mul(2)
         || candidate.cyclomatic_complexity.is_some_and(|value| {
             candidate
@@ -364,11 +367,39 @@ fn candidate_to_finding(candidate: &LargeFunctionCandidate) -> InsightFinding {
         InsightSeverity::Low
     };
 
+    let (category, id_prefix, title_prefix) = match mode {
+        LargeFunctionMode::Complex => ("complex_functions", "complex_function", "complex function"),
+        LargeFunctionMode::Large | LargeFunctionMode::LargeOrComplex => (
+            "large_functions",
+            "large_function",
+            "large or complex function",
+        ),
+    };
+    let mut details = serde_json::to_value(candidate).unwrap_or(serde_json::Value::Null);
+    if let Some(object) = details.as_object_mut() {
+        // `loc` is the field name used by the engine, but callers naturally ask
+        // for `line_count`. Expose both so the contract is unambiguous.
+        object.insert("line_count".to_owned(), serde_json::json!(candidate.loc));
+        object.insert(
+            "loc_threshold".to_owned(),
+            serde_json::json!(candidate.threshold),
+        );
+        let (governing_threshold, threshold_kind) = governing_threshold(candidate);
+        object.insert(
+            "governing_threshold".to_owned(),
+            serde_json::json!(governing_threshold),
+        );
+        object.insert(
+            "threshold_kind".to_owned(),
+            serde_json::json!(threshold_kind),
+        );
+    }
+
     InsightFinding {
-        id: format!("large_function:{}", candidate.qualified_name),
-        title: format!("large or complex function {}", candidate.display_name),
+        id: format!("{id_prefix}:{}", candidate.qualified_name),
+        title: format!("{title_prefix} {}", candidate.display_name),
         severity,
-        category: "large_functions".to_owned(),
+        category: category.to_owned(),
         message: format!(
             "{} spans {} lines at {}:{}-{}",
             candidate.qualified_name,
@@ -389,9 +420,54 @@ fn candidate_to_finding(candidate: &LargeFunctionCandidate) -> InsightFinding {
             confidence_tier: None,
         }],
         ranking_reason: candidate.ranking_reason.clone(),
-        details: Some(serde_json::to_value(candidate).unwrap_or(serde_json::Value::Null)),
+        details: Some(details),
         score: candidate.score,
     }
+}
+
+fn governing_threshold(candidate: &LargeFunctionCandidate) -> (usize, &'static str) {
+    let loc_excess = candidate.loc.saturating_sub(candidate.threshold);
+    let cyclomatic_excess = candidate
+        .cyclomatic_complexity
+        .zip(candidate.complexity_threshold)
+        .map(|(value, threshold)| value.saturating_sub(threshold))
+        .unwrap_or(0);
+    let cognitive_excess = candidate
+        .cognitive_complexity
+        .zip(candidate.cognitive_threshold)
+        .map(|(value, threshold)| value.saturating_sub(threshold))
+        .unwrap_or(0);
+    let nesting_excess = candidate
+        .max_nesting_depth
+        .zip(candidate.nesting_threshold)
+        .map(|(value, threshold)| value.saturating_sub(threshold))
+        .unwrap_or(0);
+
+    let mut governing = (candidate.threshold, "loc");
+    let mut best = loc_excess;
+    for (excess, threshold, kind) in [
+        (
+            cyclomatic_excess,
+            candidate.complexity_threshold.unwrap_or_default(),
+            "cyclomatic_complexity",
+        ),
+        (
+            cognitive_excess,
+            candidate.cognitive_threshold.unwrap_or_default(),
+            "cognitive_complexity",
+        ),
+        (
+            nesting_excess,
+            candidate.nesting_threshold.unwrap_or_default(),
+            "nesting_depth",
+        ),
+    ] {
+        if excess > best {
+            best = excess;
+            governing = (threshold, kind);
+        }
+    }
+    governing
 }
 
 fn ranking_reason(input: RankingReasonInput) -> String {

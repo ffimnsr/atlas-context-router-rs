@@ -271,7 +271,26 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                 ));
 
                 if *summary {
-                    println!("Dead-code candidates: {}", candidates.len());
+                    if cli.json {
+                        let mut certainty_counts = std::collections::BTreeMap::new();
+                        for candidate in &candidates {
+                            *certainty_counts
+                                .entry(candidate.certainty.to_string())
+                                .or_insert(0usize) += 1;
+                        }
+                        print_json(
+                            "analyze_dead_code",
+                            serde_json::json!({
+                                "summary": {
+                                    "candidate_count": candidates.len(),
+                                    "certainty_counts": certainty_counts,
+                                },
+                                "truncated": false,
+                            }),
+                        )?;
+                    } else {
+                        println!("Dead-code candidates: {}", candidates.len());
+                    }
                 } else if cli.json {
                     let payload = if feedback_evidence.is_empty() {
                         serde_json::to_value(&candidates)?

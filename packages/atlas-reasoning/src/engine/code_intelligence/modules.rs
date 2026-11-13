@@ -179,6 +179,11 @@ pub(super) fn build_inferred_modules(
     snapshot: &GraphSnapshot,
     assignments: &BTreeMap<String, FileModuleAssignment>,
 ) -> Vec<InferredModule> {
+    let node_by_qname = snapshot
+        .nodes
+        .iter()
+        .map(|node| (node.qualified_name.as_str(), node))
+        .collect::<HashMap<_, _>>();
     let node_to_module = snapshot
         .nodes
         .iter()
@@ -258,6 +263,20 @@ pub(super) fn build_inferred_modules(
                 .unwrap_or_default()
                 .into_iter()
                 .collect::<Vec<_>>();
+            let public_symbol_count = owned_symbols
+                .iter()
+                .filter(|qn| {
+                    node_by_qname
+                        .get(qn.as_str())
+                        .is_some_and(|node| is_public_symbol(node))
+                })
+                .count();
+            let internal_symbol_count = owned_symbols.len().saturating_sub(public_symbol_count);
+            let export_ratio = if owned_symbols.is_empty() {
+                0.0
+            } else {
+                public_symbol_count as f64 / owned_symbols.len() as f64
+            };
             InferredModule {
                 display_name: display_by_module
                     .get(&module_id)
@@ -265,6 +284,9 @@ pub(super) fn build_inferred_modules(
                     .unwrap_or_else(|| module_id.clone()),
                 root_paths: file_paths.iter().cloned().collect(),
                 node_count: owned_symbols.len(),
+                public_symbol_count,
+                internal_symbol_count,
+                export_ratio,
                 owned_symbols,
                 file_count: file_paths.len(),
                 outbound_dependencies: outbound_by_module
@@ -291,4 +313,12 @@ pub(super) fn build_inferred_modules(
 
     modules.sort_by(|left, right| left.module_id.cmp(&right.module_id));
     modules
+}
+
+fn is_public_symbol(node: &Node) -> bool {
+    node.modifiers.as_deref().is_some_and(|modifiers| {
+        modifiers
+            .split_whitespace()
+            .any(|token| token == "pub" || token.starts_with("pub("))
+    })
 }

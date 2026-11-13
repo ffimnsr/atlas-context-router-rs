@@ -47,11 +47,22 @@ pub struct ArchitectureModuleEdge {
     pub evidence: Vec<ArchitectureEdgeEvidence>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ArchitectureCounts {
+    pub module_count: usize,
+    pub module_edge_count: usize,
+    pub cycle_count: usize,
+    pub layer_violation_count: usize,
+    pub high_coupling_module_count: usize,
+    pub file_health_finding_count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArchitectureAnalysis {
     pub report: ArchitectureReport,
     pub modules: Vec<ArchitectureModuleNode>,
     pub edges: Vec<ArchitectureModuleEdge>,
+    pub counts: ArchitectureCounts,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +96,29 @@ impl<'s> InsightsEngine<'s> {
         );
         let findings =
             build_architecture_findings(self, &modules, &edges, &metrics.metrics.file_metrics);
+        // Count before `architecture_report` trims to `insights.max_findings`, so
+        // cycle/layer totals stay accurate even when the emitted sample is
+        // capped.
+        let counts = ArchitectureCounts {
+            module_count: modules.len(),
+            module_edge_count: edges.len(),
+            cycle_count: findings
+                .iter()
+                .filter(|finding| finding.category == "architecture_cycle")
+                .count(),
+            layer_violation_count: findings
+                .iter()
+                .filter(|finding| finding.category == "layer_violation")
+                .count(),
+            high_coupling_module_count: findings
+                .iter()
+                .filter(|finding| finding.category == "architecture_module_health")
+                .count(),
+            file_health_finding_count: findings
+                .iter()
+                .filter(|finding| finding.category == "architecture_file_health")
+                .count(),
+        };
         let report = self.architecture_report(findings);
 
         modules.sort_by(|left, right| left.module_id.cmp(&right.module_id));
@@ -98,6 +132,7 @@ impl<'s> InsightsEngine<'s> {
             report,
             modules,
             edges,
+            counts,
         })
     }
 }
@@ -322,7 +357,7 @@ fn build_architecture_findings(
                     "cycle_path": cycle_path,
                     "edges": cycle_edges,
                 })),
-                score: component.len() as f64,
+                score: 10_000.0 + component.len() as f64,
             });
         }
     }
@@ -354,7 +389,7 @@ fn build_architecture_findings(
                 "cycle_path": [edge.source_module.clone(), edge.target_module.clone()],
                 "edges": [edge],
             })),
-            score: 1.0,
+            score: 9_000.0 + 1.0,
         });
     }
 
@@ -414,7 +449,7 @@ fn build_architecture_findings(
                 "target_module": edge.target_module,
                 "edge_count": edge.evidence.len(),
             })),
-            score: (*source_index - *target_index + 1) as f64,
+            score: 8_000.0 + (*source_index - *target_index + 1) as f64,
         });
     }
 
@@ -457,7 +492,7 @@ fn build_architecture_findings(
                 "outbound_dependencies": module.external_dependency_edge_count,
                 "inbound_dependencies": module.inbound_dependency_edge_count,
             })),
-            score: module.coupling_score,
+            score: 1_000.0 + module.coupling_score,
         });
     }
 
@@ -513,7 +548,7 @@ fn build_architecture_findings(
                 "modules": component,
                 "average_coupling": average_coupling,
             })),
-            score: average_coupling,
+            score: 2_000.0 + average_coupling,
         });
     }
 

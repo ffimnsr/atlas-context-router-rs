@@ -214,6 +214,7 @@ pub(super) fn tools() -> Vec<Value> {
                         "neighbors": { "type": "boolean", "description": "Include containment-sibling nodes — functions/types in the same parent scope (default false)." },
                         "semantic":  { "type": "boolean", "description": "Run graph-aware semantic search to resolve the best-matching qualified name before building context (default false). Useful when the symbol name is ambiguous or approximate." },
                         "include_saved_context": { "type": "boolean", "description": "When true, also query the content store for saved artifacts relevant to this request and include them in the result (default false)." },
+                        "include_content_assets": { "type": "boolean", "description": "Merge non-code retrieval assets (docs, config, SQL, prompts) into assets. Defaults to true when the file/files target includes a non-code path." },
                         "session_id": { "type": "string",  "description": "Restrict saved-context retrieval to artifacts from this session and apply a same-session relevance boost." },
                         "agent_id": { "type": "string",  "description": "Restrict saved-context retrieval to one agent memory partition." },
                         "merge_agent_partitions": { "type": "boolean", "description": "Intentionally merge context across all agent partitions instead of filtering to one partition." },

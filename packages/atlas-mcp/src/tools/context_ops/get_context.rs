@@ -1,5 +1,26 @@
 use super::*;
 
+/// Non-code assets that the retrieval index can merge next to graph nodes.
+fn is_content_asset_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.starts_with("docs/")
+        || lower.starts_with("wiki/")
+        || [
+            ".md",
+            ".markdown",
+            ".toml",
+            ".yaml",
+            ".yml",
+            ".json",
+            ".sql",
+            ".html",
+            ".css",
+            ".txt",
+        ]
+        .iter()
+        .any(|extension| lower.ends_with(extension))
+}
+
 pub(crate) fn tool_get_context(
     args: Option<&serde_json::Value>,
     repo_root: &str,
@@ -128,6 +149,16 @@ pub(crate) fn tool_get_context(
     request.exclude_subpaths = exclude_subpaths;
     request.include_telemetry = include_telemetry;
     request.include_ranking_evidence = include_ranking_evidence;
+    // Non-code targets (docs, config, SQL, prompts) should merge retrieval
+    // assets automatically; callers can still force the behaviour with
+    // `include_content_assets`.
+    let target_has_content_assets = target
+        .file
+        .iter()
+        .chain(target.files.iter())
+        .any(|path| is_content_asset_path(path));
+    request.include_content_assets =
+        bool_arg(args, "include_content_assets").unwrap_or(target_has_content_assets);
 
     let store = open_store(db_path)?;
     let policy = load_budget_policy(repo_root)?;
@@ -180,15 +211,26 @@ pub(crate) fn tool_get_context(
         engine
     };
 
-    let result = if include_saved_context {
+    let mut content_warning: Option<String> = None;
+    let needs_content_store = include_saved_context || request.include_content_assets;
+    let result = if needs_content_store {
         let content_db = derive_content_db_path(db_path);
         match ContentStore::open(&content_db) {
             Ok(mut cs) => {
-                let _ = cs.migrate();
+                if let Err(error) = cs.migrate() {
+                    content_warning = Some(format!(
+                        "retrieval index unavailable; content assets were not merged: {error}"
+                    ));
+                }
                 let engine = engine.with_content_store(&cs);
                 engine.build(&request).context("context engine failed")?
             }
-            Err(_) => engine.build(&request).context("context engine failed")?,
+            Err(error) => {
+                content_warning = Some(format!(
+                    "retrieval index unavailable; content assets were not merged: {error}"
+                ));
+                engine.build(&request).context("context engine failed")?
+            }
         }
     } else {
         engine.build(&request).context("context engine failed")?
@@ -267,6 +309,19 @@ pub(crate) fn tool_get_context(
             object.insert("artifact_kind".to_owned(), json!("saved_context"));
             Value::Object(object)
         })
+        .chain(
+            packaged_value
+                .get("content_assets")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|asset| {
+                    let mut object = as_object_map(asset);
+                    object.insert("artifact_kind".to_owned(), json!("content_asset"));
+                    Value::Object(object)
+                }),
+        )
         .collect::<Vec<_>>();
     let ranked_symbols = packaged_value
         .get("nodes")
@@ -339,6 +394,7 @@ pub(crate) fn tool_get_context(
     });
     let mut normalized_payload = as_object_map(packaged_value.clone());
     normalized_payload.remove("saved_context_sources");
+    normalized_payload.remove("content_assets");
     normalized_payload.insert("mode".to_owned(), json!(mode));
     normalized_payload.insert(
         "target".to_owned(),
@@ -447,11 +503,14 @@ pub(crate) fn tool_get_context(
         })
     };
     normalized_payload.insert("lookup".to_owned(), lookup);
-    let warnings = if result.nodes.is_empty() {
+    let mut warnings = if result.nodes.is_empty() {
         vec![error_message("node_not_found").to_owned()]
     } else {
         Vec::new()
     };
+    if let Some(warning) = content_warning {
+        warnings.push(warning);
+    }
 
     let mut response = build_normalized_success_response(
         "get_context",

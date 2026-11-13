@@ -91,6 +91,14 @@ pub(crate) fn tool_get_impact_radius(
             serde_json::to_value(&packaged.impacted_nodes)?,
         );
         payload.insert(
+            "affected_nodes".to_owned(),
+            serde_json::to_value(&packaged.impacted_nodes)?,
+        );
+        payload.insert(
+            "affected_files".to_owned(),
+            serde_json::to_value(packaged.impacted_files)?,
+        );
+        payload.insert(
             "boundary_summary".to_owned(),
             boundary_summary_json(&advanced),
         );
@@ -168,6 +176,14 @@ pub(crate) fn tool_get_impact_radius(
     payload.insert(
         "impacted_symbols".to_owned(),
         serde_json::to_value(&packaged.impacted_nodes)?,
+    );
+    payload.insert(
+        "affected_nodes".to_owned(),
+        serde_json::to_value(&packaged.impacted_nodes)?,
+    );
+    payload.insert(
+        "affected_files".to_owned(),
+        serde_json::to_value(packaged.impacted_files)?,
     );
     payload.insert(
         "boundary_summary".to_owned(),

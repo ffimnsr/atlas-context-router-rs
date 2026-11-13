@@ -150,6 +150,7 @@ pub(super) fn parse_get_context_target(
             "file" => {
                 let file = target
                     .get("file")
+                    .or_else(|| target.get("path"))
                     .and_then(|value| value.as_str())
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
@@ -185,6 +186,7 @@ pub(super) fn parse_get_context_target(
             "files" => {
                 let files = target
                     .get("files")
+                    .or_else(|| target.get("paths"))
                     .and_then(|value| value.as_array())
                     .ok_or_else(|| {
                         get_context_target_error(

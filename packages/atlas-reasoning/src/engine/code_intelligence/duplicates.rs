@@ -24,7 +24,7 @@ impl<'s> InsightsEngine<'s> {
             .into_iter()
             .collect::<BTreeSet<_>>();
         fingerprints.retain(|item| {
-            (request.include_tests || !item.summary.file_path.starts_with("tests/"))
+            (request.include_tests || !is_test_fingerprint(item))
                 && (file_scope.is_empty() || file_scope.contains(&item.summary.file_path))
         });
 
@@ -54,6 +54,21 @@ impl<'s> InsightsEngine<'s> {
             groups,
         })
     }
+}
+
+pub(super) fn is_test_fingerprint(item: &CallableFingerprint) -> bool {
+    item.summary.node_kind == "test" || is_test_path(&item.summary.file_path)
+}
+
+/// Match the test layouts used by this workspace: the repository-level
+/// `tests/` root, per-crate `tests/` directories, inline `tests.rs` modules,
+/// and `*_tests.rs` integration files.
+pub(super) fn is_test_path(file_path: &str) -> bool {
+    file_path.starts_with("tests/")
+        || file_path.contains("/tests/")
+        || file_path.ends_with("/tests.rs")
+        || file_path == "tests.rs"
+        || file_path.ends_with("_tests.rs")
 }
 
 pub(super) fn detect_duplicate_groups(
@@ -210,5 +225,26 @@ pub(super) fn build_duplicate_group(
         files,
         members: member_summaries,
         suggested_extraction_target,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_test_path;
+
+    #[test]
+    fn test_paths_cover_crate_layouts() {
+        for path in [
+            "tests/integration.rs",
+            "packages/atlas-mcp/src/rmcp_server/tests/mod.rs",
+            "packages/atlas-mcp/tests/contract.rs",
+            "packages/atlas-cli/tests.rs",
+            "packages/atlas-cli/src/commands_tests.rs",
+        ] {
+            assert!(is_test_path(path), "expected test path: {path}");
+        }
+        for path in ["src/lib.rs", "packages/atlas-cli/src/main.rs"] {
+            assert!(!is_test_path(path), "expected production path: {path}");
+        }
     }
 }
