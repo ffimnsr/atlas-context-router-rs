@@ -59,7 +59,16 @@ pub fn build_context(
                 },
                 ..request.clone()
             };
-            build_impact_context(store, &expanded, policy)
+            let mut result = build_impact_context(store, &expanded, policy)?;
+            // The expansion is an implementation detail: report the seeds as
+            // file symbols so the caller does not see a phantom `changed_symbols`
+            // budget for a plain file target.
+            for seed in &mut result.seed_budgets {
+                if seed.seed_kind == "changed_symbols" {
+                    seed.seed_kind = "file_symbols".to_owned();
+                }
+            }
+            Ok(result)
         }
         ResolvedTarget::Ambiguous(meta) => Ok(build_ambiguous_result(request, meta)),
         ResolvedTarget::NotFound { suggestions } => {

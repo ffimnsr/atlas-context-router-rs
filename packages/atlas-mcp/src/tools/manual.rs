@@ -555,7 +555,22 @@ fn manual_lookup_error_response(
     error: ManualLookupError,
     output_format: OutputFormat,
 ) -> Result<Value> {
-    let payload = match error {
+    let payload = manual_error_payload("man", &error);
+    tool_execution_error_value(output_format, &payload)
+}
+
+fn tool_help_error_response(
+    error: ManualLookupError,
+    output_format: OutputFormat,
+) -> Result<Value> {
+    let payload = manual_error_payload("tool_help", &error);
+    tool_execution_error_value(output_format, &payload)
+}
+
+/// One error payload builder for both manual surfaces so `man` and `tool_help`
+/// cannot drift in code, suggestions, or retry guidance.
+fn manual_error_payload(tool: &str, error: &ManualLookupError) -> ToolErrorPayload {
+    match error {
         ManualLookupError::UnknownNamespace { namespace } => ToolErrorPayload::new(
             ToolErrorCode::InvalidInput,
             format!(
@@ -567,8 +582,8 @@ fn manual_lookup_error_response(
                 }
             ),
         )
-        .with_tool("man")
-        .with_retry_guidance("Use exact form: man mcp <mcp_tool_name>.")
+        .with_tool(tool)
+        .with_retry_guidance("Use namespace 'mcp' with an exact exported tool name, then retry.")
         .with_details(json!({
             "requested_namespace": namespace,
             "accepted_namespaces": ["mcp"],
@@ -577,71 +592,28 @@ fn manual_lookup_error_response(
                 "tool_name": "query_graph"
             }
         })),
-        ManualLookupError::MissingToolName => ToolErrorPayload::new(
-            ToolErrorCode::InvalidInput,
-            "missing MCP tool name for manual lookup",
-        )
-        .with_tool("man")
-        .with_retry_guidance("Use exact form: man mcp <mcp_tool_name>.")
-        .with_details(json!({
-            "requested_namespace": "mcp",
-            "retry_example": {
-                "namespace": "mcp",
-                "tool_name": "query_graph"
-            }
-        })),
+        ManualLookupError::MissingToolName => {
+            ToolErrorPayload::new(ToolErrorCode::InvalidInput, format!("missing MCP tool name for {tool}"))
+                .with_tool(tool)
+                .with_retry_guidance(
+                    "Call tool_list or tool_search, then retry with one exact exported MCP tool name.",
+                )
+                .with_details(json!({
+                    "retry_example": {
+                        "name": "query_graph"
+                    }
+                }))
+        }
         ManualLookupError::HiddenInternalTool { tool_name } => ToolErrorPayload::new(
             ToolErrorCode::InvalidInput,
             format!("tool '{tool_name}' is hidden or internal and has no public manual entry"),
         )
-        .with_tool("man")
-        .with_retry_guidance("Request a visible exported MCP tool name from tools/list.")
-        .with_details(json!({
-            "requested_tool_name": tool_name,
-            "reason": "hidden_or_internal_tool"
-        })),
-        ManualLookupError::UnknownTool {
-            tool_name,
-            suggestions,
-        } => ToolErrorPayload::new(
-            ToolErrorCode::InvalidInput,
-            format!("unknown MCP tool '{tool_name}'"),
-        )
-        .with_tool("man")
-        .with_retry_guidance("Call tools/list or retry with an exact exported MCP tool name.")
-        .with_details(json!({
-            "requested_tool_name": tool_name,
-            "suggestions": suggestions,
-        })),
-    };
-    tool_execution_error_value(output_format, &payload)
-}
-
-fn tool_help_error_response(
-    error: ManualLookupError,
-    output_format: OutputFormat,
-) -> Result<Value> {
-    let payload = match error {
-        ManualLookupError::MissingToolName => ToolErrorPayload::new(
-            ToolErrorCode::InvalidInput,
-            "missing MCP tool name for tool_help",
-        )
-        .with_tool("tool_help")
-        .with_retry_guidance("Use exact form: tool_help { name: \"query_graph\" }.")
-        .with_details(json!({
-            "retry_example": {
-                "name": "query_graph"
-            }
-        })),
-        ManualLookupError::HiddenInternalTool { tool_name } => ToolErrorPayload::new(
-            ToolErrorCode::InvalidInput,
-            format!("tool '{tool_name}' is hidden or internal and has no public help entry"),
-        )
-        .with_tool("tool_help")
+        .with_tool(tool)
         .with_retry_guidance("Use tool_list or tool_search to pick a visible exported MCP tool.")
         .with_details(json!({
             "requested_tool_name": tool_name,
-            "reason": "hidden_or_internal_tool"
+            "reason": "hidden_or_internal_tool",
+            "suggestions": []
         })),
         ManualLookupError::UnknownTool {
             tool_name,
@@ -650,20 +622,15 @@ fn tool_help_error_response(
             ToolErrorCode::InvalidInput,
             format!("unknown MCP tool '{tool_name}'"),
         )
-        .with_tool("tool_help")
-        .with_retry_guidance("Use tool_search when the exact name is unclear, then retry tool_help with one exact exported name.")
+        .with_tool(tool)
+        .with_retry_guidance(
+            "Call tool_search when the exact name is unclear, then retry with one exact exported tool name.",
+        )
         .with_details(json!({
             "requested_tool_name": tool_name,
-            "suggestions": suggestions,
+            "suggestions": suggestions
         })),
-        ManualLookupError::UnknownNamespace { .. } => ToolErrorPayload::new(
-            ToolErrorCode::InvalidInput,
-            "tool_help only supports exported MCP tools",
-        )
-        .with_tool("tool_help")
-        .with_retry_guidance("Use exact form: tool_help { name: \"query_graph\" }."),
-    };
-    tool_execution_error_value(output_format, &payload)
+    }
 }
 
 fn manual_lookup_error_message(error: &ManualLookupError) -> String {

@@ -154,6 +154,52 @@ fn saved_context_cap_drops_low_ranked_sources() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn caller_token_budget_holds_for_file_and_symbol_targets() {
+    let mut store = open_store();
+    seed_graph(&mut store);
+
+    let targets = [
+        ContextTarget::FilePath {
+            path: "src/a.rs".to_owned(),
+        },
+        ContextTarget::QualifiedName {
+            qname: "src/a.rs::fn_a".to_owned(),
+        },
+        ContextTarget::ChangedSymbols {
+            qnames: vec![
+                "src/a.rs::fn_a".to_owned(),
+                "src/a.rs::fn_a_helper".to_owned(),
+            ],
+        },
+    ];
+
+    for target in targets {
+        for max_nodes in [5usize, 15] {
+            for token_budget in [400usize, 800] {
+                let req = ContextRequest {
+                    max_nodes: Some(max_nodes),
+                    token_budget: Some(token_budget),
+                    target: target.clone(),
+                    ..ContextRequest::default()
+                };
+                let result = ContextEngine::new(&store)
+                    .build(&req)
+                    .expect("build context under caller token budget");
+                let Some(payload) = result.truncation.payload.as_ref() else {
+                    continue;
+                };
+                let limit = payload.token_budget_applied.unwrap_or(token_budget);
+                assert!(
+                    payload.tokens_estimated <= limit,
+                    "tokens_estimated {} exceeds applied limit {limit} for target {target:?} max_nodes={max_nodes} requested_budget={token_budget}",
+                    payload.tokens_estimated
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn token_budget_refill_restores_units_that_still_fit() {
     let mut store = open_store();
     seed_graph(&mut store);

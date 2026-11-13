@@ -103,9 +103,13 @@ pub(crate) fn overview_show_output_schema() -> Value {
     normalized_tool_output_schema(
         json!({
             "repo_root": { "type": "string" },
+            "found": { "type": "boolean" },
+            "code": { "type": "string" },
+            "subject": { "type": "string" },
             "level": { "type": "string" },
             "view": { "type": "object" },
-            "record": { "type": "object" },
+            "record": { "type": ["object", "null"] },
+            "matches": { "type": "array", "items": { "type": "object" } },
             "summary": summary_schema(
                 &[
                     "overview_id",
@@ -124,7 +128,7 @@ pub(crate) fn overview_show_output_schema() -> Value {
             ),
             "warnings": warnings_schema()
         }),
-        &["tool", "repo_root", "record", "summary", "warnings"],
+        &["tool", "repo_root", "found", "matches", "warnings"],
         None,
     )
 }

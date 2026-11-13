@@ -414,26 +414,33 @@ impl<'a> ContextEngine<'a> {
         let edge_limit = result.request.max_edges.unwrap_or(DEFAULT_MAX_EDGES);
         let file_limit = result.request.max_files.unwrap_or(DEFAULT_MAX_FILES);
         let prefix = extraction_budget_prefix(effective_request.intent);
+        // Report each budget against the limit that actually governed it. A
+        // report is only emitted when the observed count exceeds its limit, so
+        // collateral drops (edges removed with a trimmed node) no longer surface
+        // as a phantom `max_edges` hit at 18/100.
+        let observed_nodes = result.nodes.len() + result.truncation.nodes_dropped;
+        let observed_edges = result.edges.len() + result.truncation.edges_dropped;
+        let observed_files = result.files.len() + result.truncation.files_dropped;
         budgets.record_usage(
             self.budget_policy.review_context_extraction.nodes,
-            "review_context_extraction.max_nodes",
+            format!("{prefix}.max_nodes"),
             node_limit,
-            result.nodes.len() + result.truncation.nodes_dropped,
-            result.truncation.nodes_dropped > 0,
+            observed_nodes,
+            observed_nodes > node_limit,
         );
         budgets.record_usage(
             self.budget_policy.review_context_extraction.edges,
-            "review_context_extraction.max_edges",
+            format!("{prefix}.max_edges"),
             edge_limit,
-            result.edges.len() + result.truncation.edges_dropped,
-            result.truncation.edges_dropped > 0,
+            observed_edges,
+            observed_edges > edge_limit,
         );
         budgets.record_usage(
             self.budget_policy.review_context_extraction.files,
-            "review_context_extraction.max_files",
+            format!("{prefix}.max_files"),
             file_limit,
-            result.files.len() + result.truncation.files_dropped,
-            result.truncation.files_dropped > 0,
+            observed_files,
+            observed_files > file_limit,
         );
         record_seed_budget_reports(&mut budgets, &result);
         record_payload_budget_reports(&mut budgets, &result, &self.budget_policy);
@@ -511,7 +518,9 @@ fn record_seed_budget_reports(budgets: &mut BudgetManager, result: &ContextResul
 
         let budget_name = match seed.seed_kind.as_str() {
             "changed_files" => "graph_traversal.max_seed_files",
-            "changed_symbols" => "graph_traversal.max_seed_nodes",
+            // File targets seed the symbols they contain; keep the same central
+            // seed-node budget name instead of leaking the synthetic kind.
+            "changed_symbols" | "file_symbols" => "graph_traversal.max_seed_nodes",
             "symbol_resolution" => "query_candidates_and_seeds.symbol_resolution",
             other => other,
         };

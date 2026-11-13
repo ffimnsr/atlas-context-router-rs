@@ -67,6 +67,53 @@ fn call_tool_invalid_input_returns_user_visible_error_result() {
 }
 
 #[test]
+fn structured_error_envelope_covers_validation_failures() {
+    let fixture = ToolFixture::new();
+    let cases: [(&str, Value); 7] = [
+        ("overview_show", json!({})),
+        (
+            "overview_ingest",
+            json!({"analysis": {"schema_version": 1}}),
+        ),
+        (
+            "memoir_link",
+            json!({"graph": "Architecture", "source": "a", "target": "b"}),
+        ),
+        ("tool_help", json!({})),
+        (
+            "man",
+            json!({"namespace": "mcp", "tool_name": "trac_calls"}),
+        ),
+        ("search_files", json!({"pattern": "*", "subpath": "crates"})),
+        ("search_text_assets", json!({"subpath": "crates"})),
+    ];
+
+    for (tool, args) in cases {
+        let response = fixture
+            .server
+            .call_tool_for_tests(call_tool_request(tool, Some(args.clone())))
+            .unwrap_or_else(|error| panic!("{tool} call failed: {error}"));
+        let complete = expect_complete(response);
+        assert_eq!(complete.is_error, Some(true), "{tool} must fail: {args}");
+        let structured = complete
+            .structured_content
+            .as_ref()
+            .unwrap_or_else(|| panic!("{tool} error must carry structuredContent"));
+        assert!(
+            structured.get("code").and_then(Value::as_str).is_some(),
+            "{tool} error must carry a stable code: {structured}"
+        );
+        assert!(
+            structured
+                .get("message")
+                .and_then(Value::as_str)
+                .is_some_and(|message| !message.is_empty()),
+            "{tool} error must carry a message: {structured}"
+        );
+    }
+}
+
+#[test]
 fn call_tool_unknown_tool_returns_protocol_error() {
     let fixture = ToolFixture::new();
     let error = fixture

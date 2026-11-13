@@ -383,10 +383,17 @@ fn normalize_tool_error_text(text: impl AsRef<str>) -> String {
 }
 
 fn tool_retry_guidance(detail: &str) -> &'static str {
+    let lowered = detail.to_ascii_lowercase();
     if detail.contains("invalid regex pattern") {
         "Fix regex syntax, or switch to literal-search mode if regex is not required, then retry."
     } else if detail.contains("graph not ready") || detail.contains("stale graph") {
         "Run graph build/update or allow stale/partial mode when supported, then retry."
+    } else if lowered.contains("create_missing") {
+        "Retry with create_missing: true to create the missing memoir concepts, or add them first."
+    } else if lowered.contains("overview analysis")
+        || lowered.contains("provide an `analysis` object")
+    {
+        "Send an `analysis` object or a `path` to analysis JSON, then retry."
     } else if detail.contains("missing required")
         || detail.contains("missing ")
         || detail.contains("invalid ")
@@ -445,6 +452,9 @@ fn classify_tool_execution_error(message: &str, detail: &str) -> (ToolErrorCode,
         || lowered.contains("invalid exclude_globs filter")
         || lowered.contains("invalid template extension patterns")
         || lowered.contains("invalid text-asset extension patterns")
+        || lowered.contains("invalid overview analysis")
+        || lowered.contains("create_missing")
+        || lowered.contains("provide an `analysis` object")
         || lowered.contains("missing required")
         || lowered.contains("provide exactly one selector")
         || lowered.contains("line numbers are 1-based")
@@ -515,8 +525,9 @@ fn infer_resource_links(raw: &Value) -> Vec<ResourceLink> {
 mod tests {
     use super::{
         InputShapeErrorSpec, ToolErrorCode, ToolErrorPayload, ToolResultBuilder,
-        ToolSuccessEnvelope, input_shape_error_payload, normalize_tool_error_text,
-        normalized_tool_result_value, structured_content, tool_execution_error_value,
+        ToolSuccessEnvelope, classify_tool_execution_error, input_shape_error_payload,
+        normalize_tool_error_text, normalized_tool_result_value, structured_content,
+        tool_execution_error_value, tool_retry_guidance,
     };
     use crate::output::OutputFormat;
     use serde_json::json;
@@ -743,6 +754,27 @@ mod tests {
                 "_meta": {}
             })
         );
+    }
+
+    #[test]
+    fn error_classification_maps_memoir_and_overview_misses_to_invalid_input() {
+        let memoir = "memoir concept 'lexer' not found in graph 'Architecture'; pass create_missing to opt in to creation";
+        let (code, details) = classify_tool_execution_error(memoir, memoir);
+        assert_eq!(code, ToolErrorCode::InvalidInput);
+        assert_eq!(details["detail"], json!(memoir));
+        assert!(
+            tool_retry_guidance(memoir).contains("create_missing"),
+            "memoir misses must retry with create_missing guidance"
+        );
+
+        let invalid_object = "invalid overview analysis object: missing field `subject`";
+        let (code, _) = classify_tool_execution_error(invalid_object, invalid_object);
+        assert_eq!(code, ToolErrorCode::InvalidInput);
+
+        let missing_source = "provide an `analysis` object or a `path` to analysis JSON";
+        let (code, _) = classify_tool_execution_error(missing_source, missing_source);
+        assert_eq!(code, ToolErrorCode::InvalidInput);
+        assert!(tool_retry_guidance(missing_source).contains("analysis"));
     }
 
     #[test]

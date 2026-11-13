@@ -14,7 +14,10 @@ use atlas_session::{
 use serde_json::Value;
 
 use crate::output::OutputFormat;
-use crate::tool_result::tool_result_value as build_tool_result_value;
+use crate::tool_result::{
+    ToolErrorCode, ToolErrorPayload, tool_execution_error_value,
+    tool_result_value as build_tool_result_value,
+};
 
 fn string_arg<'a>(args: Option<&'a Value>, key: &str) -> Option<&'a str> {
     args.and_then(|a| a.get(key)).and_then(|v| v.as_str())
@@ -138,14 +141,29 @@ pub fn tool_overview_ingest(
     output_format: OutputFormat,
 ) -> Result<Value> {
     let analysis = if let Some(value) = args.and_then(|a| a.get("analysis")) {
-        serde_json::from_value::<OverviewAnalysisInput>(value.clone())
-            .context("invalid overview analysis object")?
+        match serde_json::from_value::<OverviewAnalysisInput>(value.clone()) {
+            Ok(analysis) => analysis,
+            Err(error) => return overview_ingest_invalid_input(output_format, error.to_string()),
+        }
     } else if let Some(path) = string_arg(args, "path").or_else(|| string_arg(args, "input")) {
-        let raw = std::fs::read_to_string(path)
-            .with_context(|| format!("cannot read overview analysis file {path}"))?;
-        serde_json::from_str(&raw).context("invalid overview analysis JSON")?
+        let raw = match std::fs::read_to_string(path) {
+            Ok(raw) => raw,
+            Err(error) => {
+                return overview_ingest_invalid_input(
+                    output_format,
+                    format!("cannot read overview analysis file {path}: {error}"),
+                );
+            }
+        };
+        match serde_json::from_str::<OverviewAnalysisInput>(&raw) {
+            Ok(analysis) => analysis,
+            Err(error) => return overview_ingest_invalid_input(output_format, error.to_string()),
+        }
     } else {
-        anyhow::bail!("provide an `analysis` object or a `path` to analysis JSON");
+        return overview_ingest_invalid_input(
+            output_format,
+            "provide an `analysis` object or a `path` to analysis JSON".to_owned(),
+        );
     };
 
     let store = crate::tools::shared::open_store(db_path)?;
@@ -244,31 +262,69 @@ pub fn tool_overview_show(
         .or_else(|| string_arg(args, "target"))
         .ok_or_else(|| anyhow::anyhow!("missing required argument: subject"))?;
     let session = open_session(db_path)?;
-    let record = session.resolve_overview_subject(repo_root, subject)?;
     let level = level_arg(args)?;
+    let record = match session
+        .resolve_overview_subject(repo_root, subject)
+        .map_err(anyhow::Error::from)
+    {
+        Ok(record) => Some(record),
+        // A missing subject is a normal lookup miss, not a tool failure. Return a
+        // stable object so callers can branch on `found` instead of parsing text.
+        Err(error) if overview_subject_miss(&error) => None,
+        Err(error) => return Err(error),
+    };
     build_tool_result_value(
-        &{
-            let mut payload = serde_json::json!({
+        &match record {
+            Some(record) => {
+                let mut payload = serde_json::json!({
+                    "tool": "overview_show",
+                    "repo_root": repo_root,
+                    "found": true,
+                    "subject": subject,
+                    "record": record.clone(),
+                    "matches": [record.clone()],
+                    "summary": {
+                        "overview_id": record.id,
+                        "subject_id": record.subject_id,
+                        "subject_kind": record.subject_kind.as_str(),
+                        "freshness": record.freshness.as_str(),
+                        "confidence": record.confidence,
+                    },
+                    "warnings": [],
+                });
+                if let Some(level) = level {
+                    payload["level"] = serde_json::json!(level.as_str());
+                    payload["view"] = serde_json::to_value(render_level(&record, level))?;
+                }
+                payload
+            }
+            None => serde_json::json!({
                 "tool": "overview_show",
                 "repo_root": repo_root,
-                "record": record,
-                "summary": {
-                    "overview_id": record.id,
-                    "subject_id": record.subject_id,
-                    "subject_kind": record.subject_kind.as_str(),
-                    "freshness": record.freshness.as_str(),
-                    "confidence": record.confidence,
-                },
-                "warnings": [],
-            });
-            if let Some(level) = level {
-                payload["level"] = serde_json::json!(level.as_str());
-                payload["view"] = serde_json::to_value(render_level(&record, level))?;
-            }
-            payload
+                "found": false,
+                "code": "subject_not_found",
+                "subject": subject,
+                "record": Value::Null,
+                "matches": [],
+                "warnings": [format!(
+                    "No overview record matches '{subject}'. Run overview_search or overview_export to list subjects."
+                )],
+            }),
         },
         output_format,
     )
+}
+
+fn overview_ingest_invalid_input(output_format: OutputFormat, message: String) -> Result<Value> {
+    let payload = ToolErrorPayload::new(ToolErrorCode::InvalidInput, message)
+        .with_tool("overview_ingest")
+        .with_retry_guidance("Send an `analysis` object or a `path` to analysis JSON, then retry.");
+    tool_execution_error_value(output_format, &payload)
+}
+
+fn overview_subject_miss(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    message.contains("overview subject") && message.contains("not found")
 }
 
 pub fn tool_overview_refresh_plan(

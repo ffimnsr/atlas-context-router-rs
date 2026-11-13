@@ -487,11 +487,14 @@ fn trim_context_payload(
     let mut set_aside = Vec::new();
     let measurement = loop {
         let measurement = measure_payload(result, counter);
-        if measurement.bytes <= byte_limit && measurement.tokens <= token_limit {
+        if fits_payload_budget(&measurement, byte_limit, token_limit) {
             break measurement;
         }
         if !trim_one_payload_unit_recording(result, &mut set_aside) {
-            return measurement;
+            // Only irreducible units (the seed node) remain. Degrade optional
+            // enrichment sections so the caller budget still holds instead of
+            // silently returning an oversized payload.
+            return trim_floor_sections(result, byte_limit, token_limit, counter);
         }
     };
 
@@ -499,6 +502,58 @@ fn trim_context_payload(
         return measurement;
     }
     refill_payload(result, set_aside, byte_limit, token_limit, counter)
+}
+
+fn fits_payload_budget(
+    measurement: &PayloadMeasurement,
+    byte_limit: usize,
+    token_limit: usize,
+) -> bool {
+    measurement.bytes <= byte_limit && measurement.tokens <= token_limit
+}
+
+/// Degrade optional enrichment sections when the payload cannot fit the budget
+/// even after every removable graph unit is gone.
+///
+/// Order is lowest-value first so the seed node, its edges, and the truncation
+/// accounting survive longest. Each step re-measures and stops as soon as the
+/// budget holds.
+fn trim_floor_sections(
+    result: &mut ContextResult,
+    byte_limit: usize,
+    token_limit: usize,
+    counter: &TokenCounter,
+) -> PayloadMeasurement {
+    let mut measurement = measure_payload(result, counter);
+    macro_rules! degrade {
+        ($apply:expr) => {{
+            $apply;
+            measurement = measure_payload(result, counter);
+            if fits_payload_budget(&measurement, byte_limit, token_limit) {
+                return measurement;
+            }
+        }};
+    }
+
+    if result.telemetry.is_some() {
+        degrade!(result.telemetry = None);
+    }
+    if !result.seed_budgets.is_empty() {
+        degrade!(result.seed_budgets.clear());
+    }
+    if result.traversal_budget.is_some() {
+        degrade!(result.traversal_budget = None);
+    }
+    if result.repo_provenance.is_some() {
+        degrade!(result.repo_provenance = None);
+    }
+    // `sufficiency` and `ambiguity` are contract-bearing (VR3 escalation and
+    // outcome classification), so they are never degraded here.
+    if result.workflow.is_some() {
+        degrade!(result.workflow = None);
+    }
+
+    measurement
 }
 
 /// A graph payload unit removed during trimming, retained so a later refill
@@ -527,7 +582,7 @@ fn refill_payload(
         insert_set_aside_unit(result, &unit);
         sort_payload_units(result);
         let candidate = measure_payload(result, counter);
-        if candidate.bytes <= byte_limit && candidate.tokens <= token_limit {
+        if fits_payload_budget(&candidate, byte_limit, token_limit) {
             accepted = candidate;
         } else {
             remove_set_aside_unit(result, &unit);

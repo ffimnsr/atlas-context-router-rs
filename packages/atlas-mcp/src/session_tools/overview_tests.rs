@@ -81,6 +81,60 @@ fn overview_ingest_show_search_and_refresh_plan_flow() {
 }
 
 #[test]
+fn overview_show_miss_returns_found_false_object() {
+    let (_dir, repo_root, db_path) = setup();
+
+    let shown = json_call(
+        tool_overview_show,
+        serde_json::json!({ "subject": "no-such-subject" }),
+        &repo_root,
+        &db_path,
+    );
+
+    assert_eq!(shown["found"], serde_json::json!(false));
+    assert_eq!(shown["code"], serde_json::json!("subject_not_found"));
+    assert_eq!(shown["subject"], serde_json::json!("no-such-subject"));
+    assert!(shown["record"].is_null());
+    assert_eq!(shown["matches"], serde_json::json!([]));
+    assert_eq!(shown["warnings"].as_array().map(Vec::len), Some(1));
+}
+
+#[test]
+fn overview_ingest_invalid_payload_returns_structured_invalid_input() {
+    let (_dir, repo_root, db_path) = setup();
+
+    let raw = tool_overview_ingest(
+        Some(&serde_json::json!({ "analysis": { "schema_version": 1 } })),
+        &repo_root,
+        &db_path,
+        OutputFormat::Json,
+    )
+    .expect("invalid ingest must still return a tool result envelope");
+
+    assert_eq!(raw["isError"], serde_json::json!(true));
+    assert_eq!(
+        raw["structuredContent"]["code"],
+        serde_json::json!("invalid_input")
+    );
+    assert_eq!(
+        raw["structuredContent"]["tool"],
+        serde_json::json!("overview_ingest")
+    );
+    assert!(
+        raw["structuredContent"]["message"]
+            .as_str()
+            .is_some_and(|message| !message.is_empty()),
+        "structured error must carry a message"
+    );
+    assert!(
+        raw["structuredContent"]["retry_guidance"]
+            .as_str()
+            .is_some_and(|guidance| guidance.contains("analysis")),
+        "structured error must carry retry guidance"
+    );
+}
+
+#[test]
 fn overview_export_packet_ingest_validates_packet_id() {
     let (_dir, repo_root, db_path) = setup();
 
