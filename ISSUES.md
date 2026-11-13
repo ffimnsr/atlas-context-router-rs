@@ -327,3 +327,90 @@ Run context: full `AGENTS_MCP_TESTS.md` sweep on `main` @ `f2a290b`, clean worki
 - [x] Update Tool 76 expectation: `tool_help` on an unknown tool returns a plain `unknown MCP tool '<name>'` message with no suggestion list.
 - [x] Refresh stale line references in Tools 42–43 so they point at current symbol locations (`classify_graph_store_error` L68, `is_schema_mismatch_error` L44 in `packages/atlas-core/src/health.rs`).
 - [x] Fix the `analyze_patterns` and `find_similar_functions` expectations in Tools 33 and 36 to match category diversity and the default `0.22` similarity floor.
+
+---
+
+## Open Defects — MCP Tool Sweep (2026-11-13, run 2 @ `8db5186`)
+
+Run context: full `AGENTS_MCP_TESTS.md` sweep with the graph healthy (962 files / 26877 nodes / 104034 edges, `doctor` 17/17, schemas graph 21/21, content 11/11, session 16/16). Tools 79 `build_graph` and 80 `update_graph` were skipped as destructive; `purge_saved_context` was attempted only in fail-closed forms. Suites ran per category (health, search, traversal, review/context, analysis A/B, content, embedding+introspection, session A/B, memoir, overview, resources/CLI). Items tagged **[verified]** were reproduced directly by the parent agent; the rest were observed by subagents and need a repro pass before editing.
+
+### Confirmed this run
+
+- [ ] **fix(get_impact_radius)**: impact traversal returns no dependents for a file with real callers. **[verified]** `change_source={kind:files, files:["packages/atlas-core/src/health.rs"]}`, depth 2, max_nodes 20 → `changed_symbols` = 20, `affected_files`/`affected_nodes`/`impacted_symbols` = `[]`, `summary.seed_budget_count` = 0, `budget_hit:true` while `truncated:false`. `cross_file_links` reports `packages/atlas-core/src/readiness.rs` as a dependent, so the reverse tier filter is dropping every `same_package` dependent. Check the impact seed/tier selection in `packages/atlas-review/src/context/build.rs` and `packages/atlas-mcp/src/tools/context_ops/impact.rs`.
+- [ ] **fix(read_saved_context)**: indexed artifacts are returned lossily, so JSON is no longer reconstructable. **[verified]** saved a 956 B JSON payload (`source_id=c536ac758208e80e6df546d148d029af`); read returned 1067 B of concatenated chunk text: `"status":"ok"` → `"ok"`, `"nodes_checked":25000` → `25000`. Persist the raw payload at save time and serve it verbatim from `packages/atlas-mcp/src/session_tools/artifact_io.rs` instead of re-joining chunk bodies.
+- [ ] **fix(explain_query)**: reported tokenization disagrees with the real FTS index. **[verified]** `tokenization.fts_tokens` = `["classify_graph_store_error"]` (1 token), but `nodes_fts` splits `_`, so `MATCH '"classify_graph_store_error"'` and `MATCH '"classify" AND "store"'` both return rows (2 and 3 respectively). Query results are still correct; only the explanation is wrong. `tokenize_fts` in `packages/atlas-search/src/execution.rs:132` keeps `_` as a token char (`!c.is_alphanumeric() && c != '_'`).
+- [ ] **fix(search_files)**: `max_results` is declared but never read, and discovery listing is clamped below every declared limit. **[verified in source]** `packages/atlas-mcp/src/discovery/search_files.rs` has no `max_results` lookup (unlike `search_templates.rs:72` and `search_text_assets.rs:93`), and all three route through `budgets.resolve_limit(..., ReviewContextExtraction, ...)`, which caps at 20 even when 100 is requested. Observed: `truncated:true` at 20 with no paging arg. Decouple discovery listing from the review-context budget policy and register `max_results` for `search_files`.
+- [ ] **fix(debug_graph)**: wire field names differ from the documented and CLI shapes. **[verified in source]** `packages/atlas-mcp/src/tools/health.rs:1157` emits `node_counts_by_kind` (and `edge_counts_by_kind`) while the test guide and `atlas debug-graph --json` use `nodes_by_kind` / `edges_by_kind`. Align the MCP payload and `registry/output_schemas/health.rs`.
+- [ ] **fix(purge_saved_context)**: tool cannot run in clients that do not advertise `elicitation.form`. Observed plain-text error `client does not advertise elicitation.form capability` for all three Tool 57 cases, plus `atlas session purge` is not a CLI subcommand. Either gate the tool with an explicit capability requirement in the registry/`tool_help` output, or allow a non-interactive purge path for bounded `keep_days` cleanup. (`packages/atlas-mcp/src/elicitation.rs:30`)
+- [ ] **fix(save_context_artifact)**: sanitizer rewrites benign repeated payloads before routing. **[verified]** a payload containing four 64-char repeated runs came back with every value replaced by `[REDACTED]`, and a 451 B payload stayed `raw_inline` although the guide documents the inline cutoff at ~360 B. Confirm the redaction heuristic and the real `route_output` threshold in `packages/atlas-mcp/src/session_tools/saved_context.rs:447` (against the content store config).
+
+### Session continuity and memory
+
+- [ ] **fix(compact_session)**: repeated compaction is not a no-op, contradicting the earlier fix note above. Observed second call 33→32 events, `decayed_events`/`removed_events` = 2, `no_op:false`. Compaction appears to append curation events that the next pass decays. `packages/atlas-session/src/store/curation.rs`.
+- [ ] **fix(resume_session)**: a consumed snapshot row still suppresses rebuilds, so `get_session_status.resume_snapshot_exists` reports `false` while `resume_session` keeps serving a stale `existing_snapshot` (live anchor from 2026-11-12 with event_count 24 against 62+ live events). `packages/atlas-session/src/store/resume.rs`.
+- [ ] **fix(search_saved_context)**: each query writes a decision memory (`reuse prior decision during saved-context lookup: …`), which crowds real decisions in `wake_up` (7/7 recalled decisions were these rows). `packages/atlas-mcp/src/session_tools/saved_context.rs:304`.
+- [ ] **fix(wake_up CLI)**: `atlas wake-up --json` omits `summary.recorded`, `event_recorded`, and `agent_id`, and never writes a session-start event, so MCP and CLI diverge. `packages/atlas-cli/src/commands/wake_up.rs`.
+- [ ] **fix(session CLI surface)**: `session save-artifact`, `read-artifact`, `search`, and `stats` subcommands are absent; `session compact`/`resume` accept no `--session` selector; `session status`/`compact` JSON shapes differ from MCP. `packages/atlas-cli/src/cli/subcommands.rs`, `packages/atlas-cli/src/commands/session.rs`.
+- [ ] **fix(memory CLI surface)**: `atlas memory global` / `atlas memory decisions` do not exist (decisions live under `atlas session decisions`), `atlas memory ops <id> --json` exits 1 with no `found` field, `atlas memory store` takes text positionally and rejects the documented flag form, and `atlas experience <uri>` requires the `inspect` subcommand.
+- [ ] **fix(experience_inspect)**: `experience_edges` has 0 rows repo-wide, so Tool 63 assertions are unexercisable; no code path currently records experience edges. Either wire a producer or document the surface as report-only/empty until populated.
+
+### Review context and change analysis
+
+- [ ] **fix(get_review_context)**: `exact_dir` is parsed into the request but never applied to changed-file seeds; a `packages/atlas-mcp` scope still returned 32 out-of-scope files. `packages/atlas-review/src/context/build.rs`.
+- [ ] **fix(get_review_context)**: `impacted_neighbors` and `critical_edges` are never populated, and truncation accounting is inconsistent (`emitted_node_count:40`, `emitted_edge_count:70` against an 8-node / 0-edge payload).
+- [ ] **fix(get_minimal_context/get_review_context/explain_change)**: changed-symbol mapping has no per-file fair share, so markdown heading nodes always win and `.rs` files contribute zero changed symbols on a 32-file delta.
+- [ ] **fix(explain_change)**: markdown headings count as untested symbols, producing false `coverage_gaps` and escalating a docs-only delta to `risk:medium`; payload also exceeds the 32 KB cap (40 KB) while `max_nodes` does not bound it.
+- [ ] **fix(get_context)**: for a multi-file target the docs asset consumes the whole merged node budget (`file_count:1` vs 2 files), and `linked_decisions` is charged inside `token_budget`, evicting graph callers.
+
+### Analysis quality
+
+- [ ] **fix(analyze_patterns)**: the per-category fair-share cap is computed from `config.max_findings/4` rather than the requested limit, so a small `limit` (3-5) still returns only `pattern_repeated_chain`; diversity appears only at `limit:50`. `packages/atlas-reasoning/src/engine/insights.rs`.
+- [ ] **fix(find_complex_functions)**: `mode=complex` still reports `threshold_kind:"loc"` / `governing_threshold:80` and omits `details`, even when every hit is gated by cyclomatic or cognitive complexity. `packages/atlas-reasoning/src/engine/large_functions.rs`.
+- [ ] **fix(find_similar_functions)**: the code default is `0.22` but `.atlas/config.toml:77` still sets `similarity_low_threshold = 0.4`, so the default call returns zero matches and the hint text still advertises the 0.4 floor. Decide whether the config value is intentional.
+- [ ] **fix(analyze_dead_code)**: `summary.blocker_count` (222) does not match the emitted `blockers`/`candidates[].blockers` arrays; count and arrays must come from one source.
+- [ ] **fix(analyze_architecture)**: `verbose:false` still returns 50 findings (~17 KB MCP, ~44 KB CLI) while claiming `details_omitted:true`; module couplings are only counts, never listed.
+- [ ] **fix(analyze_metrics)**: `limit:5` yields only 3 unique symbols because `distribution` and `node_metrics` rows duplicate each other, no cyclomatic metric is surfaced, and `graph_summary` reports 13008 nodes / 30847 edges against the 26877 / 104034 health counts (scope undocumented).
+- [ ] **fix(analyze_dependency)**: suggested cleanups are file-only strings, duplicated, and carry no caller qualified name.
+- [ ] **fix(list_symbols)**: synthetic Cargo package owners are unreachable. The DB holds 25 `package::cargo:packages/*/Cargo.toml` rows, but `SymbolFilter.include_synthetic=false` excludes `.atlas/synthetic%` (`packages/atlas-store-sqlite/src/store/graph.rs:316`) and no MCP/CLI surface exposes the flag. Add `include_synthetic` to the registry descriptor, `tools/graph.rs::list_symbols`, and the CLI.
+- [ ] **fix(concept_clusters)**: a multi-seed run returns a pseudo-cluster whose members are exactly the seed files; also normalize `coupling_metric.total_strength` so empty results report `0.0` instead of `-0.0`.
+- [ ] **fix(label_components)**: `packages/atlas-core/src/health.rs::fn::select_graph_health_error_code` is labeled only `diagnostics` (0.85) instead of keeping the `core`/path label too.
+
+### Overview, memoir, resources
+
+- [ ] **fix(overview_export)**: a canonical file path subject is always ambiguous because `resolve_subjects` matches both `by_qname` and `by_file` and ignores `request.scope`; file subjects therefore export nothing. Caller/callee arrays also include a file node and an expression call target.
+- [ ] **fix(overview_ingest)**: a string `subject` is rejected (`invalid type: string, expected struct OverviewSubject`) although the guide documents a string, and inline `analysis` JSON is treated as a filesystem path alias. Also `body_routed:true` disagrees with `budget.source_body_routed:false`.
+- [ ] **fix(overview_show)**: an unknown subject returns `matches:[]` with no candidate suggestions even for near-miss tags, and the CLI error path prints plain text with exit 1 instead of a structured envelope.
+- [ ] **fix(overview_refresh_plan)**: `apply:true` reports `applied_count:1` while no freshness value changes (only `updated_at` moves); the count should reflect real transitions.
+- [ ] **fix(uri/resources symbol route)**: `atlas://repo/{repo_id}/symbol/{qn}` rejects slash-containing qualified names (`-32602 unknown repo uri form`), `repo/current` is not resolved as an alias, symbol views read `match`/`symbol` instead of `best_match` (all metadata null, empty L2 `read_hint`), and `%20` in a docs heading is not decoded. `packages/atlas-mcp/src/resources/mod.rs`, `uris.rs`.
+- [ ] **fix(provenance resource)**: `atlas://graph/provenance` exposes no `repo_id` and no `commit_sha`. `packages/atlas-mcp/src/tools/dispatch.rs::inject_provenance`.
+- [ ] **fix(CLI surface gaps)**: `communities detect` is absent and `postprocess --stage communities` yields 0 communities for 26877 nodes; `atlas history` has the wrong shape and an empty index with an opaque error; `atlas uri` requires a `read` subcommand and rejects `repo/current`; `atlas flows create` rejects the documented `--name` flag and has no trace command; `feedback adjust` is absent.
+- [ ] **fix(memoir CLI args)**: `link` requires `--relation` (positional rejected), `inspect` takes graph via `--graph` instead of positionally, and `add-concept` requires `--description` where MCP treats it as optional. `packages/atlas-cli/src/cli/memoir.rs`.
+- [ ] **fix(memoir errors)**: memoir failures return bare text instead of a structured error payload with `code`/`retry_guidance`, although `tool_help` advertises those fields. `packages/atlas-mcp/src/session_tools/memoir.rs`, `tools/dispatch.rs`.
+
+### CLI parity
+
+- [ ] **fix(status parity)**: MCP `retrieval_index` omits `content_schema_version` / `content_schema_supported` / `content_schema_ok`, which the CLI emits. Reuse the engine probe in `packages/atlas-mcp/src/tools/health.rs`.
+- [ ] **fix(get_metrics naming)**: histograms expose `mean`/`max`/`p50..p99` while the guide documents `mean_ms`/`max_ms`; `get_metrics` also carries 4-6k tokens with no verbose switch.
+- [ ] **fix(CLI JSON envelopes)**: `resolve_symbol`, `query_graph`, `explain_query`, `get_docs_section`, `get_impact_radius`, `get_review_context`, `overview_search`, and the whole `insights` family emit different `data` shapes from MCP `structuredContent` (flat vs nested, missing `summary`/`counts`/`top_factors`/`blocking_callers`/tier partitions). Pick one canonical serializer.
+- [ ] **fix(CLI payload budgets)**: `atlas insights patterns --limit 3` emits 2.6 MB (10.5 MB at `--limit 50`), `infer-modules` 1.21 MB, `duplicates` 415 KB, `reasoning remove` 366 KB - none honor a byte budget, unlike the MCP 32 KB cap.
+- [ ] **fix(discovery limit parity)**: MCP discovery reports `result_limit:20` while CLI content commands report `100` for the same query.
+
+### Latency and protocol
+
+- [ ] **fix(MCP worldtree latency)**: worldtree-backed MCP calls take ~5.2-5.3 s from a direct-stdio harness (`status` 5275 ms, `get_docs_section` 5260 ms, health resource 5303 ms) while the same CLI commands take 89-350 ms. CLIs are also compute-bound at 7.5-36 s for `insights risk`/`architecture`/`patterns`/`duplicates`/`similar-functions`. Profile the dispatch readiness gate and store open path in `packages/atlas-mcp/src/tools/dispatch.rs`.
+- [ ] **fix(MCP protocol negotiation)**: a direct-stdio `initialize` requesting `2026-07-28` was answered with `2025-11-25`, although `MCP_PROTOCOL_VERSION` is `2026-07-28` and both versions are supported (`packages/atlas-mcp/src/spec.rs`). Reproduce with a raw client and confirm the handler's selection logic (`rmcp_server/handler.rs`).
+
+### Doc drift — rerun after the shapes above settle
+
+- [ ] Tool 5/12 thresholds are stale: `struct` 928 (expected >1000), `references` 2570 (expected >10000), rust nodes 11363 (expected >15000). Restate them relative to observed parser output instead of absolute floors.
+- [ ] Tools 44/67/68/69/77 carry invalid CLI invocation forms: `docs-section` needs `--heading`, `memoir link` needs `--relation`, `memoir inspect` needs `--graph`, `overview export` needs `--subject`, `man` requires `<NAMESPACE> <TOOL_NAME>`.
+- [ ] Tools 6.6/6.8/6.9/6.10 document flags that do not exist (`flows create --name`, `history <file> --symbol`, `uri <URI>`, `feedback adjust`) and Tool 6.5 references an absent fixture graph.
+- [ ] Tool 51.2 says events land in `.atlas/context.db`; they are written to `.atlas/session.db`.
+- [ ] Tool 47.3 states a total item cap while `wake_up.max_items` is per-list.
+- [ ] Tool 67 says `relates_to`; the whitelist uses `related_to`.
+- [ ] Tool 14 claims counts must match a CLI traversal, but no CLI subcommand exposes `traverse_graph`'s node/edge/budget shape.
+- [ ] Tool 52 inline cutoff: observed `raw_inline` at 451 B and `indexed_preview` at 956 B, so the documented ~360 B figure is wrong.
+
+### Test-run leftovers (cleanup pending)
+
+- [ ] remove sweep fixtures: memories `mcp-sweep-*`, memoir graphs `mcp-sweep-arch|dup|cli|session`, overview records `10f4a60b…`/`f609da2a…`/`2c7d0ad4…`, saved artifacts `mcp-sweep-*` (incl. `c536ac758208e80e6df546d148d029af`), sessions `mcp-sweep-48a`/`50c`/`57b`, and flow `mcp-sweep-ReadinessHealthFlow` (id 1) in `worldtree.db`; `memoir_delete` does not exist yet (see Additional Backlog).
