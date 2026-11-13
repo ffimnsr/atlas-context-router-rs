@@ -209,10 +209,10 @@ Full design: `docs/PLAN-TOKENIZER.md`. Goal: standalone `atlas-tokenizer` crate 
 
 #### Phase 0 — Decisions
 
-- [ ] record vendored-asset decision (in-repo vs Git LFS) in `docs/PLAN-TOKENIZER.md`
-- [ ] record default encodings and Phase 7 default encoding
-- [ ] record `provider = "tokenizers"` removal timeline
-- [ ] pin upstream tiktoken commit/tag for parity
+- [x] do not commit vocab assets; download from pinned upstream URLs like official `tiktoken`
+- [x] reference exact upstream `tiktoken_ext/openai_public.py` and `tiktoken/load.py` by commit
+- [x] pin upstream tiktoken commit `3591ff175d6a80efbe4fcc7f0e219ddd4b8c52f1`
+
 
 #### Phase 1 — Crate Scaffold
 
@@ -234,12 +234,14 @@ Full design: `docs/PLAN-TOKENIZER.md`. Goal: standalone `atlas-tokenizer` crate 
 - [ ] add `registry.rs` explicit registry plus `OnceLock` default
 - [ ] add `special_tokens.rs` and `model_map.rs` tests
 
-#### Phase 4 — Assets
+#### Phase 4 — Download and Cache
 
-- [ ] add `scripts/fetch-tiktoken-assets.sh` with sha256 manifest generation
-- [ ] vendor default encoding `.tiktoken` assets and `assets/manifest.json`
-- [ ] add `asset_checksum.rs` verifying embedded assets against the manifest
-- [ ] verify default build and tests run with networking disabled
+- [ ] add `packages/atlas-tokenizer/src/assets.rs` with `UPSTREAM_COMMIT`, per-encoding URL + sha256, and exact upstream GitHub file references
+- [ ] add `packages/atlas-tokenizer/src/download.rs` with HTTPS-only fetch, timeouts, redirect scheme check, 32 MiB cap, and sha256 verification
+- [ ] add `packages/atlas-tokenizer/src/cache.rs` with upstream-compatible `sha1(url)` key, env dir precedence, atomic temp+rename, and corrupt-entry recovery
+- [ ] add `download_cache.rs` tests with a local fixture HTTP server; no real network
+- [ ] add `tokenizer_file` local path and `download` feature-off behavior
+- [ ] add ignored upstream smoke test; verify warm-cache run works with networking disabled
 
 #### Phase 5 — Parity and Bench
 
@@ -258,11 +260,11 @@ Full design: `docs/PLAN-TOKENIZER.md`. Goal: standalone `atlas-tokenizer` crate 
 - [ ] update config template, runtime config JSON, README, and `SHIPPED.md`
 - [ ] add CLI and MCP tokenizer quality-gate cases for `provider = "tiktoken"`
 
-#### Phase 7 — Default Flip
+#### Phase 7 — Stability Switch and Legacy Removal
 
-- [ ] switch `ContextTokenizerConfig::default()` to `tiktoken` plus the chosen encoding
-- [ ] keep heuristic fallback and verify fallback metadata
-- [ ] remove `provider = "tokenizers"` and the `tokenizers` dependency per Phase 0 decision
+- [ ] once atlas-tokenizer is stable, change `ContextTokenizerConfig::default()` to tiktoken and pick the default encoding from parity and bench results
+- [ ] remove `provider = "heuristic"` as a selectable provider; keep byte-based counting only as automatic fallback unless stability review says otherwise
+- [ ] remove `provider = "tokenizers"` and the `tokenizers` dependency
 - [ ] remove the `paste` advisory ignore from `deny.toml` after dependency removal
 - [ ] run full workspace tests, clippy, fmt, deny, and bench regression check
 
