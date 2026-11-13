@@ -36,7 +36,12 @@ pub(crate) fn tool_get_minimal_context(
         )
         .context("impact_radius failed")?;
 
-    let packaged = package_impact(&impact, &changed_file_paths);
+    let packaged = package_impact_with_limits(
+        &impact,
+        &changed_file_paths,
+        max_nodes,
+        policy.graph_traversal.edges.default_limit,
+    );
 
     let deleted_count = changes
         .iter()

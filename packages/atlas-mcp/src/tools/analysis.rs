@@ -1,8 +1,5 @@
 use anyhow::{Context, Result};
-use atlas_core::{
-    BudgetManager, BudgetPolicy, BudgetStatus, InsightFinding, InsightSummary, NodeKind,
-    kinds::parse_kind_alias,
-};
+use atlas_core::{BudgetManager, BudgetPolicy, BudgetStatus, NodeKind, kinds::parse_kind_alias};
 use atlas_reasoning::{
     AnalysisRankingPrimitives, AnalysisTrimmingPrimitives, ComponentLabelRequest,
     DuplicateDetectionRequest, InsightsEngine, LargeFunctionMode, LargeFunctionRequest,
@@ -14,30 +11,12 @@ use super::shared::{
     bool_arg, inject_budget_metadata, open_store, str_arg, string_array_arg, tool_result_value,
     u64_arg,
 };
-use crate::output::OutputFormat;
 use serde_json::json;
 
-fn apply_finding_limit(
-    findings: &mut Vec<InsightFinding>,
-    summary: &mut InsightSummary,
-    limit: Option<usize>,
-) {
-    if let Some(limit) = limit {
-        *findings = std::mem::take(findings).into_iter().take(limit).collect();
-        summary.total_findings = findings.len();
-        summary.highest_severity = findings.iter().map(|finding| finding.severity).max();
-    }
-}
-
-fn insight_report_response<T: serde::Serialize>(
-    full_payload: &T,
-    _compact_payload: serde_json::Value,
-    output_format: OutputFormat,
-    _verbose: bool,
-) -> Result<serde_json::Value> {
-    let full_payload = serde_json::to_value(full_payload)?;
-    tool_result_value(&full_payload, output_format)
-}
+use super::analysis_bounds::{
+    collapse_repeated_chain_details, compact_insight_report, compact_modules,
+    insight_report_response, limit_modules, paginate_findings, payload_byte_limit,
+};
 
 pub(super) fn tool_analyze_architecture(
     args: Option<&serde_json::Value>,
@@ -60,19 +39,33 @@ pub(super) fn tool_analyze_architecture(
     let mut analysis = engine
         .analyze_architecture(repo_root)
         .context("architecture analysis failed")?;
-    apply_finding_limit(
+    let (total_available, offset) = paginate_findings(
         &mut analysis.report.findings,
         &mut analysis.report.summary,
+        0,
         limit,
     );
 
-    let compact = serde_json::json!({
-        "summary": analysis.report.summary.clone(),
-        "top_findings": analysis.report.findings.clone(),
-        "module_count": analysis.modules.len(),
-        "module_edge_count": analysis.edges.len(),
-    });
-    insight_report_response(&analysis.report, compact, output_format, verbose)
+    let compact = compact_insight_report(
+        &analysis.report.summary,
+        &analysis.report.findings,
+        &analysis.report.atlas_provenance,
+        analysis.report.atlas_freshness.as_ref(),
+        json!({
+            "tool": "analyze_architecture",
+            "module_count": analysis.modules.len(),
+            "module_edge_count": analysis.edges.len(),
+            "findings_offset": offset,
+            "findings_total_available": total_available,
+        }),
+    );
+    insight_report_response(
+        &analysis.report,
+        compact,
+        output_format,
+        verbose,
+        payload_byte_limit(args),
+    )
 }
 
 pub(super) fn tool_analyze_metrics(
@@ -91,20 +84,34 @@ pub(super) fn tool_analyze_metrics(
     let mut analysis = engine
         .analyze_metrics(repo_root)
         .context("metrics analysis failed")?;
-    apply_finding_limit(
+    let (total_available, offset) = paginate_findings(
         &mut analysis.report.findings,
         &mut analysis.report.summary,
+        0,
         limit,
     );
 
-    let compact = serde_json::json!({
-        "summary": analysis.report.summary.clone(),
-        "top_findings": analysis.report.findings.clone(),
-        "node_metric_count": analysis.metrics.node_metrics.len(),
-        "file_metric_count": analysis.metrics.file_metrics.len(),
-        "module_metric_count": analysis.metrics.module_metrics.len(),
-    });
-    insight_report_response(&analysis.report, compact, output_format, verbose)
+    let compact = compact_insight_report(
+        &analysis.report.summary,
+        &analysis.report.findings,
+        &analysis.report.atlas_provenance,
+        analysis.report.atlas_freshness.as_ref(),
+        json!({
+            "tool": "analyze_metrics",
+            "node_metric_count": analysis.metrics.node_metrics.len(),
+            "file_metric_count": analysis.metrics.file_metrics.len(),
+            "module_metric_count": analysis.metrics.module_metrics.len(),
+            "findings_offset": offset,
+            "findings_total_available": total_available,
+        }),
+    );
+    insight_report_response(
+        &analysis.report,
+        compact,
+        output_format,
+        verbose,
+        payload_byte_limit(args),
+    )
 }
 
 pub(super) fn tool_assess_risk(
@@ -131,15 +138,26 @@ pub(super) fn tool_assess_risk(
         )
         .with_context(|| format!("risk assessment failed for `{symbol}`"))?;
 
-    let compact = serde_json::json!({
-        "target": analysis.target.qualified_name,
-        "score": analysis.score,
-        "classification": analysis.classification,
-        "summary": analysis.report.summary.clone(),
-        "top_findings": analysis.report.findings.clone(),
-        "top_factors": analysis.factor_contributions.iter().take(5).collect::<Vec<_>>(),
-    });
-    insight_report_response(&analysis.report, compact, output_format, verbose)
+    let compact = compact_insight_report(
+        &analysis.report.summary,
+        &analysis.report.findings,
+        &analysis.report.atlas_provenance,
+        analysis.report.atlas_freshness.as_ref(),
+        json!({
+            "tool": "assess_risk",
+            "target": analysis.target.qualified_name,
+            "score": analysis.score,
+            "classification": analysis.classification,
+            "top_factors": analysis.factor_contributions.iter().take(5).collect::<Vec<_>>(),
+        }),
+    );
+    insight_report_response(
+        &analysis.report,
+        compact,
+        output_format,
+        verbose,
+        payload_byte_limit(args),
+    )
 }
 
 pub(super) fn tool_analyze_patterns(
@@ -148,7 +166,6 @@ pub(super) fn tool_analyze_patterns(
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
-    let limit = u64_arg(args, "limit").map(|value| value as usize);
     let verbose = bool_arg(args, "verbose").unwrap_or(false);
     let store = open_store(db_path)?;
     let config =
@@ -158,13 +175,34 @@ pub(super) fn tool_analyze_patterns(
     let mut report = engine
         .analyze_patterns(repo_root)
         .context("pattern analysis failed")?;
-    apply_finding_limit(&mut report.findings, &mut report.summary, limit);
+    // Repeated-chain findings carry one occurrence payload per match; collapse
+    // them before paging so even verbose callers get a bounded report.
+    collapse_repeated_chain_details(&mut report.findings);
+    let offset = u64_arg(args, "offset").unwrap_or(0) as usize;
+    let limit = u64_arg(args, "max_findings")
+        .or_else(|| u64_arg(args, "limit"))
+        .map(|value| value as usize);
+    let (total_available, offset) =
+        paginate_findings(&mut report.findings, &mut report.summary, offset, limit);
 
-    let compact = serde_json::json!({
-        "summary": report.summary.clone(),
-        "top_findings": report.findings.clone(),
-    });
-    insight_report_response(&report, compact, output_format, verbose)
+    let compact = compact_insight_report(
+        &report.summary,
+        &report.findings,
+        &report.atlas_provenance,
+        report.atlas_freshness.as_ref(),
+        json!({
+            "tool": "analyze_patterns",
+            "findings_offset": offset,
+            "findings_total_available": total_available,
+        }),
+    );
+    insight_report_response(
+        &report,
+        compact,
+        output_format,
+        verbose,
+        payload_byte_limit(args),
+    )
 }
 
 fn normalize_files_arg(repo_root: &str, files: &[String]) -> Result<Vec<String>> {
@@ -230,13 +268,29 @@ fn tool_find_large_functions_impl(
         )
         .context("large-function analysis failed")?;
 
-    let compact = serde_json::json!({
-        "mode": analysis.request.mode,
-        "summary": analysis.report.summary.clone(),
-        "top_findings": analysis.candidates.clone(),
-    });
-    let _ = result_kind;
-    insight_report_response(&analysis.report_result(), compact, output_format, verbose)
+    let compact = compact_insight_report(
+        &analysis.report.summary,
+        &analysis.report.findings,
+        &analysis.report.atlas_provenance,
+        analysis.report.atlas_freshness.as_ref(),
+        json!({
+            "tool": result_kind,
+            "mode": analysis.request.mode,
+            "candidate_count": analysis.candidates.len(),
+            "candidates": analysis.candidates
+                .iter()
+                .take(50)
+                .cloned()
+                .collect::<Vec<_>>(),
+        }),
+    );
+    insight_report_response(
+        &analysis.report_result(),
+        compact,
+        output_format,
+        verbose,
+        payload_byte_limit(args),
+    )
 }
 
 pub(super) fn tool_find_large_functions(
@@ -302,14 +356,25 @@ pub(super) fn tool_find_similar_functions(
             },
         )
         .context("similar-function analysis failed")?;
-    let compact = serde_json::json!({
-        "source": analysis.source,
-        "thresholds": analysis.thresholds,
-        "summary": analysis.report.summary.clone(),
-        "top_findings": analysis.report.findings.clone(),
-        "matches": analysis.matches,
-    });
-    insight_report_response(&analysis.report_result(), compact, output_format, verbose)
+    let compact = compact_insight_report(
+        &analysis.report.summary,
+        &analysis.report.findings,
+        &analysis.report.atlas_provenance,
+        analysis.report.atlas_freshness.as_ref(),
+        json!({
+            "tool": "find_similar_functions",
+            "source": analysis.source,
+            "thresholds": analysis.thresholds,
+            "matches": analysis.matches,
+        }),
+    );
+    insight_report_response(
+        &analysis.report_result(),
+        compact,
+        output_format,
+        verbose,
+        payload_byte_limit(args),
+    )
 }
 
 pub(super) fn tool_find_duplicates(
@@ -343,13 +408,25 @@ pub(super) fn tool_find_duplicates(
             },
         )
         .context("duplicate detection failed")?;
-    let compact = serde_json::json!({
-        "thresholds": analysis.thresholds,
-        "summary": analysis.report.summary.clone(),
-        "top_findings": analysis.report.findings.clone(),
-        "groups": analysis.groups,
-    });
-    insight_report_response(&analysis.report_result(), compact, output_format, verbose)
+    let compact = compact_insight_report(
+        &analysis.report.summary,
+        &analysis.report.findings,
+        &analysis.report.atlas_provenance,
+        analysis.report.atlas_freshness.as_ref(),
+        json!({
+            "tool": "find_duplicates",
+            "thresholds": analysis.thresholds,
+            "group_count": analysis.groups.len(),
+            "groups": analysis.groups,
+        }),
+    );
+    insight_report_response(
+        &analysis.report_result(),
+        compact,
+        output_format,
+        verbose,
+        payload_byte_limit(args),
+    )
 }
 
 pub(super) fn tool_infer_modules(
@@ -373,18 +450,34 @@ pub(super) fn tool_infer_modules(
     let mut analysis = engine
         .infer_modules(repo_root)
         .context("module inference failed")?;
-    apply_finding_limit(
+    let (total_available, offset) = paginate_findings(
         &mut analysis.report.findings,
         &mut analysis.report.summary,
+        0,
         limit,
     );
-    let compact = serde_json::json!({
-        "summary": analysis.report.summary.clone(),
-        "top_findings": analysis.report.findings.clone(),
-        "module_count": analysis.modules.len(),
-        "modules": analysis.modules,
-    });
-    insight_report_response(&analysis.report_result(), compact, output_format, verbose)
+    let total_modules = analysis.modules.len();
+    limit_modules(&mut analysis.modules, limit);
+    let compact = compact_insight_report(
+        &analysis.report.summary,
+        &analysis.report.findings,
+        &analysis.report.atlas_provenance,
+        analysis.report.atlas_freshness.as_ref(),
+        json!({
+            "tool": "infer_modules",
+            "module_count": total_modules,
+            "modules": compact_modules(&analysis.modules),
+            "findings_offset": offset,
+            "findings_total_available": total_available,
+        }),
+    );
+    insight_report_response(
+        &analysis.report_result(),
+        compact,
+        output_format,
+        verbose,
+        payload_byte_limit(args),
+    )
 }
 
 pub(super) fn tool_label_components(
@@ -412,13 +505,28 @@ pub(super) fn tool_label_components(
             },
         )
         .context("component labeling failed")?;
-    let compact = serde_json::json!({
-        "summary": analysis.report.summary.clone(),
-        "top_findings": analysis.report.findings.clone(),
-        "assignment_count": analysis.assignments.len(),
-        "assignments": analysis.assignments,
-    });
-    insight_report_response(&analysis.report_result(), compact, output_format, verbose)
+    let compact = compact_insight_report(
+        &analysis.report.summary,
+        &analysis.report.findings,
+        &analysis.report.atlas_provenance,
+        analysis.report.atlas_freshness.as_ref(),
+        json!({
+            "tool": "label_components",
+            "assignment_count": analysis.assignments.len(),
+            "assignments": analysis.assignments
+                .iter()
+                .take(50)
+                .cloned()
+                .collect::<Vec<_>>(),
+        }),
+    );
+    insight_report_response(
+        &analysis.report_result(),
+        compact,
+        output_format,
+        verbose,
+        payload_byte_limit(args),
+    )
 }
 
 pub(super) fn tool_analyze_safety(

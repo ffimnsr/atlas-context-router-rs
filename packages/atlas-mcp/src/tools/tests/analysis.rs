@@ -388,6 +388,7 @@ fn find_large_functions_matches_direct_report_json() {
     let args = serde_json::json!({
         "threshold": 2,
         "mode": "large",
+        "verbose": true,
         "output_format": "json"
     });
     let resp = call(
@@ -423,7 +424,7 @@ fn find_large_functions_matches_direct_report_json() {
 #[test]
 fn analyze_architecture_matches_direct_report_json() {
     let fixture = setup_mcp_fixture();
-    let args = serde_json::json!({ "output_format": "json" });
+    let args = serde_json::json!({ "verbose": true, "output_format": "json" });
     let resp = call(
         "analyze_architecture",
         Some(&args),
@@ -450,7 +451,7 @@ fn analyze_architecture_matches_direct_report_json() {
 #[test]
 fn analyze_metrics_matches_direct_report_json() {
     let fixture = setup_mcp_fixture();
-    let args = serde_json::json!({ "output_format": "json" });
+    let args = serde_json::json!({ "verbose": true, "output_format": "json" });
     let resp = call("analyze_metrics", Some(&args), "/repo", &fixture.db_path)
         .expect("analyze_metrics call");
     let text = unwrap_tool_text(resp.clone());
@@ -472,6 +473,7 @@ fn assess_risk_matches_direct_report_json() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({
         "symbol": "src/service.rs::fn::compute",
+        "verbose": true,
         "output_format": "json"
     });
     let resp =
@@ -500,7 +502,7 @@ fn assess_risk_matches_direct_report_json() {
 #[test]
 fn analyze_patterns_matches_direct_report_json() {
     let fixture = setup_mcp_fixture();
-    let args = serde_json::json!({ "output_format": "json" });
+    let args = serde_json::json!({ "verbose": true, "output_format": "json" });
     let resp = call("analyze_patterns", Some(&args), "/repo", &fixture.db_path)
         .expect("analyze_patterns call");
     let text = unwrap_tool_text(resp.clone());
@@ -522,6 +524,7 @@ fn find_complex_functions_matches_direct_report_json() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({
         "complexity_threshold": 1,
+        "verbose": true,
         "output_format": "json"
     });
     let resp = call(
@@ -622,7 +625,7 @@ fn r4_insight_tools_keep_full_report_in_json_structured_content() {
     .expect("serialize architecture report");
     assert_json_structured_content_matches_direct_report(
         "analyze_architecture",
-        serde_json::json!({}),
+        serde_json::json!({ "verbose": true }),
         architecture,
     );
 
@@ -635,7 +638,7 @@ fn r4_insight_tools_keep_full_report_in_json_structured_content() {
     .expect("serialize metrics report");
     assert_json_structured_content_matches_direct_report(
         "analyze_metrics",
-        serde_json::json!({}),
+        serde_json::json!({ "verbose": true }),
         metrics,
     );
 
@@ -653,7 +656,7 @@ fn r4_insight_tools_keep_full_report_in_json_structured_content() {
     .expect("serialize risk report");
     assert_json_structured_content_matches_direct_report(
         "assess_risk",
-        serde_json::json!({ "symbol": "src/service.rs::fn::compute" }),
+        serde_json::json!({ "symbol": "src/service.rs::fn::compute", "verbose": true }),
         risk,
     );
 
@@ -661,7 +664,7 @@ fn r4_insight_tools_keep_full_report_in_json_structured_content() {
         .expect("serialize pattern report");
     assert_json_structured_content_matches_direct_report(
         "analyze_patterns",
-        serde_json::json!({}),
+        serde_json::json!({ "verbose": true }),
         patterns,
     );
 
@@ -681,7 +684,7 @@ fn r4_insight_tools_keep_full_report_in_json_structured_content() {
     .expect("serialize large report");
     assert_json_structured_content_matches_direct_report(
         "find_large_functions",
-        serde_json::json!({ "threshold": 2, "mode": "large" }),
+        serde_json::json!({ "threshold": 2, "mode": "large", "verbose": true }),
         large,
     );
 
@@ -701,7 +704,97 @@ fn r4_insight_tools_keep_full_report_in_json_structured_content() {
     .expect("serialize complex report");
     assert_json_structured_content_matches_direct_report(
         "find_complex_functions",
-        serde_json::json!({ "complexity_threshold": 1 }),
+        serde_json::json!({ "complexity_threshold": 1, "verbose": true }),
         complex,
     );
+}
+
+#[test]
+fn analyze_patterns_defaults_to_compact_findings_without_evidence_or_details() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({ "output_format": "json" });
+    let resp = call("analyze_patterns", Some(&args), "/repo", &fixture.db_path)
+        .expect("analyze_patterns call");
+    let payload: serde_json::Value =
+        serde_json::from_str(&unwrap_tool_text(resp)).expect("parse json");
+
+    assert_eq!(payload["evidence_omitted"], serde_json::json!(true));
+    assert_eq!(payload["details_omitted"], serde_json::json!(true));
+    assert!(payload["findings"].as_array().is_some());
+    for finding in payload["findings"].as_array().expect("findings array") {
+        assert!(
+            finding.get("evidence").is_none(),
+            "compact finding must omit evidence"
+        );
+        assert!(
+            finding.get("details").is_none(),
+            "compact finding must omit details"
+        );
+        assert!(finding.get("evidence_count").is_some());
+    }
+}
+
+#[test]
+fn analyze_patterns_supports_offset_and_limit_paging() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "offset": 0,
+        "max_findings": 1,
+        "output_format": "json"
+    });
+    let resp = call("analyze_patterns", Some(&args), "/repo", &fixture.db_path)
+        .expect("analyze_patterns call");
+    let payload: serde_json::Value =
+        serde_json::from_str(&unwrap_tool_text(resp)).expect("parse json");
+
+    assert!(
+        payload["findings"]
+            .as_array()
+            .is_some_and(|items| items.len() <= 1)
+    );
+    assert_eq!(payload["findings_offset"], serde_json::json!(0));
+    assert!(payload["findings_total_available"].as_u64().is_some());
+}
+
+#[test]
+fn analyze_patterns_compact_payload_stays_below_default_byte_ceiling() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "limit": 5,
+        "verbose": false,
+        "output_format": "json"
+    });
+    let resp = call("analyze_patterns", Some(&args), "/repo", &fixture.db_path)
+        .expect("analyze_patterns call");
+    let text = unwrap_tool_text(resp);
+    assert!(
+        text.len() <= super::super::analysis_bounds::DEFAULT_INSIGHT_PAYLOAD_BYTE_LIMIT,
+        "compact analyze_patterns payload was {} bytes",
+        text.len()
+    );
+}
+
+#[test]
+fn infer_modules_applies_limit_to_modules_and_hides_owned_symbols_in_compact_mode() {
+    let fixture = setup_mcp_fixture();
+    let resp = call(
+        "infer_modules",
+        Some(&serde_json::json!({ "limit": 1, "output_format": "json" })),
+        "/repo",
+        &fixture.db_path,
+    )
+    .expect("infer_modules call");
+    let payload: serde_json::Value =
+        serde_json::from_str(&unwrap_tool_text(resp)).expect("parse json");
+
+    assert!(
+        payload["modules"]
+            .as_array()
+            .is_some_and(|items| items.len() <= 1),
+        "limit must cap the modules list"
+    );
+    for module in payload["modules"].as_array().expect("modules array") {
+        assert!(module.get("owned_symbols").is_none());
+        assert!(module.get("root_paths").is_none());
+    }
 }

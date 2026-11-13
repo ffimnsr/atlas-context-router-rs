@@ -6,6 +6,7 @@ use crate::output::{OutputFormat, render_value};
 use crate::tool_result::{ToolErrorCode, ToolErrorPayload, tool_execution_error_value};
 
 use super::dispatch::is_known_tool_name;
+use super::manual_bounds::{ManualLimits, apply_manual_limits, schema_field_description};
 use super::registry::{
     is_state_changing_tool, tool_descriptor_by_name, tool_descriptors, tool_result_contract,
 };
@@ -111,6 +112,8 @@ pub struct ToolManualErrorCase {
 pub struct ToolManualTruncation {
     pub description_truncated: bool,
     pub usage_examples_truncated: bool,
+    #[serde(default)]
+    pub payload_truncated: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -130,7 +133,12 @@ enum ManualLookupError {
 
 pub fn tool_manual(namespace: &str, tool_name: &str) -> Result<ToolManualDocument> {
     match lookup_tool_manual(namespace, tool_name) {
-        Ok(document) => Ok(document),
+        Ok(mut document) => {
+            // Keep the CLI and MCP manual surfaces byte-identical by applying
+            // the same default compact/byte limits at the shared entry point.
+            apply_manual_limits(&mut document, ManualLimits::default());
+            Ok(document)
+        }
         Err(error) => Err(anyhow!(manual_lookup_error_message(&error))),
     }
 }
@@ -323,11 +331,16 @@ pub fn render_tool_manual_text(document: &ToolManualDocument) -> String {
         ));
     }
 
-    if document.truncation.description_truncated || document.truncation.usage_examples_truncated {
+    if document.truncation.description_truncated
+        || document.truncation.usage_examples_truncated
+        || document.truncation.payload_truncated
+    {
         lines.push(String::new());
         lines.push(format!(
-            "truncation: description_truncated={}, usage_examples_truncated={}",
-            document.truncation.description_truncated, document.truncation.usage_examples_truncated
+            "truncation: description_truncated={}, usage_examples_truncated={}, payload_truncated={}",
+            document.truncation.description_truncated,
+            document.truncation.usage_examples_truncated,
+            document.truncation.payload_truncated
         ));
     }
 
@@ -342,7 +355,9 @@ pub(crate) fn tool_help(args: Option<&Value>, output_format: OutputFormat) -> Re
 
     let response = match tool_name {
         Ok(tool_name) => match lookup_tool_manual("mcp", tool_name) {
-            Ok(document) => build_manual_tool_response(&document, output_format)?,
+            Ok(document) => {
+                build_manual_tool_response(&document, output_format, ManualLimits::from_args(args))?
+            }
             Err(error) => return tool_help_error_response(error, output_format),
         },
         Err(error) => return tool_help_error_response(error, output_format),
@@ -365,7 +380,9 @@ pub(crate) fn tool_man(args: Option<&Value>, output_format: OutputFormat) -> Res
 
     let response = match (namespace, tool_name) {
         (Ok(namespace), Ok(tool_name)) => match lookup_tool_manual(namespace, tool_name) {
-            Ok(document) => build_manual_tool_response(&document, output_format)?,
+            Ok(document) => {
+                build_manual_tool_response(&document, output_format, ManualLimits::from_args(args))?
+            }
             Err(error) => return manual_lookup_error_response(error, output_format),
         },
         (Err(error), _) => return manual_lookup_error_response(error, output_format),
@@ -506,6 +523,7 @@ fn lookup_tool_manual(
         truncation: ToolManualTruncation {
             description_truncated: description.truncated,
             usage_examples_truncated,
+            payload_truncated: false,
         },
     })
 }
@@ -513,8 +531,11 @@ fn lookup_tool_manual(
 fn build_manual_tool_response(
     document: &ToolManualDocument,
     _output_format: OutputFormat,
+    limits: ManualLimits,
 ) -> Result<Value> {
-    let raw = serde_json::to_value(document)?;
+    let mut document = document.clone();
+    apply_manual_limits(&mut document, limits);
+    let raw = serde_json::to_value(&document)?;
     let text = render_value(&raw)?.text;
 
     Ok(json!({
@@ -1144,10 +1165,7 @@ fn schema_field(
             .map(|values| values.iter().map(json_literal).collect())
             .unwrap_or_default(),
         description: truncate_text(
-            field
-                .get("description")
-                .and_then(Value::as_str)
-                .unwrap_or("No schema description available."),
+            &schema_field_description(name, field),
             MAX_DESCRIPTION_CHARS,
         ),
     }

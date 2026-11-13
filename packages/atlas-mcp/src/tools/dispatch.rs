@@ -90,6 +90,13 @@ fn response_insight_finding_files(response: &serde_json::Value) -> Vec<String> {
                     }
                 }
             }
+            // Compact findings replace evidence bodies with a deduped file
+            // list; keep freshness detection working in compact mode.
+            if let Some(compact_files) = finding.get("files").and_then(|value| value.as_array()) {
+                for file_path in compact_files.iter().filter_map(|value| value.as_str()) {
+                    files.insert(file_path.to_owned());
+                }
+            }
         }
     }
     files.into_iter().collect()

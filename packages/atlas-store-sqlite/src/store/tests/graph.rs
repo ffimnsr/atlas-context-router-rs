@@ -122,6 +122,31 @@ fn impact_radius_one_hop() {
 }
 
 #[test]
+fn impact_radius_caps_changed_nodes_at_max_nodes() {
+    let mut store = open_in_memory();
+    let nodes = (0..5)
+        .map(|index| {
+            make_node(
+                NodeKind::Function,
+                &format!("f{index}"),
+                &format!("a.rs::fn::f{index}"),
+                "a.rs",
+                "rust",
+            )
+        })
+        .collect::<Vec<_>>();
+    store
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", None, None, &nodes, &[])
+        .unwrap();
+
+    let result = store.impact_radius(&["a.rs"], 1, 2, 100).unwrap();
+    assert_eq!(result.changed_nodes.len(), 2);
+    let budget = result.traversal_budget.as_ref().expect("traversal budget");
+    assert!(budget.budget_hit, "truncated seed list must set budget_hit");
+    assert!(budget.emitted_node_count <= 2);
+}
+
+#[test]
 fn impact_radius_cyclic_graph_terminates() {
     let mut store = open_in_memory();
     // a → b → a (cycle)

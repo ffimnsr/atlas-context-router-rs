@@ -73,6 +73,10 @@ pub(super) fn build_review_context(
         .collect();
 
     let max_depth = request.depth.unwrap_or(2);
+    // Internal traversal over-reads using the central policy budget; the
+    // caller-facing `request.max_nodes` cap is enforced by `trim_context` and
+    // by the MCP packaging layer. Using the caller cap here would starve the
+    // ranker of impacted neighbors whenever the direct-target set fills it.
     let traversal_max_nodes = policy.graph_traversal.nodes.default_limit;
     let traversal_max_edges = policy.graph_traversal.edges.default_limit;
 

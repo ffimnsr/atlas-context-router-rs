@@ -117,13 +117,17 @@ pub(crate) fn tool_explain_change(
     payload.remove("summary_text");
 
     insert_change_source_payload(&mut payload, &resolved);
+    let dropped_items = summary.noise_reduction.dropped_nodes
+        + summary.noise_reduction.dropped_edges
+        + summary.noise_reduction.dropped_files;
+    let truncated = summary.budget.budget_hit || summary.budget.partial || dropped_items > 0;
     let mut response = build_normalized_success_response(
         "explain_change",
         Value::Object(payload),
         output_format,
         Vec::new(),
-        false,
-        None,
+        truncated,
+        truncated.then_some("explain change capped by node, edge, or payload budget"),
     )?;
     inject_deprecated_input_fields(&mut response, &deprecated_change_source_fields);
     Ok(response)

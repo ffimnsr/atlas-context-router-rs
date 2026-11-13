@@ -366,6 +366,9 @@ impl Store {
             .map_err(db_err)?
             .filter_map(|r| r.ok())
             .collect();
+        let changed_node_total = changed_nodes.len();
+        let mut changed_nodes = changed_nodes;
+        changed_nodes.truncate(max_nodes);
 
         // Recursive CTE: bidirectional traversal starting from seed QNs.
         let cte_sql = format!(
@@ -502,6 +505,7 @@ impl Store {
                 budget_hit: requested_depth != max_depth
                     || requested_nodes != max_nodes
                     || requested_edges != max_edges
+                    || changed_node_total > max_nodes
                     || original_edge_count > max_edges,
                 suggested_narrower_query: (original_edge_count > max_edges).then(|| {
                     format!(

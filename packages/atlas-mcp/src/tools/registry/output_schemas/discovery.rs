@@ -264,7 +264,8 @@ pub(crate) fn man_output_schema() -> Value {
                 "additionalProperties": false,
                 "properties": {
                     "description_truncated": { "type": "boolean" },
-                    "usage_examples_truncated": { "type": "boolean" }
+                    "usage_examples_truncated": { "type": "boolean" },
+                    "payload_truncated": { "type": "boolean" }
                 },
                 "required": ["description_truncated", "usage_examples_truncated"]
             }

@@ -19,7 +19,9 @@ use super::shared::{
     open_store, parse_mcp_intent, parse_mcp_query_grammar, repo_aliases_by_id,
     resolve_change_source_selection, resolve_repo_scope_selection, str_arg, u64_arg,
 };
-use crate::context::{enforce_mcp_response_budget, package_context_result, package_impact};
+use crate::context::{
+    enforce_mcp_response_budget, package_context_result, package_impact_with_limits,
+};
 use crate::session_tools::{
     decision_hits_json, record_mcp_decision_best_effort, search_decisions_best_effort,
 };

@@ -662,6 +662,15 @@ impl Store {
             .map_err(db_err)?
             .filter_map(|r| r.ok())
             .collect();
+        let changed_node_total = changed_nodes.len();
+        // Seed identity must be captured before capping so truncated seeds do
+        // not reappear as "impacted" nodes below.
+        let seed_qns: std::collections::HashSet<String> = changed_nodes
+            .iter()
+            .map(|n| n.qualified_name.clone())
+            .collect();
+        let mut changed_nodes = changed_nodes;
+        changed_nodes.truncate(max_nodes);
 
         // Recursive CTE: bidirectional traversal, UNION deduplicates.
         let cte_sql = format!(
@@ -700,11 +709,6 @@ impl Store {
             .collect();
 
         // Separate impacted (non-seed) nodes.
-        let seed_qns: std::collections::HashSet<&str> = changed_nodes
-            .iter()
-            .map(|n| n.qualified_name.as_str())
-            .collect();
-
         let impacted_qns: Vec<&str> = all_qns
             .iter()
             .filter(|qn| !seed_qns.contains(qn.as_str()))
@@ -805,6 +809,7 @@ impl Store {
                 budget_hit: requested_depth != max_depth
                     || requested_nodes != max_nodes
                     || requested_edges != max_edges
+                    || changed_node_total > max_nodes
                     || original_edge_count > max_edges,
                 suggested_narrower_query: (original_edge_count > max_edges).then(|| {
                     format!(

@@ -179,7 +179,13 @@ impl<'s> ReasoningEngine<'s> {
 
             for (neighbor, edge) in inbound.iter().chain(outbound.iter()) {
                 let neighbor_qname = &neighbor.qualified_name;
+                // Enforce the node cap while enqueuing: a single high-fan-out
+                // node can otherwise add thousands of neighbors past the cap.
                 if !visited.contains_key(neighbor_qname) {
+                    if visited.len() >= max_nodes {
+                        all_edges.push(edge.clone());
+                        break;
+                    }
                     visited.insert(neighbor_qname.clone(), (depth + 1, Some(edge.kind)));
                     queue.push_back((neighbor_qname.clone(), depth + 1));
                 }

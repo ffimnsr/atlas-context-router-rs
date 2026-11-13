@@ -102,13 +102,27 @@ pub fn package_impact<'a>(
     result: &'a ImpactResult,
     seed_files: &'a [String],
 ) -> PackagedImpact<'a> {
+    package_impact_with_limits(result, seed_files, MAX_NODES, MAX_EDGES)
+}
+
+/// Package an impact result with caller-provided list caps.
+///
+/// `max_nodes` bounds both `changed_nodes` and `impacted_nodes`; `max_edges`
+/// bounds `relevant_edges`. Totals stay in the packet so callers can see what
+/// was omitted and why `truncated` is set.
+pub fn package_impact_with_limits<'a>(
+    result: &'a ImpactResult,
+    seed_files: &'a [String],
+    max_nodes: usize,
+    max_edges: usize,
+) -> PackagedImpact<'a> {
     let cn_total = result.changed_nodes.len();
     let inp_total = result.impacted_nodes.len();
     let edge_total = result.relevant_edges.len();
 
-    let cn_capped = cn_total.min(MAX_NODES);
-    let inp_capped = inp_total.min(MAX_NODES);
-    let edge_capped = edge_total.min(MAX_EDGES);
+    let cn_capped = cn_total.min(max_nodes);
+    let inp_capped = inp_total.min(max_nodes);
+    let edge_capped = edge_total.min(max_edges);
 
     PackagedImpact {
         changed_file_count: seed_files.len(),

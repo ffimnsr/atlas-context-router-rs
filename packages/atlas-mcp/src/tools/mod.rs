@@ -1,4 +1,5 @@
 mod analysis;
+mod analysis_bounds;
 mod config_defaults;
 mod context_ops;
 mod dispatch;
@@ -6,6 +7,7 @@ mod graph;
 pub mod health;
 mod inventory;
 mod manual;
+mod manual_bounds;
 mod metrics;
 mod postprocess;
 mod registry;

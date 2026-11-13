@@ -74,7 +74,12 @@ pub(crate) fn tool_get_impact_radius(
             )
             .context("impact_radius query failed")?;
         let advanced = atlas_impact::analyze(impact.clone());
-        let packaged = package_impact(&impact, &resolved.files);
+        let packaged = package_impact_with_limits(
+            &impact,
+            &resolved.files,
+            max_nodes,
+            policy.graph_traversal.edges.default_limit,
+        );
         let mut payload = as_object_map(serde_json::to_value(&packaged)?);
         payload.insert("seed_files".to_owned(), Value::Array(seed_files));
         payload.insert(
@@ -148,7 +153,12 @@ pub(crate) fn tool_get_impact_radius(
     };
 
     let advanced = atlas_impact::analyze(result.clone());
-    let packaged = package_impact(&result, &resolved.files);
+    let packaged = package_impact_with_limits(
+        &result,
+        &resolved.files,
+        max_nodes,
+        policy.graph_traversal.edges.default_limit,
+    );
     let mut payload = as_object_map(serde_json::to_value(&packaged)?);
     payload.insert("seed_files".to_owned(), json!(resolved.files));
     payload.insert(

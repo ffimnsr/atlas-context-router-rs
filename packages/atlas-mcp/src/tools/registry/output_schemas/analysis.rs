@@ -58,12 +58,55 @@ pub(crate) fn insight_finding_schema() -> Value {
             "category": { "type": "string" },
             "message": { "type": "string" },
             "evidence": { "type": "array", "items": { "$ref": "#/$defs/insight_evidence" } },
+            "evidence_count": { "type": "integer" },
+            "details_present": { "type": "boolean" },
+            "files": { "type": "array", "items": { "type": "string" } },
             "ranking_reason": { "type": "string" },
             "details": true,
             "score": { "type": "number" }
         },
         "required": ["id", "title", "severity", "category", "message", "ranking_reason", "score"]
     })
+}
+
+/// Extra optional properties emitted by compact (`verbose: false`) insight
+/// payloads. Merged into every insight output schema so compact responses stay
+/// schema-valid.
+fn compact_insight_extra_properties() -> Value {
+    serde_json::json!({
+        "findings_offset": { "type": "integer" },
+        "findings_total_available": { "type": "integer" },
+        "evidence_omitted": { "type": "boolean" },
+        "details_omitted": { "type": "boolean" },
+        "dropped_item_count": { "type": "integer" },
+        "payload_bytes": { "type": "integer" },
+        "payload_byte_limit": { "type": "integer" },
+        "module_count": { "type": "integer" },
+        "module_edge_count": { "type": "integer" },
+        "node_metric_count": { "type": "integer" },
+        "file_metric_count": { "type": "integer" },
+        "module_metric_count": { "type": "integer" },
+        "candidate_count": { "type": "integer" },
+        "candidates": { "type": "array", "items": { "type": "object" } },
+        "group_count": { "type": "integer" },
+        "assignment_count": { "type": "integer" },
+        "top_factors": { "type": "array", "items": { "type": "object" } },
+        "target": { "type": "string" },
+        "score": { "type": "number" },
+        "classification": { "type": "string" }
+    })
+}
+
+fn with_compact_insight_fields(mut properties: Value) -> Value {
+    if let (Some(base), Some(extra)) = (
+        properties.as_object_mut(),
+        compact_insight_extra_properties().as_object(),
+    ) {
+        for (key, value) in extra {
+            base.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+    }
+    properties
 }
 
 pub(crate) fn insight_summary_schema() -> Value {
@@ -96,7 +139,7 @@ pub(crate) fn graph_freshness_warning_schema() -> Value {
 
 pub(crate) fn insight_report_output_schema() -> Value {
     normalized_tool_output_schema(
-        serde_json::json!({
+        with_compact_insight_fields(serde_json::json!({
             "summary": { "$ref": "#/$defs/insight_summary" },
             "findings": { "type": "array", "items": { "$ref": "#/$defs/insight_finding" } },
             "atlas_provenance": {
@@ -109,7 +152,7 @@ pub(crate) fn insight_report_output_schema() -> Value {
                 "required": ["indexed_file_count"]
             },
             "atlas_freshness": { "$ref": "#/$defs/graph_freshness_warning" }
-        }),
+        })),
         &["summary", "findings", "atlas_provenance"],
         Some(serde_json::json!({
             "insight_severity": insight_severity_schema(),
@@ -125,7 +168,7 @@ pub(crate) fn insight_report_output_schema() -> Value {
 
 pub(crate) fn large_function_report_output_schema() -> Value {
     normalized_tool_output_schema(
-        serde_json::json!({
+        with_compact_insight_fields(serde_json::json!({
             "mode": { "type": "string", "enum": ["large", "complex", "large-or-complex"] },
             "summary": { "$ref": "#/$defs/insight_summary" },
             "findings": { "type": "array", "items": { "$ref": "#/$defs/insight_finding" } },
@@ -139,7 +182,7 @@ pub(crate) fn large_function_report_output_schema() -> Value {
                 "required": ["indexed_file_count"]
             },
             "atlas_freshness": { "$ref": "#/$defs/graph_freshness_warning" }
-        }),
+        })),
         &["mode", "summary", "findings", "atlas_provenance"],
         Some(serde_json::json!({
             "insight_severity": insight_severity_schema(),
@@ -155,7 +198,7 @@ pub(crate) fn large_function_report_output_schema() -> Value {
 
 pub(crate) fn similar_function_report_output_schema() -> Value {
     normalized_tool_output_schema(
-        serde_json::json!({
+        with_compact_insight_fields(serde_json::json!({
             "source": { "type": "object" },
             "thresholds": { "type": "object" },
             "summary": { "$ref": "#/$defs/insight_summary" },
@@ -171,7 +214,7 @@ pub(crate) fn similar_function_report_output_schema() -> Value {
                 "required": ["indexed_file_count"]
             },
             "atlas_freshness": { "$ref": "#/$defs/graph_freshness_warning" }
-        }),
+        })),
         &[
             "source",
             "thresholds",
@@ -194,7 +237,7 @@ pub(crate) fn similar_function_report_output_schema() -> Value {
 
 pub(crate) fn duplicate_report_output_schema() -> Value {
     normalized_tool_output_schema(
-        serde_json::json!({
+        with_compact_insight_fields(serde_json::json!({
             "thresholds": { "type": "object" },
             "summary": { "$ref": "#/$defs/insight_summary" },
             "findings": { "type": "array", "items": { "$ref": "#/$defs/insight_finding" } },
@@ -209,7 +252,7 @@ pub(crate) fn duplicate_report_output_schema() -> Value {
                 "required": ["indexed_file_count"]
             },
             "atlas_freshness": { "$ref": "#/$defs/graph_freshness_warning" }
-        }),
+        })),
         &[
             "thresholds",
             "summary",
@@ -231,7 +274,7 @@ pub(crate) fn duplicate_report_output_schema() -> Value {
 
 pub(crate) fn inferred_module_report_output_schema() -> Value {
     normalized_tool_output_schema(
-        serde_json::json!({
+        with_compact_insight_fields(serde_json::json!({
             "summary": { "$ref": "#/$defs/insight_summary" },
             "findings": { "type": "array", "items": { "$ref": "#/$defs/insight_finding" } },
             "modules": { "type": "array", "items": { "type": "object" } },
@@ -245,7 +288,7 @@ pub(crate) fn inferred_module_report_output_schema() -> Value {
                 "required": ["indexed_file_count"]
             },
             "atlas_freshness": { "$ref": "#/$defs/graph_freshness_warning" }
-        }),
+        })),
         &["summary", "findings", "modules", "atlas_provenance"],
         Some(serde_json::json!({
             "insight_severity": insight_severity_schema(),
@@ -261,7 +304,7 @@ pub(crate) fn inferred_module_report_output_schema() -> Value {
 
 pub(crate) fn component_label_report_output_schema() -> Value {
     normalized_tool_output_schema(
-        serde_json::json!({
+        with_compact_insight_fields(serde_json::json!({
             "summary": { "$ref": "#/$defs/insight_summary" },
             "findings": { "type": "array", "items": { "$ref": "#/$defs/insight_finding" } },
             "assignments": { "type": "array", "items": { "type": "object" } },
@@ -275,7 +318,7 @@ pub(crate) fn component_label_report_output_schema() -> Value {
                 "required": ["indexed_file_count"]
             },
             "atlas_freshness": { "$ref": "#/$defs/graph_freshness_warning" }
-        }),
+        })),
         &["summary", "findings", "assignments", "atlas_provenance"],
         Some(serde_json::json!({
             "insight_severity": insight_severity_schema(),
