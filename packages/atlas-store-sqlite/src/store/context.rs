@@ -145,6 +145,40 @@ impl Store {
         Ok(rows)
     }
 
+    /// Return all nodes whose `name` column starts with `prefix`, bounded by
+    /// `limit`. Results are ordered by name length, file path, and line so the
+    /// closest (shortest) prefix candidates rank first deterministically.
+    pub fn nodes_by_name_prefix(&self, prefix: &str, limit: usize) -> Result<Vec<Node>> {
+        if prefix.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        // Escape LIKE wildcards so user-supplied prefixes stay literal.
+        let escaped = prefix
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let pattern = format!("{escaped}%");
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, kind, name, qualified_name, file_path, line_start, line_end,
+                        language, parent_name, params, return_type, modifiers,
+                        is_test, file_hash, extra_json
+                 FROM nodes
+                 WHERE name LIKE ?1 ESCAPE '\\'
+                 ORDER BY length(name), name, file_path, line_start
+                 LIMIT ?2",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![pattern, limit as i64], row_to_node)
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
     /// Shared implementation for directed edge lookups by qualified name.
     ///
     /// `direction` selects which side of the edge joins the node and filters;
@@ -289,7 +323,10 @@ impl Store {
     /// Return nodes connected to `qname` via `tests` or `tested_by` edges
     /// (either direction), paired with their edges, bounded by `limit`.
     ///
-    /// Covers both `qname` tests something and something tests `qname`.
+    /// Also attributes call sites inside test functions: a `calls` edge from a
+    /// node marked `is_test` (or kind `test`) counts as test adjacency even when
+    /// the parser emitted no explicit `tests` edge. Rust in-file `#[cfg(test)]`
+    /// modules rely on this fallback.
     pub fn test_neighbors(
         &self,
         qname: &str,
@@ -311,8 +348,15 @@ impl Store {
                      OR
                      (e.target_qualified = ?1 AND n.qualified_name = e.source_qualified)
                  )
-                 WHERE e.kind IN ('tests', 'tested_by')
-                   AND n.qualified_name != ?1
+                 WHERE n.qualified_name != ?1
+                   AND (
+                     e.kind IN ('tests', 'tested_by')
+                     OR (
+                       e.kind = 'calls'
+                       AND e.target_qualified = ?1
+                       AND (n.is_test = 1 OR n.kind = 'test')
+                     )
+                   )
                  ORDER BY n.file_path, n.qualified_name
                  LIMIT ?2",
             )
@@ -579,11 +623,15 @@ impl Store {
                  FROM   edges e1
                  JOIN   nodes ns1 ON e1.source_qualified = ns1.qualified_name
                                AND  ns1.file_path = ?1
+                 JOIN   nodes nt  ON nt.qualified_name = e1.target_qualified
                  JOIN   edges e2  ON e1.target_qualified = e2.target_qualified
                  JOIN   nodes ns2 ON e2.source_qualified = ns2.qualified_name
                  WHERE  ns2.file_path != ?1
                    AND  e1.kind IN ('imports', 'calls', 'references')
                    AND  e2.kind IN ('imports', 'calls', 'references')
+                   AND  nt.kind IN ('function','method','class','struct','enum',
+                                    'trait','interface','constant','variable','module')
+                   AND  nt.language NOT IN ('toml','json','markdown','html','css')
                  ORDER  BY ns2.file_path, e1.target_qualified
                  LIMIT  ?2",
             )

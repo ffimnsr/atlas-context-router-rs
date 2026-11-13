@@ -208,37 +208,37 @@ Source: `AGENTS MCP Tests File Run 01.md`. 145 tests executed, ~89 PASS / 51 FAI
 
 ### P1 — `resolve_symbol`
 
-- [ ] resolve exact qname, then exact name, then filtered prefix; return zero matches when none (code) (run01 L2914-2915, L2941-2945)
-- [ ] gate the fuzzy/edit-distance fallback behind explicit `fuzzy=true` (code) (run01 L2914, L2944)
-- [ ] apply the `file` filter before ranking and set `status=resolved` when the post-filter match is unique (code) (run01 L2912, L2947-2951)
-- [ ] normalize kind aliases (`fn`→`function`, `record`→`struct`, `iface`→`interface`, `mod`→`module`, `var`→`variable`, `const`→`constant`) before ranking (code) (run01 L2913, L2953-2957)
-- [ ] add regression test: nonexistent symbol name → `match_count=0`, `best_match=null` (code) (run01 L2914, L2944)
-- [ ] add regression test: name+file+kind → `ambiguous=false` (code) (run01 L2912, L2950)
-- [ ] add regression test: `budget_stage_rules` + `kind=fn` → single result (code) (run01 L2913, L2956)
+- [x] resolve exact qname, then exact name, then filtered prefix; return zero matches when none (code) (run01 L2914-2915, L2941-2945)
+- [x] gate the fuzzy/edit-distance fallback behind explicit `fuzzy=true` (code) (run01 L2914, L2944)
+- [x] apply the `file` filter before ranking and set `status=resolved` when the post-filter match is unique (code) (run01 L2912, L2947-2951)
+- [x] normalize kind aliases (`fn`→`function`, `record`→`struct`, `iface`→`interface`, `mod`→`module`, `var`→`variable`, `const`→`constant`) before ranking (code) (run01 L2913, L2953-2957)
+- [x] add regression test: nonexistent symbol name → `match_count=0`, `best_match=null` (code) (run01 L2914, L2944)
+- [x] add regression test: name+file+kind → `ambiguous=false` (code) (run01 L2912, L2950)
+- [x] add regression test: `budget_stage_rules` + `kind=fn` → single result (code) (run01 L2913, L2956)
 
 ### P1 — Query intent execution
 
-- [ ] execute `who calls <symbol>` via caller-edge lookup and set `usage_edges_included=true` (code) (run01 L2918-2919, L2965-2969)
-- [ ] implement `what breaks <symbol>` execution (code) (run01 L2928-2929, L2995-2999)
-- [ ] implement `tests for <symbol>` execution (code) (run01 L2995-2999)
-- [ ] reject unquoted multiword natural language with actionable grammar guidance (code) (run01 L2921-2922, L2971-2975)
-- [ ] `explain_query`: add `query_intent {accepted,intent,kind,normalized_text}` (code) (run01 L2928-2929, L2995-2999)
-- [ ] `explain_query`: add `intent_target_symbol` (code) (run01 L2928-2929, L2997)
-- [ ] add regression test: natural-language query returns a validation error, not empty matches (code) (run01 L2921, L2974)
-- [ ] reuse one intent parser between `query_graph` and `explain_query` (code) (run01 L2998)
+- [x] execute `who calls <symbol>` via caller-edge lookup and set `usage_edges_included=true` (code) (run01 L2918-2919, L2965-2969)
+- [x] implement `what breaks <symbol>` execution (code) (run01 L2928-2929, L2995-2999)
+- [x] implement `tests for <symbol>` execution (code) (run01 L2995-2999)
+- [x] reject unquoted multiword natural language with actionable grammar guidance (code) (run01 L2921-2922, L2971-2975)
+- [x] `explain_query`: add `query_intent {accepted,intent,kind,normalized_text}` (code) (run01 L2928-2929, L2995-2999)
+- [x] `explain_query`: add `intent_target_symbol` (code) (run01 L2928-2929, L2997)
+- [x] add regression test: natural-language query returns a validation error, not empty matches (code) (run01 L2921, L2974)
+- [x] reuse one intent parser between `query_graph` and `explain_query` (code) (run01 L2998)
 
 ### P1 — Graph traversal and relationship correctness
 
-- [ ] `traverse_graph`: dedupe `(from, kind, to)` edges (code) (run01 L3041, L3077)
-- [ ] `traverse_graph`: exclude expression-level edge targets or include them in `nodes[]` (code) (run01 L3039-3041, L3076)
-- [ ] `traverse_graph`: set `budget_hit`/`truncated` when `accepted_node_budget` is reached (code) (run01 L3043, L3078)
-- [ ] `traverse_graph`: cap depth-1 output at root adjacency or document neighbor-edge inclusion (code) (run01 L3043, L3079)
-- [ ] `traverse_graph`: use deterministic balanced node selection when the budget truncates (code) (run01 L3043, L3080)
-- [ ] attribute test adjacency from call sites inside `#[test]` functions for `symbol_neighbors` and `explain_change` (code) (run01 L3081, L3148)
-- [ ] `concept_clusters`: restrict clustering keys to code-symbol nodes and drop expression fragments (code) (run01 L3065, L3082)
-- [ ] `concept_clusters`: allow seed↔seed coupling in cluster scoring (code) (run01 L3067, L3083)
-- [ ] `cross_file_links`: surface `include_weak` in the live MCP input schema (code) (run01 L3059, L3075)
-- [ ] CLI `trace`: populate `path.nodes` into `nodes[]` in path mode (code) (run01 L3051, L3086)
+- [x] `traverse_graph`: dedupe `(from, kind, to)` edges (code) (run01 L3041, L3077)
+- [x] `traverse_graph`: exclude expression-level edge targets or include them in `nodes[]` (code) (run01 L3039-3041, L3076)
+- [x] `traverse_graph`: set `budget_hit`/`truncated` when `accepted_node_budget` is reached (code) (run01 L3043, L3078)
+- [x] `traverse_graph`: cap depth-1 output at root adjacency or document neighbor-edge inclusion (code) (run01 L3043, L3079)
+- [x] `traverse_graph`: use deterministic balanced node selection when the budget truncates (code) (run01 L3043, L3080)
+- [x] attribute test adjacency from call sites inside `#[test]` functions for `symbol_neighbors` and `explain_change` (code) (run01 L3081, L3148)
+- [x] `concept_clusters`: restrict clustering keys to code-symbol nodes and drop expression fragments (code) (run01 L3065, L3082)
+- [x] `concept_clusters`: allow seed↔seed coupling in cluster scoring (code) (run01 L3067, L3083)
+- [x] `cross_file_links`: surface `include_weak` in the live MCP input schema (code) (run01 L3059, L3075)
+- [x] CLI `trace`: populate `path.nodes` into `nodes[]` in path mode (code) (run01 L3051, L3086)
 
 ### P1 — Context and review tools
 

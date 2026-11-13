@@ -13,8 +13,10 @@ use tracing::debug;
 pub mod capabilities;
 pub mod embed;
 pub mod eval;
+pub mod intent;
 pub mod rag_eval;
 mod ranking;
+pub mod resolve;
 pub mod semantic;
 
 use capabilities::BackendCapabilities;
@@ -38,6 +40,8 @@ pub use execution::{
 };
 pub use expand::graph_expand;
 pub use hybrid::reciprocal_rank_fusion;
+pub use intent::{IntentExecution, execute_intent_query};
+pub use resolve::{ResolutionStage, SymbolResolution, SymbolResolveRequest, resolve_symbol_nodes};
 pub use scoring::apply_ranking_boosts;
 pub use search::{search, search_with_embedding};
 pub use tokenize::build_fts_query;

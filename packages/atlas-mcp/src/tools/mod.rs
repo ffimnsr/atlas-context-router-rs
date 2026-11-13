@@ -12,9 +12,11 @@ mod manual_bounds;
 mod metrics;
 mod postprocess;
 mod registry;
+mod resolve;
 pub(crate) mod shared;
 mod symbols;
 mod trace;
+mod traversal_wire;
 
 pub use dispatch::call;
 pub(crate) use dispatch::{call_with_worker_threads, is_known_tool_name};

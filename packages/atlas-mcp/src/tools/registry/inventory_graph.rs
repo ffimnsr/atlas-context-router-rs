@@ -173,7 +173,7 @@ pub(super) fn tools() -> Vec<Value> {
         }),
         json!({
                 "name": "resolve_symbol",
-                "description": "Resolve a symbol name or exact qualified_name to its canonical graph symbol. Useful before relationship tools when you want one exact target from either a plain identifier (`compute`) or a fully qualified name (`src/service.rs::fn::compute`). Eliminates the manual workflow of query_graph → copy qualified_name → call symbol_neighbors. Returns the best match, an ambiguity list when multiple symbols match, and follow-up suggestions. Accepts public kind aliases (e.g. 'function'/'fn', 'struct'/'record') that are mapped to the compact tokens used in qualified names.",
+                "description": "Resolve a symbol name or exact qualified_name to its canonical graph symbol. Resolution order is exact qualified name, exact node name, then name prefix; the fuzzy fallback only runs when fuzzy=true. Useful before relationship tools when you want one exact target from either a plain identifier (`compute`) or a fully qualified name (`src/service.rs::fn::compute`). Returns the best match, an ambiguity list when multiple symbols match, the resolution stage, and follow-up suggestions. Accepts public kind aliases (e.g. 'function'/'fn', 'struct'/'record') that are mapped to the compact tokens used in qualified names.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -182,6 +182,7 @@ pub(super) fn tools() -> Vec<Value> {
                         "file":          { "type": "string",  "description": "Optional file path filter. Only returns matches whose file_path contains this string (e.g. 'internal/requestctx/context.go' or 'src/')." },
                         "language":      { "type": "string",  "description": "Optional language filter (e.g. 'rust', 'go', 'typescript')." },
                         "limit":         { "type": "integer", "description": "Maximum matches to return (default 10)." },
+                        "fuzzy":         { "type": "boolean", "description": "Enable fuzzy (edit-distance) fallback after exact qualified name, exact name, and prefix lookup fail (default false)." },
                         "repo_scope": {
                             "type": "object",
                             "description": "Repo scope object. Use { kind: 'current' }, { kind: 'repo_id', repo_id: '<id>' }, or { kind: 'all' }.",

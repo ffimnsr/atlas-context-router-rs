@@ -1,12 +1,11 @@
 use anyhow::{Context, Result};
-use atlas_core::model::{ContextIntent, ContextRequest, ContextTarget};
+use atlas_core::model::ContextIntent;
 use atlas_core::{
     BudgetPolicy, BudgetReport, GraphHealthInput, GraphStoreHealthClass,
     classify_graph_store_error, error_code_docs_ref, graph_health_error_message,
     graph_health_error_suggestions, select_graph_health_error_code,
 };
 use atlas_repo::{RepoRegistration, RepoRegistry, phase1_multi_repo_supported};
-use atlas_review::query_parser;
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 use serde::Serialize;
@@ -35,160 +34,20 @@ pub(crate) fn parse_mcp_intent(s: &str) -> ContextIntent {
     }
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct McpQueryGrammar {
-    pub(crate) kind: &'static str,
-    pub(crate) accepted: bool,
-    pub(crate) source_text: String,
-    pub(crate) normalized_text: String,
-    pub(crate) parsed_request: ContextRequest,
-}
+// Query grammar parsing lives in `atlas-review` so MCP and CLI share one
+// implementation of intent classification, normalization, and rejection.
+pub(crate) type McpQueryGrammar = atlas_review::QueryGrammar;
 
 pub(crate) fn mcp_supported_query_grammar_examples() -> &'static [&'static str] {
-    &[
-        "compute",
-        "src/service.rs::fn::compute",
-        "who calls compute",
-        "what breaks if I change compute",
-        "tests for compute",
-    ]
-}
-
-fn strip_case_insensitive_prefix<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
-    if text.len() < prefix.len() {
-        return None;
-    }
-    let head = text.get(..prefix.len())?;
-    if head.eq_ignore_ascii_case(prefix) {
-        Some(text[prefix.len()..].trim())
-    } else {
-        None
-    }
-}
-
-fn target_to_lookup_text(target: &ContextTarget) -> Option<String> {
-    match target {
-        ContextTarget::QualifiedName { qname } => Some(qname.clone()),
-        ContextTarget::SymbolName { name } => Some(name.clone()),
-        ContextTarget::FilePath { path } => Some(path.clone()),
-        ContextTarget::ChangedFiles { paths } => paths.first().cloned(),
-        ContextTarget::ChangedSymbols { qnames } => qnames.first().cloned(),
-        ContextTarget::EdgeQuerySeed { source_qname, .. } => Some(source_qname.clone()),
-    }
-}
-
-fn looks_code_like_query(trimmed: &str) -> bool {
-    trimmed.contains("::")
-        || trimmed.contains('/')
-        || trimmed.contains('_')
-        || trimmed.contains('(')
-        || trimmed.contains('.')
-        || trimmed.chars().any(|ch| ch.is_ascii_uppercase())
-}
-
-fn looks_plain_identifier(trimmed: &str) -> bool {
-    !trimmed.is_empty()
-        && !trimmed.contains(char::is_whitespace)
-        && trimmed
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':' | '/' | '.'))
+    atlas_review::query_grammar_examples()
 }
 
 pub(crate) fn mcp_query_looks_like_unstructured_description(query: &str) -> bool {
-    let trimmed = query.trim();
-    if trimmed.is_empty() || !trimmed.contains(char::is_whitespace) {
-        return false;
-    }
-    if strip_case_insensitive_prefix(trimmed, "tests for ").is_some() {
-        return false;
-    }
-    if looks_code_like_query(trimmed) {
-        return false;
-    }
-
-    let parsed = query_parser::parse_query(trimmed);
-    if parsed.intent != ContextIntent::Symbol {
-        return false;
-    }
-
-    let words = trimmed
-        .split_whitespace()
-        .map(|word| word.trim_matches(|ch: char| !ch.is_alphanumeric()))
-        .filter(|word| !word.is_empty())
-        .collect::<Vec<_>>();
-    let natural_language_cues = [
-        "please", "show", "find", "explain", "review", "check", "tell", "help", "look", "what",
-        "why", "how",
-    ];
-    if words.len() >= 4
-        || words.iter().any(|word| {
-            natural_language_cues
-                .iter()
-                .any(|cue| word.eq_ignore_ascii_case(cue))
-        })
-    {
-        return true;
-    }
-
-    matches!(parsed.target, ContextTarget::SymbolName { ref name } if name == trimmed)
+    atlas_review::query_looks_like_unstructured_description(query)
 }
 
 pub(crate) fn parse_mcp_query_grammar(query: &str) -> McpQueryGrammar {
-    let trimmed = query.trim();
-
-    if let Some(rest) = strip_case_insensitive_prefix(trimmed, "tests for ") {
-        let parsed_target = query_parser::parse_query(rest);
-        let normalized_text =
-            target_to_lookup_text(&parsed_target.target).unwrap_or_else(|| rest.trim().to_owned());
-        let mut parsed_request = parsed_target;
-        parsed_request.intent = ContextIntent::UsageLookup;
-        parsed_request.include_callers = true;
-        parsed_request.include_callees = false;
-        parsed_request.include_tests = true;
-        return McpQueryGrammar {
-            kind: "tests_for",
-            accepted: !normalized_text.is_empty()
-                && !mcp_query_looks_like_unstructured_description(rest),
-            source_text: trimmed.to_owned(),
-            normalized_text,
-            parsed_request,
-        };
-    }
-
-    let parsed_request = query_parser::parse_query(trimmed);
-    let lower = trimmed.to_ascii_lowercase();
-    let kind = if lower.starts_with("who calls ") {
-        "who_calls"
-    } else if lower.starts_with("what breaks") {
-        "what_breaks"
-    } else if matches!(&parsed_request.target, ContextTarget::QualifiedName { qname } if qname == trimmed)
-    {
-        "exact_qualified_name"
-    } else if matches!(&parsed_request.target, ContextTarget::SymbolName { name } if name == trimmed)
-        && looks_plain_identifier(trimmed)
-    {
-        "plain_identifier"
-    } else if mcp_query_looks_like_unstructured_description(trimmed) {
-        "unsupported_description"
-    } else {
-        "structured_query"
-    };
-    let normalized_text = match kind {
-        "who_calls" | "what_breaks" => {
-            target_to_lookup_text(&parsed_request.target).unwrap_or_else(|| trimmed.to_owned())
-        }
-        "exact_qualified_name" | "plain_identifier" => trimmed.to_owned(),
-        "unsupported_description" | "structured_query" => trimmed.to_owned(),
-        _ => target_to_lookup_text(&parsed_request.target).unwrap_or_else(|| trimmed.to_owned()),
-    };
-
-    McpQueryGrammar {
-        kind,
-        accepted: kind != "unsupported_description",
-        source_text: trimmed.to_owned(),
-        normalized_text,
-        parsed_request,
-    }
+    atlas_review::parse_query_grammar(query)
 }
 
 pub(super) fn str_arg<'a>(
@@ -297,6 +156,24 @@ pub(super) fn graph_issue_code(error: &str) -> &'static str {
 
 pub(super) fn resolve_kind_alias(input: &str) -> String {
     atlas_core::kinds::normalize_kind_alias(input)
+}
+
+pub(crate) fn node_repo_id(node: &atlas_core::Node) -> Option<&str> {
+    node.extra_json
+        .as_object()
+        .and_then(|extra| extra.get("repo_id"))
+        .and_then(|value| value.as_str())
+}
+
+pub(crate) fn node_repo_json(
+    node: &atlas_core::Node,
+    repo_aliases: &BTreeMap<String, String>,
+) -> serde_json::Value {
+    let repo_id = node_repo_id(node);
+    serde_json::json!({
+        "repo_id": repo_id,
+        "display_alias": repo_id.and_then(|id| repo_aliases.get(id)).cloned(),
+    })
 }
 
 pub(super) fn tool_result_value<T: Serialize>(

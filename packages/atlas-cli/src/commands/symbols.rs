@@ -242,47 +242,25 @@ fn run_symbol_resolve(
     language: Option<&str>,
     limit: usize,
 ) -> Result<()> {
-    let keep = |node: &atlas_core::Node| {
-        file.is_none_or(|pattern| node.file_path.contains(pattern))
-            && kind.is_none_or(|kind| node.kind.as_str() == kind)
-            && language.is_none_or(|language| node.language == language)
-    };
-
-    let mut matches: Vec<atlas_core::Node> = Vec::new();
-    if let Some(node) = store
-        .node_by_qname(name)
-        .context("qualified-name lookup failed")?
-        && keep(&node)
-    {
-        matches.push(node);
-    }
-    if matches.is_empty() {
-        matches = store
-            .nodes_by_name(name, limit.max(1))
-            .context("name lookup failed")?
-            .into_iter()
-            .filter(keep)
-            .collect();
-    }
-    if matches.is_empty() {
-        let query = atlas_core::SearchQuery {
-            text: name.to_owned(),
-            kind: kind.map(str::to_owned),
-            language: language.map(str::to_owned),
+    // One resolution ladder shared with MCP `resolve_symbol`: exact qualified
+    // name, exact name, then name prefix. Fuzzy recovery stays opt-in.
+    let resolution = atlas_search::resolve_symbol_nodes(
+        store,
+        &atlas_search::SymbolResolveRequest {
+            name,
+            kind,
+            language,
+            file,
             limit: limit.max(1),
-            ..Default::default()
-        };
-        matches = atlas_search::execute_query(store, &query, false)
-            .context("symbol resolution search failed")?
-            .into_iter()
-            .map(|matched| matched.node)
-            .filter(keep)
-            .collect();
-    }
+            fuzzy: false,
+        },
+    )
+    .context("symbol resolution failed")?;
 
+    let status = resolution.status();
+    let matches = resolution.matches;
     let match_count = matches.len();
     let best_match = matches.first();
-    let truncated = match_count > limit;
 
     if cli.json {
         print_json(
@@ -296,10 +274,13 @@ fn run_symbol_resolve(
                     "kind": kind,
                     "language": language,
                 },
+                "status": status,
+                "ambiguous": match_count > 1,
+                "resolution_stage": resolution.stage.map(|stage| stage.as_str()),
                 "match_count": match_count,
                 "best_match": best_match.map(symbol_json).unwrap_or(serde_json::Value::Null),
-                "matches": matches.iter().take(limit).map(symbol_json).collect::<Vec<_>>(),
-                "truncated": truncated,
+                "matches": matches.iter().map(symbol_json).collect::<Vec<_>>(),
+                "truncated": resolution.truncated,
             }),
         )?;
     } else if let Some(node) = best_match {

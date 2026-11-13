@@ -22,7 +22,8 @@ pub(crate) fn traverse_graph_output_schema() -> Value {
                     "changed_symbol_count": { "type": "integer" },
                     "impacted_symbol_count": { "type": "integer" },
                     "impacted_file_count": { "type": "integer" },
-                    "relevant_edge_count": { "type": "integer" }
+                    "relevant_edge_count": { "type": "integer" },
+                    "collected_edge_count": { "type": "integer" }
                 },
                 "required": [
                     "changed_symbol_count",
@@ -32,6 +33,7 @@ pub(crate) fn traverse_graph_output_schema() -> Value {
                 ]
             },
             "truncated": { "type": "boolean" },
+            "budget_hit": { "type": "boolean" },
             "impacted_files": { "type": "array", "items": { "type": "string" } },
             "seed_budgets": { "type": "array", "items": { "$ref": "#/$defs/seed_budget" } },
             "traversal_budget": {
@@ -389,6 +391,7 @@ pub(crate) fn resolve_symbol_output_schema() -> Value {
             "query": { "type": "object" },
             "best_match": { "type": ["object", "null"] },
             "ambiguity": { "type": "object" },
+            "resolution": { "type": "object" },
             "suggestions": { "type": "array", "items": { "type": "object" } },
             "summary": { "type": "object" },
             "warnings": { "type": "array", "items": { "type": "string" } },

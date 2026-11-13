@@ -12,7 +12,14 @@
     "graph_max_hops": 1,
     "fuzzy_match": false,
     "semantic": false,
-    "regex_pattern": null
+    "regex_pattern": null,
+    "usage_edges_included": false,
+    "query_intent": {
+      "kind": "plain_identifier",
+      "accepted": true,
+      "source_text": "greet_twice",
+      "normalized_text": "greet_twice"
+    }
   },
   "results": [
     {

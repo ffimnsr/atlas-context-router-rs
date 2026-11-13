@@ -230,10 +230,30 @@ pub fn run_query(cli: &Cli) -> Result<()> {
         }
     }
 
+    let grammar = if regex {
+        None
+    } else {
+        let parsed = atlas_review::parse_query_grammar(&text);
+        if !parsed.accepted {
+            anyhow::bail!(
+                "query text must be an exact identifier, qualified name, or supported intent phrase. \
+                 Supported grammar: {}. Retry with one of those shapes.",
+                atlas_review::query_grammar_examples().join(", ")
+            );
+        }
+        Some(parsed)
+    };
+
     let (effective_text, regex_pattern) = if regex {
         (String::new(), Some(text.clone()))
     } else {
-        (text.clone(), None)
+        (
+            grammar
+                .as_ref()
+                .map(|grammar| grammar.normalized_text.clone())
+                .unwrap_or_else(|| text.clone()),
+            None,
+        )
     };
 
     let mut budgets = BudgetManager::new();
@@ -301,9 +321,24 @@ pub fn run_query(cli: &Cli) -> Result<()> {
     };
 
     let t0 = std::time::Instant::now();
-    let results =
+    let mut results =
         search::execute_query_with_embedding(&store, &query, semantic, embed_cfg.as_ref())
             .context("search failed")?;
+    // Supported intent phrases answer from graph edges; fall back to lexical
+    // results when the target symbol cannot be resolved.
+    let mut usage_edges_included = false;
+    if let Some(grammar) = grammar.as_ref()
+        && let Some(execution) = atlas_search::execute_intent_query(
+            &store,
+            grammar.kind,
+            &grammar.normalized_text,
+            effective_limit,
+        )?
+        && !execution.results.is_empty()
+    {
+        results = execution.results;
+        usage_edges_included = execution.usage_edges_included;
+    }
     let latency_ms = t0.elapsed().as_millis();
     budgets.record_usage(
         policy.query_candidates_and_seeds.wall_time_ms,
@@ -338,6 +373,13 @@ pub fn run_query(cli: &Cli) -> Result<()> {
                     "regex_pattern": query.regex_pattern,
                     "repo_ids": query.repo_ids,
                     "all_repos": all_repos,
+                    "query_intent": grammar.as_ref().map(|grammar| serde_json::json!({
+                        "kind": grammar.kind,
+                        "accepted": grammar.accepted,
+                        "source_text": grammar.source_text,
+                        "normalized_text": grammar.normalized_text,
+                    })),
+                    "usage_edges_included": usage_edges_included,
                 },
                 "results": results.iter().map(|result| {
                     let repo_id = node_repo_id(&result.node);
@@ -454,10 +496,21 @@ pub fn run_explain_query(cli: &Cli) -> Result<()> {
             anyhow::bail!("search text required; use --regex to treat text as a regex pattern");
         }
     }
+    let grammar = if regex {
+        None
+    } else {
+        Some(atlas_review::parse_query_grammar(&text))
+    };
     let (effective_text, regex_pattern) = if regex {
         (String::new(), Some(text.clone()))
     } else {
-        (text.clone(), None)
+        (
+            grammar
+                .as_ref()
+                .map(|grammar| grammar.normalized_text.clone())
+                .unwrap_or_else(|| text.clone()),
+            None,
+        )
     };
 
     let repo = resolve_repo(cli)?;
@@ -517,7 +570,25 @@ pub fn run_explain_query(cli: &Cli) -> Result<()> {
         search::explain_query_with_embedding(Some(&store), true, &query, false, embed_cfg.as_ref());
 
     if cli.json {
-        print_json("explain_query", serde_json::to_value(&explanation)?)?;
+        let mut payload = serde_json::to_value(&explanation)?;
+        let intent_target_symbol = grammar
+            .as_ref()
+            .filter(|grammar| matches!(grammar.kind, "who_calls" | "what_breaks" | "tests_for"))
+            .map(|grammar| serde_json::json!(grammar.normalized_text))
+            .unwrap_or(serde_json::Value::Null);
+        payload["query_intent"] = grammar
+            .as_ref()
+            .map(|grammar| {
+                serde_json::json!({
+                    "kind": grammar.kind,
+                    "accepted": grammar.accepted,
+                    "source_text": grammar.source_text,
+                    "normalized_text": grammar.normalized_text,
+                })
+            })
+            .unwrap_or(serde_json::Value::Null);
+        payload["intent_target_symbol"] = intent_target_symbol;
+        print_json("explain_query", payload)?;
     } else {
         let QueryExplanation {
             input,

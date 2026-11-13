@@ -344,6 +344,101 @@ fn query_graph_supported_grammar_normalizes_identifier_and_intent_phrases() {
 }
 
 #[test]
+fn query_graph_who_calls_executes_caller_edges() {
+    let fixture = setup_mcp_fixture();
+    let resp = call(
+        "query_graph",
+        Some(&json!({ "text": "who calls compute", "output_format": "json" })),
+        "/ignored",
+        &fixture.db_path,
+    )
+    .expect("who calls query_graph");
+    let v = &resp["structuredContent"];
+    assert_eq!(v["summary"]["usage_edges_included"], json!(true));
+    let matches = v["matches"].as_array().expect("matches array");
+    assert!(
+        matches
+            .iter()
+            .any(|m| m["qn"] == json!("src/api.rs::fn::handle_request")),
+        "caller handle_request must be present: {matches:?}"
+    );
+}
+
+#[test]
+fn query_graph_what_breaks_returns_impacted_callers() {
+    let fixture = setup_mcp_fixture();
+    let resp = call(
+        "query_graph",
+        Some(&json!({ "text": "what breaks if I change compute", "output_format": "json" })),
+        "/ignored",
+        &fixture.db_path,
+    )
+    .expect("what breaks query_graph");
+    let v = &resp["structuredContent"];
+    assert_eq!(v["summary"]["usage_edges_included"], json!(true));
+    let matches = v["matches"].as_array().expect("matches array");
+    assert!(
+        matches
+            .iter()
+            .any(|m| m["qn"] == json!("src/api.rs::fn::handle_request")),
+        "impacted caller handle_request must be present: {matches:?}"
+    );
+}
+
+#[test]
+fn query_graph_tests_for_returns_test_nodes() {
+    let fixture = setup_mcp_fixture();
+    let resp = call(
+        "query_graph",
+        Some(&json!({ "text": "tests for compute", "output_format": "json" })),
+        "/ignored",
+        &fixture.db_path,
+    )
+    .expect("tests for query_graph");
+    let v = &resp["structuredContent"];
+    assert_eq!(v["query"]["query_intent"]["kind"], json!("tests_for"));
+    let matches = v["matches"].as_array().expect("matches array");
+    assert!(
+        matches
+            .iter()
+            .any(|m| m["qn"] == json!("tests/service_test.rs::fn::compute_test")),
+        "test node compute_test must be present: {matches:?}"
+    );
+}
+
+#[test]
+fn query_graph_rejects_unrecognized_natural_language_intent_phrase() {
+    let fixture = setup_mcp_fixture();
+    let result = call(
+        "query_graph",
+        Some(&json!({ "text": "where is the place that handles error codes?", "output_format": "json" })),
+        "/ignored",
+        &fixture.db_path,
+    )
+    .expect("expected invalid_input tool result");
+    assert_eq!(result["isError"], json!(true));
+    assert_eq!(result["structuredContent"]["code"], json!("invalid_input"));
+}
+
+#[test]
+fn explain_query_reports_intent_and_target_symbol() {
+    let fixture = setup_mcp_fixture();
+    let resp = call(
+        "explain_query",
+        Some(&json!({ "text": "what breaks classify_graph_store_error", "output_format": "json" })),
+        "/ignored",
+        &fixture.db_path,
+    )
+    .expect("explain_query call");
+    let v: serde_json::Value = serde_json::from_str(&unwrap_tool_text(resp)).expect("parse json");
+    assert_eq!(v["query_intent"]["kind"], json!("what_breaks"));
+    assert_eq!(
+        v["intent_target_symbol"],
+        json!("classify_graph_store_error")
+    );
+}
+
+#[test]
 fn query_graph_rejects_natural_language_only_description_with_retry_guidance() {
     let fixture = setup_mcp_fixture();
     let result = call(
@@ -1048,6 +1143,65 @@ fn query_graph_stale_changed_symbol_emits_freshness_warning() {
 }
 
 #[test]
+fn traverse_graph_depth_one_emits_only_root_adjacent_deduped_edges() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "from_qn": "src/service.rs::fn::compute",
+        "max_depth": 1,
+        "max_nodes": 10,
+        "output_format": "json"
+    });
+    let resp = call("traverse_graph", Some(&args), "/repo", &fixture.db_path)
+        .expect("traverse_graph call");
+    let v: serde_json::Value = serde_json::from_str(&unwrap_tool_text(resp)).expect("parse json");
+    let root = "src/service.rs::fn::compute";
+    let edges = v["edges"].as_array().expect("edges array");
+    let mut seen = std::collections::HashSet::new();
+    for edge in edges {
+        assert_eq!(edge["direction"], json!("inbound"));
+        assert!(edge["from"] == json!(root) || edge["to"] == json!(root));
+        let key = (
+            edge["from"].as_str().unwrap_or_default().to_owned(),
+            edge["kind"].as_str().unwrap_or_default().to_owned(),
+            edge["to"].as_str().unwrap_or_default().to_owned(),
+        );
+        assert!(seen.insert(key), "duplicate edge emitted: {edge:?}");
+    }
+    let node_qns: Vec<&str> = v["nodes"]
+        .as_array()
+        .expect("nodes array")
+        .iter()
+        .filter_map(|node| node["qn"].as_str())
+        .collect();
+    for edge in edges {
+        let from = edge["from"].as_str().unwrap_or_default();
+        let to = edge["to"].as_str().unwrap_or_default();
+        assert!(
+            node_qns.contains(&from) && node_qns.contains(&to),
+            "edge endpoint missing from nodes[]: {edge:?}"
+        );
+    }
+}
+
+#[test]
+fn traverse_graph_reports_budget_pressure_when_node_cap_is_reached() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "from_qn": "src/service.rs::fn::compute",
+        "max_depth": 2,
+        "max_nodes": 2,
+        "output_format": "json"
+    });
+    let resp = call("traverse_graph", Some(&args), "/repo", &fixture.db_path)
+        .expect("traverse_graph call");
+    let v: serde_json::Value = serde_json::from_str(&unwrap_tool_text(resp)).expect("parse json");
+    assert_eq!(v["traversal_budget"]["accepted_node_budget"], json!(2));
+    assert_eq!(v["traversal_budget"]["budget_hit"], json!(true));
+    assert_eq!(v["budget_hit"], json!(true));
+    assert_eq!(v["truncated"], json!(true));
+}
+
+#[test]
 fn traverse_graph_includes_provenance() {
     let fixture = setup_mcp_fixture();
     let args =
@@ -1331,14 +1485,63 @@ fn resolve_symbol_empty_name_returns_error() {
 }
 
 #[test]
-fn resolve_symbol_no_match_returns_tool_error() {
+fn resolve_symbol_no_match_returns_zero_match_contract() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "name": "nonexistent_symbol_xyz", "output_format": "json" });
     let resp = call("resolve_symbol", Some(&args), "/repo", &fixture.db_path)
         .expect("resolve_symbol call");
+    assert_ne!(resp["isError"], json!(true));
+    let text = unwrap_tool_text(resp);
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+    assert_eq!(v["summary"]["status"], json!("not_found"));
+    assert_eq!(v["summary"]["match_count"], json!(0));
+    assert!(v["best_match"].is_null());
+    assert_eq!(v["resolution"]["stage"], json!(null));
+}
 
-    assert_eq!(resp["isError"], json!(true));
-    assert_eq!(resp["structuredContent"]["code"], json!("invalid_input"));
+#[test]
+fn resolve_symbol_name_file_kind_is_not_ambiguous() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "name": "compute",
+        "file": "src/service.rs",
+        "kind": "fn",
+        "output_format": "json"
+    });
+    let resp = call("resolve_symbol", Some(&args), "/repo", &fixture.db_path)
+        .expect("resolve_symbol call");
+    let v: serde_json::Value = serde_json::from_str(&unwrap_tool_text(resp)).expect("parse json");
+    assert_eq!(v["summary"]["status"], json!("resolved"));
+    assert_eq!(v["summary"]["match_count"], json!(1));
+    assert_eq!(v["ambiguity"]["ambiguous"], json!(false));
+    assert_eq!(v["resolution"]["stage"], json!("exact_name"));
+}
+
+#[test]
+fn resolve_symbol_kind_alias_fn_filters_before_ranking() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({ "name": "compute", "kind": "fn", "output_format": "json" });
+    let resp = call("resolve_symbol", Some(&args), "/repo", &fixture.db_path)
+        .expect("resolve_symbol call");
+    let v: serde_json::Value = serde_json::from_str(&unwrap_tool_text(resp)).expect("parse json");
+    assert_eq!(v["summary"]["status"], json!("resolved"));
+    assert_eq!(v["summary"]["match_count"], json!(1));
+    assert_eq!(v["best_match"]["kind"], json!("function"));
+}
+
+#[test]
+fn resolve_symbol_prefix_lookup_is_reported() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({ "name": "handle_req", "output_format": "json" });
+    let resp = call("resolve_symbol", Some(&args), "/repo", &fixture.db_path)
+        .expect("resolve_symbol call");
+    let v: serde_json::Value = serde_json::from_str(&unwrap_tool_text(resp)).expect("parse json");
+    assert_eq!(v["summary"]["status"], json!("resolved"));
+    assert_eq!(v["resolution"]["stage"], json!("prefix"));
+    assert_eq!(
+        v["best_match"]["qualified_name"].as_str(),
+        Some("src/api.rs::fn::handle_request")
+    );
 }
 
 #[test]

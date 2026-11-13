@@ -873,6 +873,19 @@ pub(crate) fn explain_query_output_schema() -> Value {
                 "required": ["enabled", "pattern", "valid", "error"]
             },
             "warnings": { "type": "array", "items": { "type": "string" } },
+            "query_intent": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "kind": { "type": "string" },
+                    "source_text": { "type": "string" },
+                    "normalized_text": { "type": "string" },
+                    "intent": { "type": "string" },
+                    "accepted": { "type": "boolean" }
+                },
+                "required": ["kind", "source_text", "normalized_text", "intent", "accepted"]
+            },
+            "intent_target_symbol": { "type": ["string", "null"] },
             "latency_ms": { "type": ["integer", "null"] },
             "result_count": { "type": "integer" },
             "matches": { "type": "array", "items": { "$ref": "#/$defs/explain_query_match" } },

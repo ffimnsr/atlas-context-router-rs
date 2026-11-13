@@ -310,6 +310,10 @@ pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
                     "Maximum matches to return (default 10).",
                 ),
                 (
+                    "properties/fuzzy",
+                    "Enable fuzzy (edit-distance) fallback after exact qualified name, exact name, and prefix lookup fail (default false).",
+                ),
+                (
                     "properties/repo_scope",
                     "Repo scope object. Use { kind: 'current' }, { kind: 'repo_id', repo_id: '<id>' }, or { kind: 'all' }.",
                 ),

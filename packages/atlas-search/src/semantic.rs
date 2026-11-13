@@ -365,6 +365,12 @@ pub fn cluster_by_shared_symbols(
 
     // Map: file_path → set of shared symbol qnames.
     let mut file_to_symbols: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+    // Map: (seed_a, seed_b) → shared symbols; keeps seed↔seed coupling visible
+    // instead of dropping the other seed from the result set.
+    let mut seed_pair_symbols: std::collections::BTreeMap<
+        (String, String),
+        std::collections::HashSet<String>,
+    > = std::collections::BTreeMap::new();
     let mut total_targets_per_seed: HashMap<&str, usize> = HashMap::new();
 
     for &seed in seed_files {
@@ -376,7 +382,17 @@ pub fn cluster_by_shared_symbols(
         total_targets_per_seed.insert(seed, seed_targets.len().max(1));
 
         for (co_file, sym) in pairs {
-            if !seed_files.contains(&co_file.as_str()) {
+            if co_file == seed {
+                continue;
+            }
+            if seed_files.contains(&co_file.as_str()) {
+                let key = if seed < co_file.as_str() {
+                    (seed.to_owned(), co_file)
+                } else {
+                    (co_file, seed.to_owned())
+                };
+                seed_pair_symbols.entry(key).or_default().insert(sym);
+            } else {
                 file_to_symbols.entry(co_file).or_default().insert(sym);
             }
         }
@@ -399,6 +415,23 @@ pub fn cluster_by_shared_symbols(
             }
         })
         .collect();
+
+    // Seed↔seed coupling: emit one merged concept per seed pair so multi-seed
+    // queries surface cross-seed relationships instead of hiding them.
+    for ((left, right), symbol_set) in seed_pair_symbols {
+        if symbol_set.is_empty() {
+            continue;
+        }
+        let shared_count = symbol_set.len();
+        let mut shared_symbols: Vec<String> = symbol_set.into_iter().collect();
+        shared_symbols.sort();
+        let density = shared_count as f64 / total_targets as f64;
+        concepts.push(FileConcept {
+            files: vec![left, right],
+            shared_symbols,
+            density,
+        });
+    }
 
     // Sort by density × shared count then truncate.
     concepts.sort_by(|a, b| {

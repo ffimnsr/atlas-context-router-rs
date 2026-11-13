@@ -384,6 +384,7 @@ pub(crate) struct ResolveSymbolArgsSchema {
     file: Option<String>,
     language: Option<String>,
     limit: Option<u64>,
+    fuzzy: Option<bool>,
     repo_scope: Option<RepoScopeArgsSchema>,
     output_format: Option<String>,
 }

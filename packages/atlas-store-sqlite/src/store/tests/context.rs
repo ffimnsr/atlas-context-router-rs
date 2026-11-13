@@ -136,6 +136,69 @@ fn nodes_by_name_missing_returns_empty() {
     assert!(nodes.is_empty());
 }
 
+// --- nodes_by_name_prefix -------------------------------------------------
+
+#[test]
+fn nodes_by_name_prefix_matches_shortest_first() {
+    let mut store = open_in_memory();
+    let shorter = make_node(
+        NodeKind::Function,
+        "handle",
+        "a.rs::fn::handle",
+        "a.rs",
+        "rust",
+    );
+    let longer = make_node(
+        NodeKind::Function,
+        "handle_request",
+        "b.rs::fn::handle_request",
+        "b.rs",
+        "rust",
+    );
+    let unrelated = make_node(
+        NodeKind::Function,
+        "compute",
+        "c.rs::fn::compute",
+        "c.rs",
+        "rust",
+    );
+    store
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h1", None, None, &[shorter], &[])
+        .unwrap();
+    store
+        .replace_file_graph_for_repo("repo_test", "b.rs", "h2", None, None, &[longer], &[])
+        .unwrap();
+    store
+        .replace_file_graph_for_repo("repo_test", "c.rs", "h3", None, None, &[unrelated], &[])
+        .unwrap();
+
+    let nodes = store.nodes_by_name_prefix("handle_", 10).unwrap();
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].qualified_name, "b.rs::fn::handle_request");
+
+    let nodes = store.nodes_by_name_prefix("hand", 10).unwrap();
+    assert_eq!(nodes.len(), 2);
+    assert_eq!(nodes[0].qualified_name, "a.rs::fn::handle");
+    assert_eq!(nodes[1].qualified_name, "b.rs::fn::handle_request");
+}
+
+#[test]
+fn nodes_by_name_prefix_treats_wildcards_literally() {
+    let mut store = open_in_memory();
+    let node = make_node(
+        NodeKind::Function,
+        "handle_request",
+        "a.rs::fn::handle_request",
+        "a.rs",
+        "rust",
+    );
+    store
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h1", None, None, &[node], &[])
+        .unwrap();
+    assert!(store.nodes_by_name_prefix("hand%", 10).unwrap().is_empty());
+    assert!(store.nodes_by_name_prefix("", 10).unwrap().is_empty());
+}
+
 // --- direct_callers -------------------------------------------------------
 
 #[test]
@@ -394,6 +457,51 @@ fn test_neighbors_missing_node_returns_empty() {
     let store = open_in_memory();
     let neighbors = store.test_neighbors("no::test::here", 10).unwrap();
     assert!(neighbors.is_empty());
+}
+
+#[test]
+fn test_neighbors_attributes_calls_from_inline_test_function() {
+    let mut store = open_in_memory();
+    let source = make_node(
+        NodeKind::Function,
+        "parse",
+        "a.rs::fn::parse",
+        "a.rs",
+        "rust",
+    );
+    let mut inline_test = make_node(
+        NodeKind::Test,
+        "parse_rejects_empty",
+        "a.rs::fn::parse_rejects_empty",
+        "a.rs",
+        "rust",
+    );
+    inline_test.is_test = true;
+    let call_site = make_edge(
+        EdgeKind::Calls,
+        "a.rs::fn::parse_rejects_empty",
+        "a.rs::fn::parse",
+        "a.rs",
+    );
+    store
+        .replace_file_graph_for_repo(
+            "repo_test",
+            "a.rs",
+            "h1",
+            Some("rust"),
+            None,
+            &[source, inline_test],
+            &[call_site],
+        )
+        .unwrap();
+
+    let neighbors = store.test_neighbors("a.rs::fn::parse", 10).unwrap();
+    assert_eq!(neighbors.len(), 1);
+    assert_eq!(
+        neighbors[0].0.qualified_name,
+        "a.rs::fn::parse_rejects_empty"
+    );
+    assert_eq!(neighbors[0].1.kind, EdgeKind::Calls);
 }
 
 // --- dead_code_candidates_filtered ----------------------------------------

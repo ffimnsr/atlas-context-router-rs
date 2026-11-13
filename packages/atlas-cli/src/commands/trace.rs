@@ -193,6 +193,21 @@ fn path_json(
                 path.nodes.iter().map(|node| node.qualified_name.clone()).collect::<Vec<_>>()
             }).unwrap_or_default(),
         },
+        // Path mode previously left `nodes` empty even when a path was found.
+        // Emit the traversal nodes here so consumers have one shape to read.
+        "nodes": result.path.as_ref().map(|path| {
+            path.nodes.iter().enumerate().map(|(depth, node)| json!({
+                "qualified_name": node.qualified_name,
+                "name": node.name,
+                "kind": node.kind.as_str(),
+                "language": node.language,
+                "file": node.file_path,
+                "line_start": node.line_start,
+                "line_end": node.line_end,
+                "is_test": node.is_test,
+                "depth": depth,
+            })).collect::<Vec<_>>()
+        }).unwrap_or_default(),
         "edges": result.path.as_ref().map(|path| {
             path.edges.iter().map(edge_json).collect::<Vec<_>>()
         }).unwrap_or_default(),

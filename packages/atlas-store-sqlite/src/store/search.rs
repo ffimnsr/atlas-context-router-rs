@@ -385,7 +385,10 @@ impl Store {
                JOIN   edges  e ON e.source_qualified = i.qn
                WHERE  i.depth < ?
              )
-             SELECT DISTINCT qn FROM impact LIMIT ?"
+             SELECT qn FROM impact
+             GROUP BY qn
+             ORDER BY MIN(depth), qn
+             LIMIT ?"
         );
 
         let mut all_params: Vec<Box<dyn rusqlite::types::ToSql>> = seed_qnames
@@ -506,6 +509,7 @@ impl Store {
                     || requested_nodes != max_nodes
                     || requested_edges != max_edges
                     || changed_node_total > max_nodes
+                    || observed_nodes >= max_nodes
                     || original_edge_count > max_edges,
                 suggested_narrower_query: (original_edge_count > max_edges).then(|| {
                     format!(

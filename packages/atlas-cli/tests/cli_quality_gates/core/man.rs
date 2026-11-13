@@ -12,7 +12,7 @@ fn man_text_output_matches_golden() {
         &text,
         &[
             "resolve_symbol — Resolve a symbol name or exact qualified_name to its canonical graph symbol.",
-            "request_shape: request object: object with 6 top-level fields (1 required)",
+            "request_shape: request object: object with 7 top-level fields (1 required)",
             "input_contract:",
             "repo_scope.kind",
             "mcp_manual_tool_call",
@@ -32,7 +32,7 @@ fn man_json_output_matches_golden() {
         &text,
         &[
             "\"requested_tool_name\": \"resolve_symbol\"",
-            "\"request_shape\": \"request object: object with 6 top-level fields (1 required)\"",
+            "\"request_shape\": \"request object: object with 7 top-level fields (1 required)\"",
             "\"input_contract\"",
             "\"discriminant_field\": \"repo_scope.kind\"",
             "\"mcp_manual_tool_call\"",

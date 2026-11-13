@@ -36,7 +36,7 @@ use super::context_ops::{
 };
 use super::graph::{
     tool_batch_query_graph, tool_concept_clusters, tool_cross_file_links, tool_explain_query,
-    tool_query_graph, tool_resolve_symbol, tool_symbol_neighbors, tool_traverse_graph,
+    tool_query_graph, tool_symbol_neighbors, tool_traverse_graph,
 };
 use super::graph_stats::tool_list_graph_stats;
 use super::health::{
@@ -46,6 +46,7 @@ use super::inventory::{tool_repo_registry, tool_tool_list, tool_tool_search};
 use super::manual::{tool_help, tool_man};
 use super::metrics::tool_get_metrics;
 use super::postprocess::tool_postprocess_graph;
+use super::resolve::tool_resolve_symbol;
 use super::shared::{
     bool_arg, derive_graph_readiness, derive_graph_readiness_open_failed,
     resolve_repo_scope_selection,

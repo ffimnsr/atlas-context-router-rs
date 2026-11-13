@@ -6,6 +6,7 @@ mod docs_section;
 mod explain_change;
 mod explain_wire;
 pub mod overview;
+pub mod query_grammar;
 pub mod query_parser;
 mod ranking;
 
@@ -21,3 +22,7 @@ pub use explain_change::{
     ExplainChangeSummary, build_explain_change_summary, empty_explain_change_summary,
 };
 pub use explain_wire::explain_change_wire_payload;
+pub use query_grammar::{
+    QueryGrammar, parse_query_grammar, query_grammar_examples,
+    query_looks_like_unstructured_description, strip_supported_intent_prefix,
+};
