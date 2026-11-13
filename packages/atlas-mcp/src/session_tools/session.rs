@@ -236,6 +236,7 @@ pub fn tool_get_session_status(
         )
     };
 
+    let resume_snapshot_exists = snapshot.as_ref().is_some_and(|s| !s.consumed);
     let result = serde_json::json!({
         "tool": "get_session_status",
         "session_id": session_id.as_str(),
@@ -250,7 +251,7 @@ pub fn tool_get_session_status(
         "last_resume_at": last_resume_at,
         "last_compaction_at": last_compaction_at,
         "event_count": event_count,
-        "resume_snapshot_exists": snapshot.is_some(),
+        "resume_snapshot_exists": resume_snapshot_exists,
         "snapshot_consumed": snapshot.as_ref().map(|s| s.consumed),
         "agent_partitions": agent_summary.partitions,
         "delegated_tasks": agent_summary.delegated_tasks,
@@ -262,7 +263,7 @@ pub fn tool_get_session_status(
             "partition_count": agent_summary.partitions.len(),
             "delegated_task_count": agent_summary.delegated_tasks.len(),
             "responsibility_count": agent_summary.responsibilities.len(),
-            "resume_snapshot_exists": snapshot.is_some(),
+            "resume_snapshot_exists": resume_snapshot_exists,
         },
         "warnings": warnings,
     });
@@ -325,6 +326,7 @@ pub fn tool_compact_session(
         decayed_count,
         deduplicated_count,
         promoted_count,
+        no_op,
     } = store.compact_session(&session_id)?;
     let removed_events = decayed_count + deduplicated_count;
 
@@ -340,7 +342,7 @@ pub fn tool_compact_session(
         "deduplicated_events": deduplicated_count,
         "summary": {
             "status": "ok",
-            "no_op": events_before == events_after && merged_count == 0 && removed_events == 0 && promoted_count == 0,
+            "no_op": no_op,
             "events_before": events_before,
             "events_after": events_after,
             "events_removed": removed_events,

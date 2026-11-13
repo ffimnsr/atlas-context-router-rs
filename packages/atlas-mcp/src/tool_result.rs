@@ -432,7 +432,7 @@ fn classify_tool_execution_error(message: &str, detail: &str) -> (ToolErrorCode,
 
     let code = if lowered.contains("file not found") {
         ToolErrorCode::FileNotFound
-    } else if lowered.contains("symbol not found") {
+    } else if lowered.contains("symbol not found") || lowered.contains("node not found") {
         ToolErrorCode::SymbolNotFound
     } else if lowered.contains("graph not ready") || lowered.contains("stale graph") {
         ToolErrorCode::GraphStale
@@ -453,6 +453,9 @@ fn classify_tool_execution_error(message: &str, detail: &str) -> (ToolErrorCode,
         || lowered.contains("invalid template extension patterns")
         || lowered.contains("invalid text-asset extension patterns")
         || lowered.contains("invalid overview analysis")
+        || lowered.contains("unknown memoir relation")
+        || lowered.contains("unknown overview subject kind")
+        || lowered.contains("is ambiguous")
         || lowered.contains("create_missing")
         || lowered.contains("provide an `analysis` object")
         || lowered.contains("missing required")
@@ -775,6 +778,22 @@ mod tests {
         let (code, _) = classify_tool_execution_error(missing_source, missing_source);
         assert_eq!(code, ToolErrorCode::InvalidInput);
         assert!(tool_retry_guidance(missing_source).contains("analysis"));
+    }
+
+    #[test]
+    fn error_classification_maps_symbol_and_relation_misses() {
+        let node_miss = "safety scoring for `src/lib.rs::fn::missing` failed: node not found: src/lib.rs::fn::missing";
+        let (code, _) = classify_tool_execution_error(node_miss, node_miss);
+        assert_eq!(code, ToolErrorCode::SymbolNotFound);
+
+        let relation_miss =
+            "unknown memoir relation type: cousin; expected one of depends_on, part_of";
+        let (code, _) = classify_tool_execution_error(relation_miss, relation_miss);
+        assert_eq!(code, ToolErrorCode::InvalidInput);
+
+        let ambiguous = "overview export subject 'health' is ambiguous; candidates: a, b";
+        let (code, _) = classify_tool_execution_error(ambiguous, ambiguous);
+        assert_eq!(code, ToolErrorCode::InvalidInput);
     }
 
     #[test]

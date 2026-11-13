@@ -33,6 +33,25 @@ fn store_memory_persists_record_with_defaults() {
 }
 
 #[test]
+fn store_memory_seeds_initial_operator_history() {
+    let (_dir, mut store) = open_store(16, 1024);
+    let input = NewMemory {
+        repo_root: "/repo".to_owned(),
+        body: "remember to run the hook tests".to_owned(),
+        ..Default::default()
+    };
+    let record = store.store_memory(&input).unwrap();
+
+    let history = store
+        .memory_op_history("/repo", &record.id)
+        .unwrap()
+        .expect("history exists");
+    assert_eq!(history.entries.len(), 1);
+    assert_eq!(history.entries[0].op, "store");
+    assert_eq!(history.entries[0].fields, vec!["body".to_owned()]);
+}
+
+#[test]
 fn store_memory_preserves_exact_text_and_metadata() {
     let (_dir, mut store) = open_store(16, 1024);
     let body = "  spaced text with\nnewline and \"quotes\"  ";

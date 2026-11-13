@@ -152,6 +152,15 @@ fn resume_session_reuses_existing_snapshot_and_marks_consumed() {
     let store = open_session_store(&db_path);
     let snapshot = store.get_resume_snapshot(&session_id).unwrap().unwrap();
     assert!(snapshot.consumed);
+    drop(store);
+
+    let status = tool_get_session_status(None, repo_root, &db_path, OutputFormat::Json).unwrap();
+    let status_body = tool_body(&status);
+    assert_eq!(status_body["snapshot_consumed"], true);
+    assert_eq!(
+        status_body["resume_snapshot_exists"], false,
+        "a consumed snapshot must not report as available"
+    );
 }
 
 #[test]

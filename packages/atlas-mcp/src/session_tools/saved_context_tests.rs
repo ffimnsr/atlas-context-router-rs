@@ -12,6 +12,51 @@ use atlas_session::{NewSessionEvent, SessionEventType};
 use tempfile::TempDir;
 
 #[test]
+fn cross_session_search_treats_agent_id_as_hard_partition_filter() {
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+    let db_path = setup_db_path(&dir);
+    let repo_root = dir.path().to_str().unwrap();
+
+    for (agent, marker) in [
+        ("agent_worker_1", "partitionalpha"),
+        ("agent_worker_2", "partitionbeta"),
+    ] {
+        let args = serde_json::json!({
+            "content": medium_content(marker),
+            "label": format!("{agent} artifact"),
+            "agent_id": agent,
+        });
+        let result =
+            tool_save_context_artifact(Some(&args), repo_root, &db_path, OutputFormat::Json)
+                .unwrap();
+        let body = tool_body(&result);
+        assert!(body["source_id"].as_str().is_some(), "artifact must index");
+    }
+
+    let args = serde_json::json!({
+        "query": "partitionalpha",
+        "agent_id": "agent_worker_1",
+    });
+    let result =
+        tool_cross_session_search(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap();
+    let body = tool_body(&result);
+    assert_eq!(body["query"]["merge_agent_partitions"], false);
+    assert_eq!(body["query"]["effective_agent_filter"], "agent_worker_1");
+    let matches = body["matches"].as_array().unwrap();
+    assert!(
+        !matches.is_empty(),
+        "matching partition artifact must be found"
+    );
+    assert!(
+        matches
+            .iter()
+            .all(|item| item["agent_id"].as_str() == Some("agent_worker_1")),
+        "agent_id must not leak across partitions"
+    );
+}
+
+#[test]
 fn test_search_saved_context_missing_query() {
     let dir = TempDir::new().unwrap();
     let db_path = setup_db_path(&dir);

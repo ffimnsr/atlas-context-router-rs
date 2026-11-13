@@ -116,7 +116,7 @@ impl Default for InsightsConfig {
             risk_high_threshold: 70.0,
             similarity_high_threshold: 0.72,
             similarity_medium_threshold: 0.55,
-            similarity_low_threshold: 0.40,
+            similarity_low_threshold: 0.22,
             duplicate_high_threshold: 0.86,
             duplicate_medium_threshold: 0.74,
             duplicate_low_threshold: 0.64,

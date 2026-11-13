@@ -332,6 +332,7 @@ pub(super) fn compact_session_events(
         decayed_count: decay_count,
         deduplicated_count: dedup_count,
         promoted_count,
+        no_op: all_delete.is_empty() && promote_ids.is_empty(),
     })
 }
 

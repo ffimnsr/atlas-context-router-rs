@@ -362,6 +362,39 @@ fn stats_returns_nodes_by_kind() {
 }
 
 #[test]
+fn provenance_meta_matches_graph_stats_and_excludes_synthetic_rows() {
+    let mut store = open_in_memory();
+    let real = make_node(NodeKind::Function, "fn1", "a.rs::fn::fn1", "a.rs", "rust");
+    store
+        .replace_file_graph_for_repo("repo_test", "a.rs", "h", Some("rust"), None, &[real], &[])
+        .unwrap();
+    let synthetic = make_node(
+        NodeKind::Module,
+        "owner",
+        ".atlas/synthetic/owner::module::owner",
+        ".atlas/synthetic/owner",
+        "json",
+    );
+    store
+        .replace_file_graph_for_repo(
+            "repo_test",
+            ".atlas/synthetic/owner",
+            "h",
+            Some("json"),
+            None,
+            &[synthetic],
+            &[],
+        )
+        .unwrap();
+
+    let stats = store.graph_stats().unwrap();
+    let provenance = store.provenance_meta().unwrap();
+    assert_eq!(provenance.indexed_file_count, stats.file_count);
+    assert_eq!(provenance.indexed_file_count, 1);
+    assert_eq!(provenance.last_indexed_at, stats.last_indexed_at);
+}
+
+#[test]
 fn stats_returns_languages() {
     let mut store = open_in_memory();
     let node = make_node(NodeKind::Function, "fn1", "a.rs::fn::fn1", "a.rs", "rust");

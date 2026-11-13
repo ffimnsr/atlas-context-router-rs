@@ -1109,7 +1109,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 **Expected Clean Output & Assertions**:
 - Verify `structuredContent.fts_phrase` is generated
-- Verify `structuredContent.tokens` contains individual word tokens
+- Verify `structuredContent.tokenization.fts_tokens` contains individual word tokens
 - Verify expected search path indicates FTS index lookup
 
 **CLI Parity Command**:
@@ -1132,7 +1132,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `structuredContent.regex_valid == true`
+- Verify `structuredContent.regex_plan.valid == true`
 - Verify no regex compilation errors are reported
 
 **CLI Parity Command**:
@@ -1155,7 +1155,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `structuredContent.intent` is parsed as `what_breaks`
+- Verify `structuredContent.query_intent.kind == 'what_breaks'` and `structuredContent.query_intent.intent` carries the higher-level context intent
 - Verify target symbol identifier is extracted as `classify_graph_store_error`
 
 **CLI Parity Command**:
@@ -2220,6 +2220,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 **Expected Clean Output & Assertions**:
 - Verify `structuredContent.dry_run == true`
 - Verify `structuredContent.pending_chunks` is returned as an integer >= 0
+- `limit` is a request-side cap only and is not echoed back in the response
 - Confirm zero HTTP calls are made to embedding backends
 
 **CLI Parity Command**:
@@ -2243,7 +2244,8 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `structuredContent.limit == 10`
+- Verify `structuredContent.limit` is not echoed (request-side cap only)
+- Verify `structuredContent.pending_chunks` and `dry_run` are unchanged by the cap
 
 **CLI Parity Command**:
 ```./target/debug/atlas query --embed --dry-run --json```
@@ -2295,7 +2297,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 **Expected Clean Output & Assertions**:
 - Verify `structuredContent.dry_run == true`
-- Verify `stages` lists planned analytics passes (`metrics`, `architecture`, `risk`)
+- Verify `structuredContent.planned_stages` lists the stage ids `flows`, `communities`, `architecture_metrics`, `query_hints`, and `large_function_summaries`
 
 **CLI Parity Command**:
 ```./target/debug/atlas postprocess --stage metrics --dry-run --json```
@@ -2318,7 +2320,8 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify skips unchanged packages and stages
+- With 0 changed files, `structuredContent.noop == true`, `noop_reason == 'no_changed_files'`, and `planned_stages` is empty
+- With changed files, only in-scope stages execute
 
 **CLI Parity Command**:
 ```./target/debug/atlas postprocess --stage metrics --dry-run --json```
@@ -2690,7 +2693,8 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 **Expected Clean Output & Assertions**:
 - Verify `findings` contains risk classification
-- Verify `factor_contributions` identifies `public_api_exposure`
+- Verify `top_factors` identifies `public_api_exposure`
+- `verbose: false` still includes per-factor evidence in the compact payload
 - Verify output remains compact without flooding context
 
 **CLI Parity Command**:
@@ -2714,7 +2718,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify each factor contribution has exact line range evidence and node kinds
+- Verify `top_factors` carries the full factor breakdown with weights
 
 **CLI Parity Command**:
 ```./target/debug/atlas insights risk packages/atlas-core/src/health.rs::fn::classify_graph_store_error --json```
@@ -2917,8 +2921,8 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify detects hubs like central dispatch routers (`tool_graph_requirement`)
-- Verify reports bottleneck scores
+- Verify findings include `pattern_centrality` entries whose `details` mark `hub` and/or `bottleneck`
+- Verify not every finding is `pattern_repeated_chain`; category diversity is enforced before the score-ranked trim
 
 **CLI Parity Command**:
 ```./target/debug/atlas insights patterns --json```
@@ -2941,7 +2945,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify returns deep dependency chains with hop counts
+- Verify findings include `pattern_deep_chain` entries with `details.depth` and `details.chain`
 
 **CLI Parity Command**:
 ```./target/debug/atlas insights patterns --json```
@@ -2963,7 +2967,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify reports isolated module islands if any exist
+- Verify findings include `pattern_isolated_component` or `pattern_unused_module` entries when such structures exist
 
 **CLI Parity Command**:
 ```./target/debug/atlas insights patterns --json```
@@ -2995,7 +2999,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 **Expected Clean Output & Assertions**:
 - Verify returns functions exceeding 100 lines
-- Verify each item reports `line_count` and `file_path`
+- Verify each item reports `loc` and `file_path`
 
 **CLI Parity Command**:
 ```./target/debug/atlas insights large-functions --json```
@@ -3156,8 +3160,8 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify returns functions with signature and token shingle overlap
-- Verify candidates like `classify_compiler_error` in `atlas-agent-events` appear
+- Verify returns functions with signature and token shingle overlap at the default `min_score` floor of `0.22`
+- Verify `score_band` is one of `low`, `medium`, or `high`
 
 **CLI Parity Command**:
 ```./target/debug/atlas insights similar-functions packages/atlas-core/src/health.rs::fn::classify_graph_store_error --json```
@@ -3611,10 +3615,10 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 #### Tool 42: `read_file_excerpt`
 **Description**: Reads bounded file content from a repo-relative path using selector (range, ranges, context) without running full content search.
-**Canonical CLI Parity Command**: `./target/debug/atlas content excerpt packages/atlas-core/src/health.rs --start-line 62 --end-line 70 --json`
+**Canonical CLI Parity Command**: `./target/debug/atlas content excerpt packages/atlas-core/src/health.rs --start-line 68 --end-line 76 --json`
 
 ##### Test 42.1: Read Exact Function Line Range
-**Intent in Plain English**: Read lines 62 to 70 of `packages/atlas-core/src/health.rs` containing `classify_graph_store_error`.
+**Intent in Plain English**: Read lines 68 to 76 of `packages/atlas-core/src/health.rs` containing `classify_graph_store_error`.
 
 **MCP Arguments (JSON)**:
 ```json
@@ -3622,19 +3626,19 @@ Agent verifies that the data returned matches the agent's expected semantic mode
   "file": "packages/atlas-core/src/health.rs",
   "selector": {
     "kind": "range",
-    "start_line": 62,
-    "end_line": 70
+    "start_line": 68,
+    "end_line": 76
   }
 }
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `snippets[0].lines[0]` line number == 62
+- Verify `snippets[0].lines[0]` line number == 68
 - Verify text contains `pub fn classify_graph_store_error`
-- Verify `snippets[0].range == [62, 70]`
+- Verify `snippets[0].range == [68, 76]`
 
 **CLI Parity Command**:
-```./target/debug/atlas content excerpt packages/atlas-core/src/health.rs --start-line 62 --end-line 70 --json```
+```./target/debug/atlas content excerpt packages/atlas-core/src/health.rs --start-line 68 --end-line 76 --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -3657,8 +3661,8 @@ Agent verifies that the data returned matches the agent's expected semantic mode
         48
       ],
       [
-        62,
-        66
+        68,
+        72
       ]
     ]
   }
@@ -3671,7 +3675,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify snippet 2 contains `classify_graph_store_error`
 
 **CLI Parity Command**:
-```./target/debug/atlas content excerpt packages/atlas-core/src/health.rs --start-line 62 --end-line 70 --json```
+```./target/debug/atlas content excerpt packages/atlas-core/src/health.rs --start-line 68 --end-line 76 --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -3731,9 +3735,9 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 **Expected Clean Output & Assertions**:
 - Verify `match_mode == 'literal'`
-- Verify `snippets[0].match` contains line 62
+- Verify `snippets[0].match` contains line 68
 - Verify `before` contains 3 lines and `after` contains 3 lines
-- Verify range is `[59, 65]`
+- Verify range is `[65, 71]`
 
 **CLI Parity Command**:
 ```./target/debug/atlas content match-context packages/atlas-core/src/health.rs 'classify_graph_store_error' --json```
@@ -3874,8 +3878,8 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify tool execution error or `resolved == false`
-- Verify suggests valid headings
+- Verify `resolved == false`
+- Verify `candidates == []` for an unrelated missing heading; only near-miss headings produce suggestions
 
 **CLI Parity Command**:
 ```./target/debug/atlas docs-section docs/error_codes.md '`stale_index`' --json```
@@ -4052,8 +4056,8 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `structuredContent.status == 'ok'`
-- Verify `structuredContent.graph_state` reflects current index readiness
+- Verify `structuredContent.summary.recorded == 'ok'`
+- Verify `structuredContent.graph_readiness` reflects current index readiness
 - Verify session start event is recorded in the continuity ledger
 
 **CLI Parity Command**:
@@ -4127,7 +4131,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 **Expected Clean Output & Assertions**:
 - Verify `structuredContent.session_id` is a non-empty string
 - Verify `structuredContent.event_count >= 0`
-- Verify `has_resume_snapshot` boolean is returned
+- Verify `resume_snapshot_exists` boolean is returned
 
 **CLI Parity Command**:
 ```./target/debug/atlas session status --json```
@@ -4196,7 +4200,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `structuredContent.curation_stats` is returned
+- Verify flat `before_counts`, `after_counts`, `removed_events`, `promoted_events`, `merged_groups`, `decayed_events`, and `deduplicated_events` are returned (no nested `curation_stats`)
 - Verify reports preserved and evicted event counts
 
 **CLI Parity Command**:
@@ -4217,6 +4221,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
+- Verify `structuredContent.summary.no_op == true` on the second and third call against an unchanged ledger
 - Verify subsequent call produces 0 new evictions
 
 **CLI Parity Command**:
@@ -4292,7 +4297,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 **Expected Clean Output & Assertions**:
 - Verify snapshot is returned
-- Verify subsequent `get_session_status` reports `has_resume_snapshot == false`
+- Verify subsequent `get_session_status` reports `resume_snapshot_exists == false`
 
 **CLI Parity Command**:
 ```./target/debug/atlas session resume --json```
@@ -4422,15 +4427,17 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```json
 {
   "label": "test_graph_analysis_report",
-  "content": "{\"status\":\"ok\",\"nodes_checked\":25000,\"details\":\"Extended graph analysis content sample payload\"}",
+  "content": "{\"status\":\"ok\",\"nodes_checked\":25000,\"details\":\"Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload. Extended graph analysis content sample payload.\"}",
   "content_type": "json"
 }
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `structuredContent.source_id` is returned as a non-empty hash string
-- Verify `structuredContent.stored == true`
+- Payloads above the inline threshold persist and return a non-empty `source_id`
+- Verify `storage_mode` is `indexed_pointer` or `indexed_preview`
+- Verify `summary.stored == true`
 - Confirm the full payload is not echoed back into context
+- Payloads at or below the inline threshold (about 360 bytes) instead return `storage_mode: 'raw_inline'`, `source_id: null`, `summary.stored: false`
 
 **CLI Parity Command**:
 ```./target/debug/atlas session save-artifact --json```
@@ -4453,7 +4460,9 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify returns source reference with preview
+- Verify `structuredContent.storage_mode == 'raw_inline'`
+- Verify `structuredContent.source_id` is null and `inline_content` carries the full text
+- Verify `structuredContent.summary.stored == false`
 
 **CLI Parity Command**:
 ```./target/debug/atlas session save-artifact --json```
@@ -4477,7 +4486,8 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `source_type` metadata is persisted
+- Verify `structuredContent.storage_mode == 'raw_inline'` (the 55-byte body is under the inline threshold)
+- Verify `source_type` metadata is persisted when the artifact is indexed; inline payloads are not indexed
 
 **CLI Parity Command**:
 ```./target/debug/atlas session save-artifact --json```
@@ -4532,6 +4542,8 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 **Expected Clean Output & Assertions**:
 - Verify returned bytes <= 100
+- Verify `content` is non-empty and `truncated == true`
+- Verify `next_chunk_offset` strictly advances from `chunk_offset` (never repeats the same offset)
 
 **CLI Parity Command**:
 ```./target/debug/atlas session read-artifact test_id --json```
@@ -4705,7 +4717,10 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify respects agent partition boundaries
+- Verify explicit `agent_id` acts as a hard partition filter; `merge_agent_partitions` defaults to `false`
+- Verify `query.effective_agent_filter == 'agent_worker_1'`
+- Verify every returned `matches[].agent_id` equals the requested agent id
+- Pass `merge_agent_partitions: true` to widen the query deliberately
 
 **CLI Parity Command**:
 ```./target/debug/atlas session search --cross-session 'error' --json```
@@ -4733,7 +4748,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 **Expected Clean Output & Assertions**:
 - Verify `structuredContent.event_count >= 0`
-- Verify `structuredContent.saved_source_count >= 0`
+- Verify `structuredContent.source_count >= 0`
 - Verify `structuredContent.content_db_path` ends with `.atlas/context.db`
 
 **CLI Parity Command**:
@@ -4877,8 +4892,8 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `structuredContent.frequently_accessed_symbols` is returned
-- Verify `structuredContent.frequently_accessed_files` is returned
+- Verify `structuredContent.frequent_symbols` is returned
+- Verify `structuredContent.frequent_files` is returned
 
 **CLI Parity Command**:
 ```./target/debug/atlas memory global --json```
@@ -4954,15 +4969,15 @@ Agent verifies that the data returned matches the agent's expected semantic mode
   "topic": "architecture",
   "title": "Health Error Classification Invariant",
   "text": "classify_graph_store_error maps errors to GraphStoreHealthClass enum variants",
-  "importance": 4,
+  "importance": "high",
   "scope": "project"
 }
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `structuredContent.id` is returned
-- Verify `structuredContent.scope == 'project'`
-- Verify `structuredContent.importance == 4`
+- Verify `structuredContent.memory.id` is returned
+- Verify `structuredContent.memory.scope == 'project'`
+- Verify `structuredContent.memory.importance == 'high'` (enum values only: `critical`, `high`, `normal`, `low`)
 
 **CLI Parity Command**:
 ```./target/debug/atlas memory store --topic architecture --json```
@@ -5012,7 +5027,8 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify memory record links `patch_file`
+- Verify `structuredContent.memory.metadata.related_file == 'packages/atlas-core/src/health.rs'`
+- Verify the file link is no longer silently dropped
 
 **CLI Parity Command**:
 ```./target/debug/atlas memory store --topic architecture --json```
@@ -5287,12 +5303,13 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```json
 {
   "uri": "atlas://repo/current/file/packages/atlas-core/src/health.rs",
-  "direction": "inbound"
+  "direction": "incoming"
 }
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify only inbound experience edges returned
+- Verify only incoming experience edges returned
+- Unknown directions are rejected as plain text (not `inbound`)
 
 **CLI Parity Command**:
 ```./target/debug/atlas experience 'atlas://health/status' --json```
@@ -6338,7 +6355,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify returns error with suggestions for nearest valid tool names
+- Verify returns a plain `unknown MCP tool 'unknown_tool_xyz'` message with no suggestion list
 
 **CLI Parity Command**:
 ```./target/debug/atlas man trace --json```

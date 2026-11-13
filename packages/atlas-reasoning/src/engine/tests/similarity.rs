@@ -80,6 +80,64 @@ fn similar_functions_rank_semantically_close_callables() {
 }
 
 #[test]
+fn similar_functions_default_floor_finds_near_duplicate() {
+    let repo_root = make_repo_root();
+    write_repo_file(
+        &repo_root,
+        "src/lib.rs",
+        "pub fn alpha(value: i32) -> i32 {\n    let next = value + 1;\n    next * 2\n}\n\npub fn beta(input: i32) -> i32 {\n    let next = input + 1;\n    next * 2\n}\n",
+    );
+
+    let mut alpha = node(
+        0,
+        "alpha",
+        "src/lib.rs::fn::alpha",
+        "src/lib.rs",
+        NodeKind::Function,
+    );
+    alpha.params = Some("(value: i32)".to_owned());
+    alpha.return_type = Some("i32".to_owned());
+    alpha.line_start = 1;
+    alpha.line_end = 4;
+    let mut beta = node(
+        0,
+        "beta",
+        "src/lib.rs::fn::beta",
+        "src/lib.rs",
+        NodeKind::Function,
+    );
+    beta.params = Some("(input: i32)".to_owned());
+    beta.return_type = Some("i32".to_owned());
+    beta.line_start = 6;
+    beta.line_end = 9;
+
+    let mut store = make_store();
+    seed_graph(&mut store, vec![alpha, beta], vec![]);
+    let engine = insights_engine(&store);
+    let analysis = engine
+        .find_similar_functions(
+            &repo_root,
+            SimilarFunctionRequest {
+                symbol: "src/lib.rs::fn::alpha".to_owned(),
+                limit: Some(5),
+                min_score: None,
+                include_same_file: true,
+            },
+        )
+        .expect("similar function analysis");
+
+    assert!(
+        !analysis.matches.is_empty(),
+        "default min_score floor must be reachable for a near-duplicate pair: thresholds={:?}",
+        analysis.thresholds
+    );
+    assert_eq!(
+        analysis.matches[0].candidate.qualified_name,
+        "src/lib.rs::fn::beta"
+    );
+}
+
+#[test]
 fn duplicate_detection_groups_near_duplicate_callables() {
     let repo_root = make_repo_root();
     write_repo_file(

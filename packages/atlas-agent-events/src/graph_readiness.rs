@@ -100,15 +100,36 @@ fn change_is_pending_in_graph(
     }
 }
 
-/// Files changed in the working tree that are not yet reflected in the graph.
+/// Files changed since the last indexed ref that are not yet reflected in the
+/// graph.
+///
+/// Uses the recorded indexed ref as the diff base so committed changes made
+/// after the last build are detected too. Diffing only against the working tree
+/// hid graph drift whenever the worktree was clean at a newer HEAD, which is why
+/// `status`/`doctor` could report fresh while overview freshness (which compares
+/// the indexed ref to HEAD) reported stale.
 pub fn pending_graph_relevant_changes(repo_root: &str, db_path: &str) -> Option<Vec<String>> {
     let repo_root_path = find_repo_root(Utf8Path::new(repo_root)).ok()?;
-    let changes = changed_files(repo_root_path.as_path(), &DiffTarget::WorkingTree).ok()?;
+    let store = Store::open(db_path).ok()?;
+    let diff_target = store
+        .last_indexed_ref(repo_root)
+        .ok()
+        .flatten()
+        .map(DiffTarget::BaseRef)
+        .unwrap_or(DiffTarget::WorkingTree);
+    let changes = match changed_files(repo_root_path.as_path(), &diff_target) {
+        Ok(changes) => changes,
+        Err(_) if matches!(diff_target, DiffTarget::BaseRef(_)) => {
+            // A recorded ref can disappear after history rewrites; fall back to
+            // the worktree diff rather than reporting no pending changes.
+            changed_files(repo_root_path.as_path(), &DiffTarget::WorkingTree).ok()?
+        }
+        Err(_) => return None,
+    };
     if changes.is_empty() {
         return Some(Vec::new());
     }
 
-    let store = Store::open(db_path).ok()?;
     let mut registry = ParserRegistry::with_defaults();
     // Honor [parsers.external] so external-language files count as
     // graph-relevant for hook-triggered refresh decisions.

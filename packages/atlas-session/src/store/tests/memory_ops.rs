@@ -61,8 +61,9 @@ fn apply_memory_op_persists_state_and_history() {
         .memory_op_history("/repo", "op-memory")
         .unwrap()
         .expect("history exists");
-    assert_eq!(history.entries.len(), 1);
-    assert_eq!(history.entries[0].op, "count");
+    assert_eq!(history.entries.len(), 2);
+    assert_eq!(history.entries[0].op, "store");
+    assert_eq!(history.entries[1].op, "count");
 
     let metadata: String = store
         .conn
@@ -122,7 +123,8 @@ fn invalid_operator_leaves_row_unchanged() {
         .memory_op_history("/repo", "op-memory")
         .unwrap()
         .expect("history exists");
-    assert!(history.entries.is_empty());
+    assert_eq!(history.entries.len(), 1);
+    assert_eq!(history.entries[0].op, "store");
     let body: String = store
         .conn
         .query_row(
@@ -277,15 +279,21 @@ fn schema_issues_detect_fts_drift_and_malformed_history() {
 fn migration_013_backfills_fts_for_existing_memories() {
     let (_dir, mut store) = open_store(16, 1024);
     store.migrate_to(12).unwrap();
-    seed_memory(
-        &store,
-        "pre-013",
-        "2026-01-01T00:00:00Z",
-        "backfilled connection pool memory",
-        "migration",
-        MemoryImportance::Normal,
-        MemoryScope::Project,
-    );
+    // Insert with the pre-013 column set directly: `store_memory_at` writes the
+    // post-013 `op_history_json` column and must not be used on an older schema.
+    store
+        .conn
+        .execute(
+            "INSERT INTO memories
+                (id, repo_root, scope, topic, title, body, importance,
+                 created_at, updated_at, last_accessed_at, metadata_json)
+             VALUES ('pre-013', '/repo', 'project', 'migration', 'title-migration',
+                     'backfilled connection pool memory', 'normal',
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+                     '2026-01-01T00:00:00Z', '{}')",
+            [],
+        )
+        .unwrap();
     store.migrate_to(13).unwrap();
 
     let fts_count: i64 = store

@@ -190,6 +190,33 @@ fn compact_session_returns_zero_change_when_nothing_to_do() {
     assert_eq!(result.decayed_count, 0);
     assert_eq!(result.merged_count, 0);
     assert_eq!(result.deduplicated_count, 0);
+    assert!(result.no_op, "unchanged ledger must report no_op");
+}
+
+#[test]
+fn compact_session_is_idempotent_on_unchanged_ledger() {
+    let (_dir, mut store, session_id) = open_curation_store();
+
+    for i in 0..5u32 {
+        append(
+            &mut store,
+            &session_id,
+            SessionEventType::FileRead,
+            1,
+            serde_json::json!({"file": "src/lib.rs", "run": i}),
+        );
+    }
+
+    let first = store.compact_session(&session_id).unwrap();
+    assert!(!first.no_op, "first compaction removes excess events");
+
+    let second = store.compact_session(&session_id).unwrap();
+    assert!(second.no_op, "second compaction must be a no-op");
+    assert_eq!(second.events_before, second.events_after);
+    assert_eq!(second.promoted_count, 0);
+
+    let third = store.compact_session(&session_id).unwrap();
+    assert!(third.no_op, "third compaction must stay a no-op");
 }
 
 #[test]

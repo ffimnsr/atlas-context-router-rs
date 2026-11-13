@@ -852,10 +852,12 @@ struct DropCandidate {
 
 fn file_keep_priority(reason: SelectionReason) -> u8 {
     match reason {
-        SelectionReason::DirectTarget => 6,
+        SelectionReason::DirectTarget => 7,
+        // Preserve direct call relationships over looser adjacency under a tight
+        // payload budget; otherwise callers are dropped before test/impact rows.
+        SelectionReason::Caller | SelectionReason::Callee => 6,
         SelectionReason::TestAdjacent => 5,
         SelectionReason::ImpactNeighbor => 4,
-        SelectionReason::Caller | SelectionReason::Callee => 3,
         SelectionReason::Importer | SelectionReason::Importee => 2,
         SelectionReason::ContainmentSibling => 1,
         SelectionReason::OverviewLevel => 4,

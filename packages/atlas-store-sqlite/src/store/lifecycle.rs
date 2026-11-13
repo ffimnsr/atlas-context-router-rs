@@ -226,14 +226,25 @@ impl Store {
     /// Used by MCP7 to attach compact metadata to every tool response without
     /// the overhead of the full `stats()` call (which groups by kind/language).
     pub fn provenance_meta(&self) -> Result<atlas_core::ProvenanceMeta> {
+        // Match `graph_stats()`: synthetic owner/workspace/repo metadata rows are
+        // not real repo files, so provenance must not inflate `status` counts.
+        const SYNTHETIC: &str = ".atlas/synthetic/%";
         let indexed_file_count: i64 = self
             .conn
-            .query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE path NOT LIKE ?1",
+                params![SYNTHETIC],
+                |r| r.get(0),
+            )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
 
         let last_indexed_at: Option<String> = self
             .conn
-            .query_row("SELECT MAX(indexed_at) FROM files", [], |r| r.get(0))
+            .query_row(
+                "SELECT MAX(indexed_at) FROM files WHERE path NOT LIKE ?1",
+                params![SYNTHETIC],
+                |r| r.get(0),
+            )
             .unwrap_or(None);
 
         Ok(atlas_core::ProvenanceMeta {

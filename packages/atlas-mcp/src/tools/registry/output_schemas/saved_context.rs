@@ -203,6 +203,7 @@ pub(crate) fn cross_session_search_output_schema() -> Value {
                     "cross_session": { "type": "boolean" },
                     "agent_id": { "type": ["string", "null"] },
                     "merge_agent_partitions": { "type": "boolean" },
+                    "effective_agent_filter": { "type": ["string", "null"] },
                     "source_type": { "type": ["string", "null"] },
                     "requested_limit": { "type": "integer" },
                     "applied_limit": { "type": "integer" },
@@ -222,6 +223,7 @@ pub(crate) fn cross_session_search_output_schema() -> Value {
                     "cross_session",
                     "agent_id",
                     "merge_agent_partitions",
+                    "effective_agent_filter",
                     "source_type",
                     "requested_limit",
                     "applied_limit",
@@ -307,6 +309,7 @@ pub(crate) fn read_saved_context_output_schema() -> Value {
             "chunk_offset": { "type": "integer" },
             "next_chunk_offset": { "type": ["integer", "null"] },
             "truncated": { "type": "boolean" },
+            "chunk_clipped": { "type": "boolean" },
             "summary": {
                 "type": "object",
                 "additionalProperties": false,

@@ -25,6 +25,19 @@ fn repo_scopes_overlap(left: &[String], right: &[String]) -> bool {
         .any(|candidate| right.iter().any(|other| other == candidate))
 }
 
+/// Return the longest byte prefix of `content` that fits `max_bytes` without
+/// splitting a UTF-8 code point.
+fn prefix_bytes(content: &str, max_bytes: usize) -> String {
+    if content.len() <= max_bytes {
+        return content.to_owned();
+    }
+    let mut end = max_bytes.min(content.len());
+    while end > 0 && !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    content[..end].to_owned()
+}
+
 // ---------------------------------------------------------------------------
 // read_saved_context (MCP13)
 // ---------------------------------------------------------------------------
@@ -203,17 +216,36 @@ pub fn tool_read_saved_context(
 
     for chunk in &remaining_chunks {
         let chunk_bytes = chunk.content.len();
-        if bytes_used + chunk_bytes > max_bytes {
-            truncated = true;
-            next_chunk_offset = Some(chunk.chunk_index);
-            next_chunk_id = Some(chunk.chunk_id.clone());
-            break;
+        if bytes_used + chunk_bytes <= max_bytes {
+            bytes_used += chunk_bytes;
+            last_included_index = Some(chunk.chunk_index);
+            last_included_chunk_id = Some(chunk.chunk_id.clone());
+            returned_chunk_ids.push(chunk.chunk_id.clone());
+            content_parts.push(chunk.content.clone());
+            continue;
         }
-        bytes_used += chunk_bytes;
-        last_included_index = Some(chunk.chunk_index);
-        last_included_chunk_id = Some(chunk.chunk_id.clone());
-        returned_chunk_ids.push(chunk.chunk_id.clone());
-        content_parts.push(chunk.content.clone());
+
+        // The chunk does not fit the remaining byte budget. Emit a char-safe
+        // prefix so a tiny `max_bytes` still returns content, then advance the
+        // next offset past this chunk. Previously the handler dropped the chunk
+        // and reported the same offset, which made paging loops non-terminating.
+        let remaining_budget = max_bytes.saturating_sub(bytes_used);
+        if remaining_budget > 0 {
+            let prefix = prefix_bytes(&chunk.content, remaining_budget);
+            if !prefix.is_empty() {
+                last_included_index = Some(chunk.chunk_index);
+                last_included_chunk_id = Some(chunk.chunk_id.clone());
+                returned_chunk_ids.push(chunk.chunk_id.clone());
+                content_parts.push(prefix);
+            }
+        }
+        truncated = true;
+        next_chunk_offset = Some(chunk.chunk_index.saturating_add(1));
+        next_chunk_id = remaining_chunks
+            .iter()
+            .find(|candidate| candidate.chunk_index == chunk.chunk_index.saturating_add(1))
+            .map(|candidate| candidate.chunk_id.clone());
+        break;
     }
 
     let content = content_parts.join("\n");
@@ -260,6 +292,7 @@ pub fn tool_read_saved_context(
             "call read_saved_context with source_id={source_id} chunk_offset={next} to read more"
         )),
         "truncated": truncated,
+        "chunk_clipped": truncated,
         "summary": {
             "status": "ok",
             "byte_count": total_byte_count,
@@ -437,10 +470,13 @@ pub fn tool_cross_session_search(
         .and_then(|a| a.get("agent_id"))
         .and_then(|v| v.as_str())
         .map(str::to_owned);
-    let merge_agent_partitions = args
+    let merge_agent_partitions_arg = args
         .and_then(|a| a.get("merge_agent_partitions"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
+        .and_then(|v| v.as_bool());
+    // Default to partition isolation. An explicit `merge_agent_partitions: true`
+    // is the only way to widen a query that names a specific agent partition;
+    // otherwise `agent_id` would be silently ignored.
+    let merge_agent_partitions = merge_agent_partitions_arg.unwrap_or(false);
     let requested_limit = args
         .and_then(|a| a.get("limit"))
         .and_then(|v| v.as_u64())
@@ -557,6 +593,7 @@ pub fn tool_cross_session_search(
                 "cross_session": true,
                 "agent_id": agent_id_filter,
                 "merge_agent_partitions": merge_agent_partitions,
+                "effective_agent_filter": filters.agent_id,
                 "source_type": filters.source_type,
                 "requested_limit": requested_limit,
                 "applied_limit": limit,

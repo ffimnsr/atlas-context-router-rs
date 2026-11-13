@@ -13,6 +13,7 @@ use time::OffsetDateTime;
 
 use atlas_core::{AtlasError, Clock, Result, SystemClock, format_rfc3339};
 
+use super::memory_ops::MemoryOpHistoryEntry;
 use super::types::{
     MemoryConsolidationGroup, MemoryConsolidationPlan, MemoryDecayPolicy, MemoryDecayReport,
     MemoryDeleteResult, MemoryHealthCategory, MemoryHealthFinding, MemoryHealthReport,
@@ -216,12 +217,20 @@ pub(super) fn store_memory_at(
 ) -> Result<MemoryRecord> {
     input.validate()?;
     let metadata_json = serde_json::to_string(&input.metadata)?;
+    // Seed the audit trail so `memory_ops` reports the initial write instead of
+    // an empty history for a freshly stored row.
+    let initial_history = serde_json::to_string(&[MemoryOpHistoryEntry {
+        op: "store".to_owned(),
+        at: now.to_owned(),
+        fields: vec!["body".to_owned()],
+        details: None,
+    }])?;
     conn.execute(
         "INSERT INTO memories
             (id, repo_root, session_id, frontend, scope, topic, title, body, importance,
              created_at, updated_at, last_accessed_at, decay_score, source_id, metadata_json,
-             superseded_by)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?10, 0, ?11, ?12, NULL)",
+             superseded_by, op_history_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?10, 0, ?11, ?12, NULL, ?13)",
         params![
             id,
             input.repo_root,
@@ -235,6 +244,7 @@ pub(super) fn store_memory_at(
             now,
             input.source_id,
             metadata_json,
+            initial_history,
         ],
     )
     .map_err(|e| AtlasError::Db(e.to_string()))?;

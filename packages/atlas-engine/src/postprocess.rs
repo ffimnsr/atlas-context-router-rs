@@ -129,6 +129,36 @@ fn unknown_stage_summary(
     }
 }
 
+fn no_changed_files_summary(
+    repo_root: &str,
+    options: &PostprocessOptions,
+    started_at_ms: i64,
+) -> PostprocessRunSummary {
+    PostprocessRunSummary {
+        repo_root: repo_root.to_string(),
+        ok: true,
+        noop: true,
+        noop_reason: Some("no_changed_files".to_string()),
+        error_code: "none".to_string(),
+        message: "no changed files; nothing to postprocess".to_string(),
+        suggestions: vec![
+            "edit files before running changed-only postprocess".to_string(),
+            "omit changed_only to run the full postprocess pipeline".to_string(),
+        ],
+        graph_built: true,
+        state: PostprocessRunState::Succeeded,
+        requested_mode: options.mode(),
+        stage_filter: options.stage.clone(),
+        dry_run: options.dry_run,
+        changed_files: Vec::new(),
+        started_at_ms,
+        finished_at_ms: now_ms(),
+        total_elapsed_ms: 0,
+        stages: Vec::new(),
+        supported_stages: supported_postprocess_stages(),
+    }
+}
+
 fn no_graph_summary(
     repo_root: &str,
     options: &PostprocessOptions,
@@ -434,6 +464,17 @@ pub fn postprocess_graph(
     } else {
         Vec::new()
     };
+
+    // Changed-only postprocessing with an empty change set has nothing to do.
+    // Returning a no-op keeps the dry-run and real paths consistent and avoids
+    // reporting five completed stages that touched no input.
+    if mode == PostprocessExecutionMode::ChangedOnly && changed_files.is_empty() {
+        return Ok(no_changed_files_summary(
+            repo_root.as_str(),
+            options,
+            started_at_ms,
+        ));
+    }
 
     if !options.dry_run {
         store

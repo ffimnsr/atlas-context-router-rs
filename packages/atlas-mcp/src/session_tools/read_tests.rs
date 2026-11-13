@@ -93,8 +93,19 @@ fn read_saved_context_oversized_artifact_sets_truncated_and_continuation_hint() 
 
     assert!(body["found"].as_bool().unwrap());
     assert!(body["truncated"].as_bool().unwrap());
-    assert!(body["next_chunk_offset"].is_number());
+    assert!(
+        !body["content"].as_str().unwrap().is_empty(),
+        "a byte cap smaller than one chunk must still return a prefix, not empty content"
+    );
+    let next = body["next_chunk_offset"]
+        .as_u64()
+        .expect("numeric next offset");
+    assert!(
+        next >= 1,
+        "next_chunk_offset must advance past the clipped chunk"
+    );
     assert!(body["next_chunk_id"].as_str().is_some());
+    assert!(body["chunk_clipped"].as_bool().unwrap());
     assert!(
         body["continuation_hint"]
             .as_str()
@@ -160,7 +171,15 @@ fn read_saved_context_paging_chunk_offset_skips_earlier_chunks() {
     let b1: Value = serde_json::from_str(r1["content"][0]["text"].as_str().unwrap()).unwrap();
 
     let next = b1.get("next_chunk_offset").and_then(|v| v.as_u64());
+    assert!(
+        !b1["content"].as_str().unwrap().is_empty(),
+        "first paged read must return content"
+    );
     if let Some(offset) = next {
+        assert!(
+            offset >= 1,
+            "paging offset must advance past the clipped chunk"
+        );
         let args2 = serde_json::json!({"source_id": source_id, "chunk_offset": offset});
         let r2 =
             tool_read_saved_context(Some(&args2), repo_root, &db_path, OutputFormat::Json).unwrap();

@@ -258,7 +258,7 @@ pub fn explain_query_with_embedding(
     }
 
     let indexed_node_count =
-        store.and_then(|store| store.stats().ok().map(|stats| stats.node_count));
+        store.and_then(|store| store.graph_stats().ok().map(|stats| stats.node_count));
     let (latency_ms, result_count, matches) = if regex_valid {
         if let Some(store) = store {
             let t0 = std::time::Instant::now();

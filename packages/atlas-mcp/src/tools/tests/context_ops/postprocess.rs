@@ -84,6 +84,33 @@ fn postprocess_graph_supports_single_stage_changed_only() {
 }
 
 #[test]
+fn postprocess_graph_changed_only_noops_with_empty_change_set() {
+    let fixture = setup_git_mcp_fixture();
+    let args = serde_json::json!({
+        "changed_only": true,
+        "dry_run": true,
+        "output_format": "json"
+    });
+    let response = call(
+        "postprocess_graph",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("postprocess_graph call");
+    let text = unwrap_tool_text(response);
+    let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+    assert_eq!(value["summary"]["ok"], serde_json::json!(true));
+    assert_eq!(value["summary"]["noop"], serde_json::json!(true));
+    assert_eq!(
+        value["summary"]["noop_reason"],
+        serde_json::json!("no_changed_files")
+    );
+    assert_eq!(value["planned_stages"], serde_json::json!([]));
+    assert_eq!(value["executed_stages"], serde_json::json!([]));
+}
+
+#[test]
 fn postprocess_graph_denies_legacy_identity_rows() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();

@@ -100,8 +100,12 @@ fn store_patch_applies_blocks_and_records_history() {
         .memory_op_history("/repo", "patch-me")
         .unwrap()
         .unwrap();
-    assert_eq!(history.entries.len(), 1);
-    let details = history.entries[0].details.as_ref().expect("patch details");
+    assert_eq!(history.entries.len(), 2);
+    let details = history
+        .entries
+        .last()
+        .and_then(|entry| entry.details.as_ref())
+        .expect("patch details");
     assert_eq!(details["matched_exact"], serde_json::json!(true));
     assert_eq!(details["replace_len"], serde_json::json!(11));
     assert!(details["search_hash"].as_str().unwrap().len() == 64);

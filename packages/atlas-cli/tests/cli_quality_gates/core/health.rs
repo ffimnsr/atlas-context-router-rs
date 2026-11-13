@@ -382,9 +382,10 @@ fn status_surfaces_newer_content_schema_instead_of_synthetic_indexed() {
     assert_eq!(retrieval["searchable"], json!(false));
     assert_eq!(
         retrieval["last_error"],
-        json!(
-            "database error: database schema version 99 newer than atlas-supported version 10"
-        )
+        json!(format!(
+            "database error: database schema version 99 newer than atlas-supported version {}",
+            atlas_contentstore::CONTENT_SCHEMA_VERSION
+        ))
     );
 }
 

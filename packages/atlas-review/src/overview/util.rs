@@ -28,7 +28,7 @@ pub fn graph_provenance(
     repo_root: &str,
 ) -> Result<OverviewGraphProvenance> {
     let status = store.get_build_status(repo_root)?;
-    let stats = store.stats()?;
+    let stats = store.graph_stats()?;
     let last_indexed_ref = store.last_indexed_ref(repo_root)?;
     Ok(OverviewGraphProvenance {
         graph_db_path: db_path.to_owned(),

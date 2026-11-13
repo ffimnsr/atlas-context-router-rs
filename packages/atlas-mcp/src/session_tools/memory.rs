@@ -270,6 +270,12 @@ pub fn tool_memory_store(
         .transpose()?;
     let session_id =
         (scope == MemoryScope::Session).then(|| mcp_session_id(repo_root).as_str().to_owned());
+    // `patch_file` only participates in the EUA patch path. For a plain store it
+    // is a related-file pointer, so persist it instead of silently dropping it.
+    let metadata = match patch_file {
+        Some(path) => serde_json::json!({ "related_file": path }),
+        None => serde_json::json!({}),
+    };
     let input = NewMemory {
         repo_root: repo_root.to_owned(),
         session_id,
@@ -280,7 +286,7 @@ pub fn tool_memory_store(
         body: text.to_owned(),
         importance,
         source_id: source_id.map(str::to_owned),
-        metadata: serde_json::json!({}),
+        metadata,
     };
     input.validate()?;
 

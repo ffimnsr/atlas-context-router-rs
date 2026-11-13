@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use atlas_core::{
     ArchitectureReport, FreshnessWarning, GraphStats, InsightFinding, InsightSummary,
     LargeFunctionReport, MetricsReport, PatternReport, ProvenanceMeta, RiskReport, format_rfc3339,
@@ -109,7 +111,7 @@ impl<'s> InsightsEngine<'s> {
     }
 
     pub fn pattern_report(&self, findings: Vec<InsightFinding>) -> PatternReport {
-        let findings = self.prepare_findings(findings);
+        let findings = self.prepare_pattern_findings(findings);
         PatternReport {
             summary: InsightSummary::from_findings(&findings, self.generated_at.clone()),
             findings,
@@ -136,6 +138,37 @@ impl<'s> InsightsEngine<'s> {
         sort_insight_findings(&mut findings);
         trim_insight_findings(&mut findings, self.config.max_findings);
         findings
+    }
+
+    /// Pattern findings need category diversity: repeated-call-chain rows carry
+    /// scores proportional to occurrence count and otherwise crowd hub,
+    /// bottleneck, isolated-structure, orphan, and deep-chain findings out of
+    /// every score-ranked trim. Cap each category to a fair share, then fill any
+    /// remaining slots from the already-sorted overflow.
+    fn prepare_pattern_findings(&self, findings: Vec<InsightFinding>) -> Vec<InsightFinding> {
+        let mut findings = findings
+            .into_iter()
+            .filter(|finding| !self.is_ignored_finding(finding))
+            .collect::<Vec<_>>();
+        sort_insight_findings(&mut findings);
+
+        let per_category = (self.config.max_findings / 4).max(1);
+        let mut counts = BTreeMap::<String, usize>::new();
+        let mut kept = Vec::with_capacity(findings.len().min(self.config.max_findings));
+        let mut deferred = Vec::new();
+        for finding in findings {
+            let count = counts.entry(finding.category.clone()).or_insert(0);
+            if *count < per_category {
+                *count += 1;
+                kept.push(finding);
+            } else {
+                deferred.push(finding);
+            }
+        }
+        let remaining = self.config.max_findings.saturating_sub(kept.len());
+        kept.extend(deferred.into_iter().take(remaining));
+        trim_insight_findings(&mut kept, self.config.max_findings);
+        kept
     }
 
     /// Architecture findings rank by signal class before generic

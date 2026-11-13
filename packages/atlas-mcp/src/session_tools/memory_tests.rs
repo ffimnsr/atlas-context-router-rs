@@ -189,6 +189,28 @@ fn memory_store_persists_frontend_normalization_and_source_id() {
 }
 
 #[test]
+fn memory_store_persists_patch_file_as_related_file() {
+    let dir = TempDir::new().unwrap();
+    let db_path = setup_db_path(&dir);
+    std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+    let repo_root = dir.path().to_string_lossy().into_owned();
+
+    let body = store_via_tool(
+        &repo_root,
+        &db_path,
+        &serde_json::json!({
+            "text": "health module decoupling note",
+            "topic": "refactoring",
+            "patch_file": "packages/atlas-core/src/health.rs"
+        }),
+    );
+    assert_eq!(
+        body["memory"]["metadata"]["related_file"], "packages/atlas-core/src/health.rs",
+        "patch_file must persist instead of being silently dropped"
+    );
+}
+
+#[test]
 fn memory_recall_hybrid_requires_embedding_opt_in() {
     let dir = TempDir::new().unwrap();
     let db_path = setup_db_path(&dir);
@@ -441,8 +463,9 @@ fn memory_ops_returns_history_and_handles_unknown_ids() {
     .unwrap();
     let body = tool_body(&result);
     assert_eq!(body["found"], true);
-    assert_eq!(body["summary"]["entry_count"], 1);
-    assert_eq!(body["op_history"][0]["op"], "count");
+    assert_eq!(body["summary"]["entry_count"], 2);
+    assert_eq!(body["op_history"][0]["op"], "store");
+    assert_eq!(body["op_history"][1]["op"], "count");
     assert!(body["warnings"].as_array().unwrap().is_empty());
 
     let missing = tool_memory_ops(

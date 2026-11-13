@@ -216,6 +216,8 @@ pub struct CurationResult {
     pub deduplicated_count: usize,
     /// Events whose priority was raised to survive future eviction.
     pub promoted_count: usize,
+    /// True when compaction made no change to the event set or priorities.
+    pub no_op: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

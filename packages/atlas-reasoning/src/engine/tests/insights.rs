@@ -107,6 +107,57 @@ fn insights_engine_sorts_and_limits_findings() {
 }
 
 #[test]
+fn pattern_report_keeps_category_diversity_before_trimming() {
+    let summary = InsightsGraphSummary {
+        graph_stats: GraphStats {
+            file_count: 1,
+            node_count: 1,
+            edge_count: 0,
+            nodes_by_kind: vec![],
+            languages: vec!["rust".to_owned()],
+            last_indexed_at: None,
+        },
+        atlas_provenance: ProvenanceMeta {
+            indexed_file_count: 1,
+            last_indexed_at: None,
+        },
+        atlas_freshness: None,
+    };
+    let config = atlas_engine::config::InsightsConfig {
+        max_findings: 2,
+        ..Default::default()
+    };
+    let engine = InsightsEngine::from_summary(summary, config);
+
+    let mut repeated_a = sample_insight("chain-a", "src/a.rs", "crate::a", InsightSeverity::High);
+    repeated_a.category = "pattern_repeated_chain".to_owned();
+    repeated_a.score = 900.0;
+    let mut repeated_b = sample_insight("chain-b", "src/b.rs", "crate::b", InsightSeverity::High);
+    repeated_b.category = "pattern_repeated_chain".to_owned();
+    repeated_b.score = 800.0;
+    let mut centrality = sample_insight("hub", "src/c.rs", "crate::c", InsightSeverity::Medium);
+    centrality.category = "pattern_centrality".to_owned();
+    centrality.score = 5.0;
+
+    let report = engine.pattern_report(vec![repeated_a, repeated_b, centrality]);
+    assert_eq!(report.findings.len(), 2);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.category == "pattern_centrality"),
+        "centrality finding must survive a score-ranked trim dominated by repeated chains"
+    );
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.category == "pattern_repeated_chain"),
+        "repeated-chain findings must still be represented"
+    );
+}
+
+#[test]
 fn ignore_files_glob_matches_markdown_and_json_across_directories() {
     use super::super::insights::{build_ignore_files_glob, path_matches_ignore_list};
 
