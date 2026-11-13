@@ -158,6 +158,41 @@ pub fn run_feedback(cli: &Cli) -> Result<()> {
                 }
             }
         }
+
+        FeedbackCommand::Adjust => {
+            let stats = store.feedback_stats(&repo)?;
+            let enabled = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))
+                .map(|config| config.analysis.feedback_adjustment.enabled)
+                .unwrap_or(false);
+            // Adjustment is applied at analysis time; this surface reports the
+            // deterministic weight set analyses will use. It never mutates
+            // feedback records, so repeated runs are idempotent.
+            let adjustments_applied = if enabled {
+                stats.false_positive_count
+            } else {
+                0
+            };
+            let payload = serde_json::json!({
+                "enabled": enabled,
+                "total_records": stats.total_count,
+                "false_positive_evidence": stats.false_positive_count,
+                "adjustments_applied": adjustments_applied,
+                "by_analysis_kind": stats.by_analysis_kind,
+                "by_tool": stats.by_tool,
+                "idempotent": true,
+            });
+            if cli.json {
+                print_json("feedback.adjust", payload)?;
+            } else {
+                println!(
+                    "Feedback adjustment: {}",
+                    if enabled { "enabled" } else { "disabled" }
+                );
+                println!("Feedback records  : {}", stats.total_count);
+                println!("False positives   : {}", stats.false_positive_count);
+                println!("Adjustments       : {adjustments_applied}");
+            }
+        }
     }
 
     Ok(())

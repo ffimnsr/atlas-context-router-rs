@@ -91,11 +91,7 @@ pub(crate) fn tool_search_text_assets(
         let subpath = normalized_optional_subpath(str_arg(args, "subpath")?);
         let case_sensitive = bool_arg(args, "case_sensitive").unwrap_or(false);
         let requested_max_results = u64_arg(args, "max_results").unwrap_or(100) as usize;
-        let max_results = budgets.resolve_limit(
-            policy.review_context_extraction.files,
-            "review_context_extraction.max_files",
-            Some(requested_max_results),
-        );
+        let max_results = requested_max_results.clamp(1, 10_000);
 
         let extension_patterns: Vec<&str> = match kind.as_deref() {
             Some("sql") => TEXT_ASSET_SQL.to_vec(),

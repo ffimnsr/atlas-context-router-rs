@@ -1,26 +1,96 @@
 {
+  "tool": "query_graph",
   "query": {
     "text": "greet_twice",
+    "normalized_text": "greet_twice",
+    "regex": null,
     "kind": null,
     "language": null,
-    "include_files": false,
+    "requested_limit": 20,
+    "applied_limit": 20,
+    "semantic": false,
+    "expand": false,
+    "expand_hops": 1,
     "subpath": null,
-    "exact_dir": null,
-    "exclude_subpaths": [],
+    "fuzzy": false,
+    "hybrid": false,
+    "include_files": false,
+    "repo_scope": {
+      "selection": null,
+      "deprecated_input_fields": []
+    },
+    "query_intent": {
+      "kind": "plain_identifier",
+      "source_text": "greet_twice",
+      "normalized_text": "greet_twice",
+      "intent": "symbol",
+      "accepted": true
+    },
+    "active_query_mode": "fts5",
     "limit": 20,
     "graph_expand": false,
     "graph_max_hops": 1,
     "fuzzy_match": false,
-    "semantic": false,
     "regex_pattern": null,
+    "usage_edges_included": false
+  },
+  "matches": [
+    {
+      "score": 0.0,
+      "ranking_evidence": {
+        "base_mode": "fts5",
+        "raw_score": 0.0,
+        "final_score": 0.0,
+        "matched_fields": [
+          "name"
+        ],
+        "exact_name_match": true,
+        "kind_boost": 3.0,
+        "public_exported_boost": 2.0
+      },
+      "repo": {
+        "repo_id": "<repo_id>",
+        "display_alias": "."
+      },
+      "qn": "src/lib.rs::method::Greeter::greet_twice",
+      "kind": "method",
+      "file": "src/lib.rs",
+      "line": 4,
+      "parent": "src/lib.rs::impl::Greeter",
+      "sig": "(name: &str)",
+      "lang": "rust"
+    }
+  ],
+  "summary": {
+    "match_count": 1,
+    "returned_count": 1,
     "usage_edges_included": false,
-    "query_intent": {
-      "kind": "plain_identifier",
-      "accepted": true,
-      "source_text": "greet_twice",
-      "normalized_text": "greet_twice"
+    "relationship_tools": [
+      "symbol_neighbors",
+      "traverse_graph",
+      "get_context"
+    ],
+    "ranking_evidence_legend": {
+      "base_mode": "Base retrieval path that produced initial score: fts5, regex_structural_scan, vector, hybrid, or graph_expand.",
+      "raw_score": "Score before later ranking boosts or merges when available.",
+      "final_score": "Final score after boosts, graph expansion, or hybrid fusion.",
+      "matched_fields": "Fields that directly matched query evidence such as name, qualified_name, file_path, content, or embedding.",
+      "exact_name_match": "Result name exactly matched query text.",
+      "exact_qualified_name_match": "Result qualified_name exactly matched query text.",
+      "prefix_match": "Result name matched query text as prefix.",
+      "fuzzy": "Fuzzy correction metadata: corrected_term, edit_distance, and fuzzy_threshold.",
+      "kind_boost": "Boost from preferred symbol kind ranking.",
+      "public_exported_boost": "Boost from public/exported API visibility.",
+      "same_directory_boost": "Boost from same-directory proximity to reference file.",
+      "same_language_boost": "Boost from same-language proximity to reference language.",
+      "recent_file_boost": "Boost from recently indexed file status.",
+      "changed_file_boost": "Boost from current changed-file membership.",
+      "graph_expansion": "Graph expansion metadata: hop_distance and seed_qualified_name.",
+      "hybrid_rrf": "Hybrid fusion metadata: per-source rank and reciprocal-rank score contribution."
     }
   },
+  "truncated": false,
+  "warnings": [],
   "results": [
     {
       "score": 0.0,
@@ -36,26 +106,24 @@
         "public_exported_boost": 2.0
       },
       "node": {
-        "id": 0,
+        "lang": "rust",
+        "sig": "(name: &str)",
+        "parent": "src/lib.rs::impl::Greeter",
+        "qn": "src/lib.rs::method::Greeter::greet_twice",
         "kind": "method",
-        "name": "greet_twice",
+        "file": "src/lib.rs",
+        "line": 4,
         "qualified_name": "src/lib.rs::method::Greeter::greet_twice",
+        "name": "greet_twice",
         "file_path": "src/lib.rs",
         "line_start": 4,
-        "line_end": 6,
+        "line_end": 4,
         "language": "rust",
-        "parent_name": "src/lib.rs::impl::Greeter",
-        "params": "(name: &str)",
-        "return_type": "String",
-        "modifiers": "pub",
+        "id": 0,
         "is_test": false,
         "file_hash": "<hash>",
         "extra_json": null,
-        "repo_provenance": {
-          "repo_id": "<repo_id>",
-          "repo_fingerprint": "<repo_fingerprint>",
-          "repo_root": "<repo_root>"
-        }
+        "repo_provenance": null
       }
     }
   ],
@@ -80,9 +148,8 @@
   "budget": {
     "budget_status": "within_budget",
     "budget_hit": false,
-    "budget_name": "query_candidates_and_seeds.max_candidates",
-    "budget_limit": 20,
     "budget_observed": 1,
+    "budget_limit": 20,
     "partial": false,
     "safe_to_answer": true
   }

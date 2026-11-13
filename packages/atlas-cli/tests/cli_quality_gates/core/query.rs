@@ -13,8 +13,7 @@ fn fixture_query_output_matches_golden() {
     );
     normalize_query_results(&mut query);
 
-    let golden = read_golden_json("query_greet_twice.json");
-    assert_eq!(query, golden);
+    assert_or_update_golden_json("query_greet_twice.json", &query);
 }
 
 #[test]

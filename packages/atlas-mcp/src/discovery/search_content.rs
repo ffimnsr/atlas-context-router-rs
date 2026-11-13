@@ -253,12 +253,8 @@ pub(crate) fn tool_search_content(
         let exclude_generated = bool_arg(args, "exclude_generated").unwrap_or(true);
         let is_regex = bool_arg(args, "is_regex").unwrap_or(false);
         let context_lines = u64_arg(args, "context_lines").unwrap_or(0) as usize;
-        let requested_max_results = u64_arg(args, "max_results").unwrap_or(50) as usize;
-        let max_results = budgets.resolve_limit(
-            policy.review_context_extraction.nodes,
-            "review_context_extraction.max_nodes",
-            Some(requested_max_results),
-        );
+        let requested_max_results = u64_arg(args, "max_results").unwrap_or(100) as usize;
+        let max_results = requested_max_results.clamp(1, 10_000);
         let rich_snippets = bool_arg(args, "rich_snippets").unwrap_or(false);
         let snippet_context_lines = u64_arg(args, "snippet_context_lines")
             .map(|value| value as usize)

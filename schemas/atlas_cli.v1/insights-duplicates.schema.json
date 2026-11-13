@@ -10,7 +10,7 @@
     "command": { "const": "insights_duplicates" },
     "data": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "required": ["thresholds", "summary", "findings", "groups", "atlas_provenance"],
       "properties": {
         "thresholds": { "type": "object", "additionalProperties": false, "required": ["high", "medium", "low"], "properties": { "high": { "type": "number" }, "medium": { "type": "number" }, "low": { "type": "number" } } },

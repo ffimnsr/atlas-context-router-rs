@@ -128,7 +128,8 @@ pub(crate) fn get_metrics_output_schema() -> Value {
             "context_builds": { "type": "object", "additionalProperties": { "type": "integer" } },
             "context_duration_ms": { "type": "object", "additionalProperties": { "type": "object" } },
             "context_payload_bytes": { "type": "object", "additionalProperties": { "type": "object" } },
-            "context_payload_tokens": { "type": "object", "additionalProperties": { "type": "object" } }
+            "context_payload_tokens": { "type": "object", "additionalProperties": { "type": "object" } },
+            "verbose": { "type": "boolean" }
         }),
         &[
             "build_runs",
@@ -146,6 +147,7 @@ pub(crate) fn get_metrics_output_schema() -> Value {
             "context_duration_ms",
             "context_payload_bytes",
             "context_payload_tokens",
+            "verbose",
         ],
         None,
     )

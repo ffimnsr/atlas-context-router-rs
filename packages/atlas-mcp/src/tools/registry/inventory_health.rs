@@ -37,6 +37,7 @@ pub(super) fn tools() -> Vec<Value> {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
+                        "verbose": { "type": "boolean", "description": "Include per-histogram bucket arrays (default false)." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []

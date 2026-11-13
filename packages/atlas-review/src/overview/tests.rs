@@ -6,7 +6,7 @@ use atlas_core::model::{Edge, Node, NodeId, ParsedFile};
 use atlas_core::{EdgeKind, NodeKind};
 use atlas_session::{
     OverviewAnalysisInput, OverviewExportRequest, OverviewExportScope, OverviewFreshness,
-    OverviewSourceKind, OverviewSubject, OverviewSubjectKind, SessionStore,
+    OverviewSourceKind, OverviewSubject, OverviewSubjectInput, OverviewSubjectKind, SessionStore,
 };
 use atlas_store_sqlite::Store;
 use tempfile::TempDir;
@@ -222,7 +222,7 @@ fn package_export_and_ambiguous_subject_failure() {
         Some("src")
     );
 
-    let mut request = export_request(OverviewExportScope::Files);
+    let mut request = export_request(OverviewExportScope::Project);
     request.subjects = vec!["src".to_owned()];
     let error = export_overview_packets(
         &fixture.repo_root,
@@ -307,7 +307,8 @@ fn analysis(repo_root: &str, subject: OverviewSubject, commit_sha: &str) -> Over
         subject: OverviewSubject {
             commit_sha: commit_sha.to_owned(),
             ..subject
-        },
+        }
+        .into(),
         title: "Function overview".to_owned(),
         summary: "bounded summary".to_owned(),
         description: "bounded description".to_owned(),
@@ -343,6 +344,34 @@ fn compute_subject(repo_root: &str) -> OverviewSubject {
         line_end: Some(4),
         content_hash: None,
     }
+}
+
+#[test]
+fn ingest_accepts_string_subject_references() {
+    let mut fixture = setup();
+    let rules = RedactionRules::default();
+    let mut input = analysis(
+        &fixture.repo_root,
+        compute_subject(&fixture.repo_root),
+        "no-head",
+    );
+    input.subject = OverviewSubjectInput::Reference("src/a.rs".to_owned());
+
+    let result = ingest_overview_analysis(
+        &fixture.repo_root,
+        &fixture.store,
+        &mut fixture.session,
+        &mut fixture.content,
+        &rules,
+        &input,
+    )
+    .unwrap();
+    assert_eq!(result.record.subject_kind, OverviewSubjectKind::File);
+    assert_eq!(
+        result.record.canonical_file_path.as_deref(),
+        Some("src/a.rs")
+    );
+    assert_eq!(result.record.commit_sha, "no-head");
 }
 
 #[test]

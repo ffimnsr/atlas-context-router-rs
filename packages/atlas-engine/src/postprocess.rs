@@ -9,6 +9,8 @@ use atlas_repo::{DiffTarget, changed_files, find_repo_root, stable_repo_id};
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 
+use crate::communities::{CommunityDetectionOptions, detect_communities};
+
 pub const POSTPROCESS_STAGE_FLOWS: &str = "flows";
 pub const POSTPROCESS_STAGE_COMMUNITIES: &str = "communities";
 pub const POSTPROCESS_STAGE_ARCHITECTURE_METRICS: &str = "architecture_metrics";
@@ -518,27 +520,72 @@ pub fn postprocess_graph(
                         .collect()
                 },
             ),
-            POSTPROCESS_STAGE_COMMUNITIES => build_membership_stage(
-                &store,
-                mode,
-                &stats,
-                &changed_files,
-                MembershipStageSpec {
-                    stage: POSTPROCESS_STAGE_COMMUNITIES,
-                    message: "community summaries refreshed",
-                    count_key: "community_count",
-                    scope_key: "community_count_in_scope",
-                },
-                |store| store.list_communities().context("cannot list communities"),
-                |store, community| {
-                    store
-                        .get_community_nodes(community.id)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|member| member.node_qualified_name)
-                        .collect()
-                },
-            ),
+            POSTPROCESS_STAGE_COMMUNITIES => {
+                if mode == PostprocessExecutionMode::Full {
+                    let report = detect_communities(
+                        &store,
+                        &CommunityDetectionOptions {
+                            persist: !options.dry_run,
+                            ..Default::default()
+                        },
+                    )?;
+                    let mut summary = build_membership_stage(
+                        &store,
+                        mode,
+                        &stats,
+                        &changed_files,
+                        MembershipStageSpec {
+                            stage: POSTPROCESS_STAGE_COMMUNITIES,
+                            message: "community detection refreshed",
+                            count_key: "community_count",
+                            scope_key: "community_count_in_scope",
+                        },
+                        |store| store.list_communities().context("cannot list communities"),
+                        |store, community| {
+                            store
+                                .get_community_nodes(community.id)
+                                .unwrap_or_default()
+                                .into_iter()
+                                .map(|member| member.node_qualified_name)
+                                .collect()
+                        },
+                    )?;
+                    summary.item_count = report.community_count;
+                    summary.details = serde_json::json!({
+                        "community_count": report.community_count,
+                        "modularity": report.modularity,
+                        "node_count": report.node_count,
+                        "edge_count": report.edge_count,
+                        "algorithm": report.algorithm,
+                        "persisted": report.persisted,
+                        "communities": report.communities,
+                        "warnings": report.warnings,
+                    });
+                    Ok(summary)
+                } else {
+                    build_membership_stage(
+                        &store,
+                        mode,
+                        &stats,
+                        &changed_files,
+                        MembershipStageSpec {
+                            stage: POSTPROCESS_STAGE_COMMUNITIES,
+                            message: "community summaries refreshed",
+                            count_key: "community_count",
+                            scope_key: "community_count_in_scope",
+                        },
+                        |store| store.list_communities().context("cannot list communities"),
+                        |store, community| {
+                            store
+                                .get_community_nodes(community.id)
+                                .unwrap_or_default()
+                                .into_iter()
+                                .map(|member| member.node_qualified_name)
+                                .collect()
+                        },
+                    )
+                }
+            }
             POSTPROCESS_STAGE_ARCHITECTURE_METRICS => Ok(build_architecture_metrics_stage(
                 mode,
                 &stats,

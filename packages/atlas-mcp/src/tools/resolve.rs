@@ -130,6 +130,7 @@ pub(super) fn tool_resolve_symbol(
         file_path: &'a str,
         language: &'a str,
         line_start: u32,
+        line_end: u32,
         repo: serde_json::Value,
     }
 
@@ -142,6 +143,7 @@ pub(super) fn tool_resolve_symbol(
             file_path: &node.file_path,
             language: &node.language,
             line_start: node.line_start,
+            line_end: node.line_end,
             repo: node_repo_json(node, &repo_aliases),
         })
         .collect();

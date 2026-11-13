@@ -83,7 +83,7 @@ pub fn tool_memoir_add_concept(
 ) -> Result<Value> {
     let graph = required_string(args, "graph")?;
     let name = required_string(args, "name")?;
-    let description = required_string(args, "description")?;
+    let description = string_arg(args, "description").unwrap_or_default();
     let kind = string_arg(args, "kind").unwrap_or("concept");
     let source_id = string_arg(args, "source_id");
     let scope = scope_arg(args)?;

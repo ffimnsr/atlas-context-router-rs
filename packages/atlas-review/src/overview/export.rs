@@ -136,30 +136,68 @@ fn resolve_subjects(
         let modules = util::collect_modules(files);
         let mut subjects = Vec::new();
         for target in &request.subjects {
-            let mut matches = Vec::new();
-            if let Some(index) = by_qname.get(target) {
-                matches.push((
-                    "symbol",
-                    util::node_subject(&nodes[*index], repo_root, commit_sha),
-                ));
-            }
             let canonical = util::canonical_path(repo_root, target).ok();
-            if let Some(canonical) = canonical.as_deref()
-                && let Some(file) = files.iter().find(|file| file.path == canonical)
+            let file_match = canonical.as_deref().and_then(|canonical| {
+                files
+                    .iter()
+                    .find(|file| file.path == canonical)
+                    .map(|file| util::file_subject(file, repo_root, commit_sha))
+            });
+            let node_match = by_qname
+                .get(target)
+                .map(|index| &nodes[*index])
+                .filter(|node| node.kind != atlas_core::NodeKind::File)
+                .filter(|node| match request.scope {
+                    OverviewExportScope::Functions => node.kind == atlas_core::NodeKind::Function,
+                    OverviewExportScope::Methods => node.kind == atlas_core::NodeKind::Method,
+                    _ => true,
+                })
+                .map(|node| util::node_subject(node, repo_root, commit_sha));
+            let package_match = packages
+                .iter()
+                .any(|package| package == target)
+                .then(|| util::package_subject(target, repo_root, commit_sha));
+            let module_match = modules
+                .iter()
+                .any(|module| module == target)
+                .then(|| util::module_subject(target, repo_root, commit_sha));
+
+            let allows = |kind: &str| match request.scope {
+                OverviewExportScope::Files => kind == "file",
+                OverviewExportScope::Modules => kind == "module",
+                OverviewExportScope::Packages => kind == "package",
+                OverviewExportScope::Symbols
+                | OverviewExportScope::Functions
+                | OverviewExportScope::Methods => kind == "symbol",
+                OverviewExportScope::Project | OverviewExportScope::Changed => true,
+            };
+
+            let mut matches = Vec::new();
+            if allows("file")
+                && let Some(subject) = file_match
             {
-                matches.push(("file", util::file_subject(file, repo_root, commit_sha)));
+                matches.push(("file", subject));
             }
-            if packages.iter().any(|package| package == target) {
-                matches.push((
-                    "package",
-                    util::package_subject(target, repo_root, commit_sha),
-                ));
+            if allows("symbol")
+                && let Some(subject) = node_match
+            {
+                matches.push(("symbol", subject));
             }
-            if modules.iter().any(|module| module == target) {
-                matches.push((
-                    "module",
-                    util::module_subject(target, repo_root, commit_sha),
-                ));
+            if allows("package")
+                && let Some(subject) = package_match
+            {
+                matches.push(("package", subject));
+            }
+            if allows("module")
+                && let Some(subject) = module_match
+            {
+                matches.push(("module", subject));
+            }
+            // A canonical file path also resolves through the file node's
+            // qualified name. Prefer the file subject in that case, and prefer
+            // a package over its containing module path.
+            if matches.iter().any(|(kind, _)| *kind == "file") {
+                matches.retain(|(kind, _)| *kind == "file");
             }
             if matches.is_empty() {
                 return Err(AtlasError::Other(format!(
@@ -293,6 +331,24 @@ fn build_packet(
     } else {
         Vec::new()
     };
+    // Caller/callee arrays are symbol relationships. Drop file nodes and
+    // expression-level call targets that do not resolve to a graph symbol.
+    let resolvable_symbol = |qname: &str| {
+        by_qname.get(qname).is_some_and(|index| {
+            !matches!(
+                nodes[*index].kind,
+                atlas_core::NodeKind::File | atlas_core::NodeKind::Import
+            )
+        })
+    };
+    let callers = callers
+        .into_iter()
+        .filter(|qname| resolvable_symbol(qname))
+        .collect::<Vec<_>>();
+    let callees = callees
+        .into_iter()
+        .filter(|qname| resolvable_symbol(qname))
+        .collect::<Vec<_>>();
 
     let mut related_files = BTreeSet::new();
     for qname in callers.iter().chain(callees.iter()) {

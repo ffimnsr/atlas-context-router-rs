@@ -3,6 +3,7 @@
 mod annotate;
 mod build_budget;
 mod call_resolution;
+pub mod communities;
 pub mod config;
 mod embedding;
 pub mod lang_policy;
@@ -22,6 +23,10 @@ mod update_files;
 pub mod watch;
 
 pub use build::{BuildOptions, BuildSummary};
+pub use communities::{
+    COMMUNITY_ALGORITHM, CommunityDetectionOptions, CommunityDetectionReport, DetectedCommunity,
+    detect_communities,
+};
 pub use config::{BuildRunBudget, Config, ConfigTemplateProfile, EmbeddingBackendConfig};
 pub use doctor::{
     DoctorCheck, DoctorCheckDetails, SHARED_DOCTOR_CHECKS, SchemaProbe, canonical_check_names,

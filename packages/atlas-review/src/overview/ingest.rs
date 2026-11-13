@@ -9,9 +9,11 @@ use atlas_core::{AtlasError, Result};
 use atlas_session::{
     NewOverviewRecord, OVERVIEW_DESCRIPTION_PREVIEW_MAX_CHARS, OVERVIEW_INLINE_BODY_BUDGET_BYTES,
     OVERVIEW_SCHEMA_VERSION, OverviewAnalysisInput, OverviewFreshness, OverviewSourceKind,
-    OverviewSubject, OverviewSubjectKind, SessionStore, packet_id, subject_id, truncate_chars,
+    OverviewSubject, OverviewSubjectInput, OverviewSubjectKind, SessionStore, packet_id,
+    subject_id, truncate_chars,
 };
 use atlas_store_sqlite::Store;
+use camino::Utf8Path;
 
 use super::types::OverviewIngestResult;
 use super::util;
@@ -36,7 +38,17 @@ pub fn ingest_overview_analysis(
         )));
     }
 
-    let mut subject = input.subject.clone();
+    let head = util::current_commit_sha(repo_root);
+    let nodes = store.list_all_nodes()?;
+    let (by_qname, by_file) = util::index_nodes(&nodes);
+    let mut subject = resolve_subject_input(
+        repo_root,
+        &head,
+        &input.subject,
+        &nodes,
+        &by_qname,
+        &by_file,
+    )?;
     if subject.repo_root.trim().is_empty() {
         subject.repo_root = repo_root.to_owned();
     } else if subject.repo_root != repo_root {
@@ -44,6 +56,9 @@ pub fn ingest_overview_analysis(
             "overview ingest subject repo_root '{}' does not match active repo '{}'",
             subject.repo_root, repo_root
         )));
+    }
+    if subject.commit_sha.trim().is_empty() {
+        subject.commit_sha = head.clone();
     }
     let subject = subject.validated()?;
     atlas_session::validate_confidence(input.confidence)?;
@@ -69,13 +84,11 @@ pub fn ingest_overview_analysis(
     }
 
     let subject_identifier = subject_id(&subject);
-    let packet_validated = validate_packet(session, input, &subject_identifier)?;
+    let packet_validated =
+        validate_packet(session, input, &subject_identifier, &subject.commit_sha)?;
 
-    let nodes = store.list_all_nodes()?;
-    let (by_qname, by_file) = util::index_nodes(&nodes);
     let (subject_resolved, span_overlaps) = resolve_subject(&subject, &nodes, &by_qname, &by_file);
 
-    let head = util::current_commit_sha(repo_root);
     let freshness = if !subject_resolved {
         OverviewFreshness::Orphaned
     } else if input.packet_id.is_none() && input.source_kind != OverviewSourceKind::ExternalLlm {
@@ -128,6 +141,18 @@ pub fn ingest_overview_analysis(
         &redacted.examples,
         input.source_ids.first().cloned(),
     )?;
+    // Persist the routing decision in the store-owned budget block so
+    // `body_routed` and `metadata.budget.source_body_routed` agree.
+    if let serde_json::Value::Object(map) = &mut metadata {
+        let budget = atlas_session::OverviewBudgetMeta {
+            source_body_routed: body_routed,
+            ..Default::default()
+        };
+        map.insert(
+            "budget".to_owned(),
+            serde_json::to_value(&budget).unwrap_or(serde_json::Value::Null),
+        );
+    }
 
     let graph_last_indexed_at = store.stats().ok().and_then(|stats| stats.last_indexed_at);
     let record = session.insert_overview_record(&NewOverviewRecord {
@@ -169,15 +194,12 @@ fn validate_packet(
     session: &SessionStore,
     input: &OverviewAnalysisInput,
     subject_identifier: &str,
+    subject_commit_sha: &str,
 ) -> Result<bool> {
     let Some(provided) = input.packet_id.as_deref() else {
         return Ok(false);
     };
-    let expected = packet_id(
-        subject_identifier,
-        &input.subject.commit_sha,
-        &input.evidence_ids,
-    );
+    let expected = packet_id(subject_identifier, subject_commit_sha, &input.evidence_ids);
     if provided == expected {
         return Ok(true);
     }
@@ -189,18 +211,94 @@ fn validate_packet(
                 "overview packet_id '{provided}' was exported for subject {stored_subject}, not {subject_identifier}"
             )));
         }
-        if stored_commit != input.subject.commit_sha {
+        if stored_commit != subject_commit_sha {
             return Err(AtlasError::Other(format!(
-                "overview packet_id '{provided}' was exported for commit {stored_commit}, not {}",
-                input.subject.commit_sha
+                "overview packet_id '{provided}' was exported for commit {stored_commit}, not {subject_commit_sha}"
             )));
         }
         return Ok(true);
     }
     Err(AtlasError::Other(format!(
-        "overview packet_id mismatch: expected '{expected}' for subject {subject_identifier} and commit {}; echo the exported evidence_ids or omit packet_id",
-        input.subject.commit_sha
+        "overview packet_id mismatch: expected '{expected}' for subject {subject_identifier} and commit {subject_commit_sha}; echo the exported evidence_ids or omit packet_id"
     )))
+}
+
+fn resolve_subject_input(
+    repo_root: &str,
+    head: &str,
+    input: &OverviewSubjectInput,
+    nodes: &[Node],
+    by_qname: &std::collections::HashMap<String, usize>,
+    by_file: &std::collections::HashMap<String, Vec<usize>>,
+) -> Result<OverviewSubject> {
+    if let Some(subject) = input.clone().into_structured() {
+        return Ok(subject);
+    }
+    let reference = input.as_reference().unwrap_or_default().trim();
+    if reference.is_empty() {
+        return Err(AtlasError::Other(
+            "overview ingest subject must not be empty".to_owned(),
+        ));
+    }
+
+    if let Some(index) = by_qname.get(reference) {
+        return Ok(util::node_subject(&nodes[*index], repo_root, head));
+    }
+
+    let canonical = util::canonical_path(repo_root, reference).ok();
+    if let Some(path) = canonical.as_deref() {
+        if let Some(indexes) = by_file.get(path)
+            && let Some(index) = indexes.first()
+        {
+            let hash = nodes[*index].file_hash.clone();
+            return Ok(reference_file_subject(repo_root, head, path, hash));
+        }
+        let absolute = Utf8Path::new(repo_root).join(path);
+        if absolute.is_file() {
+            let hash = util::file_content_hash(repo_root, path).unwrap_or_default();
+            return Ok(reference_file_subject(repo_root, head, path, hash));
+        }
+        if absolute.is_dir() {
+            return Ok(util::module_subject(reference, repo_root, head));
+        }
+    }
+
+    let packages = util::collect_packages(&[], nodes);
+    if packages.iter().any(|package| package == reference) {
+        return Ok(util::package_subject(reference, repo_root, head));
+    }
+    let modules = nodes
+        .iter()
+        .map(|node| util::module_path_for_file(&node.file_path))
+        .collect::<std::collections::BTreeSet<_>>();
+    if modules.contains(reference) {
+        return Ok(util::module_subject(reference, repo_root, head));
+    }
+
+    Err(AtlasError::Other(format!(
+        "overview ingest subject not found: {reference}"
+    )))
+}
+
+fn reference_file_subject(
+    repo_root: &str,
+    head: &str,
+    path: &str,
+    content_hash: String,
+) -> OverviewSubject {
+    OverviewSubject {
+        kind: OverviewSubjectKind::File,
+        repo_root: repo_root.to_owned(),
+        commit_sha: head.to_owned(),
+        package_name: None,
+        module_path: Some(util::module_path_for_file(path)),
+        canonical_file_path: Some(path.to_owned()),
+        qualified_name: None,
+        node_kind: Some("file".to_owned()),
+        line_start: None,
+        line_end: None,
+        content_hash: Some(content_hash).filter(|hash| !hash.is_empty()),
+    }
 }
 
 fn resolve_subject(

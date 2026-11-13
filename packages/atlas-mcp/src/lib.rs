@@ -128,6 +128,11 @@ pub mod transport_http;
 
 pub use resources::{atlas_uri_grep, atlas_uri_list, atlas_uri_read, atlas_uri_search};
 pub use spec::MCP_PROTOCOL_VERSION;
+/// Execute one MCP tool through the shared dispatch layer.
+///
+/// CLI surfaces use this to emit the same `structuredContent` shape as MCP.
+#[doc(hidden)]
+pub use tools::call as call_tool;
 pub use tools::health::mark_server_started;
 pub use tools::{
     ToolManualDocument, render_tool_manual_text, tool_list, tool_list_markdown, tool_manual,

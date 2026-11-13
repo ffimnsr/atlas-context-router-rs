@@ -171,6 +171,89 @@ pub(crate) fn print_json(command: &str, data: serde_json::Value) -> Result<()> {
     Ok(())
 }
 
+/// Canonical JSON for tool-backed CLI surfaces.
+///
+/// Calls the MCP dispatch layer and prints its `structuredContent`, so CLI and
+/// MCP cannot drift in field names or nesting.
+pub(crate) fn print_tool_json(
+    command: &str,
+    tool: &str,
+    args: serde_json::Value,
+    repo_root: &str,
+    db_path: &str,
+) -> Result<()> {
+    let data = tool_json_value(tool, args, repo_root, db_path)?;
+    print_json(command, data)
+}
+
+/// Execute an MCP tool and return its `structuredContent` payload.
+pub(crate) fn tool_json_value(
+    tool: &str,
+    args: serde_json::Value,
+    repo_root: &str,
+    db_path: &str,
+) -> Result<serde_json::Value> {
+    let response = atlas_mcp::call_tool(tool, Some(&args), repo_root, db_path)?;
+    Ok(response
+        .get("structuredContent")
+        .cloned()
+        .unwrap_or(response))
+}
+
+const CLI_JSON_PAYLOAD_LIMIT_BYTES: usize = 32 * 1024;
+
+/// Print JSON while enforcing the same 32 KB ceiling MCP applies.
+///
+/// Oversized arrays are halved repeatedly and the payload is marked
+/// `payload_truncated` so callers can detect degradation.
+pub(crate) fn print_json_bounded(command: &str, data: serde_json::Value) -> Result<()> {
+    let mut value = data;
+    let mut bytes = serde_json::to_vec(&value)?.len();
+    while bytes > CLI_JSON_PAYLOAD_LIMIT_BYTES && shrink_largest_array(&mut value) {
+        bytes = serde_json::to_vec(&value)?.len();
+    }
+    if bytes > CLI_JSON_PAYLOAD_LIMIT_BYTES
+        && let Some(object) = value.as_object_mut()
+    {
+        object.insert("payload_truncated".to_owned(), serde_json::json!(true));
+        object.insert(
+            "payload_byte_limit".to_owned(),
+            serde_json::json!(CLI_JSON_PAYLOAD_LIMIT_BYTES),
+        );
+    }
+    print_json(command, value)
+}
+
+fn shrink_largest_array(value: &mut serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Array(items) => {
+            if items.len() > 1 {
+                let keep = items.len().div_ceil(2);
+                items.truncate(keep);
+                return true;
+            }
+            items.iter_mut().any(shrink_largest_array)
+        }
+        serde_json::Value::Object(map) => {
+            let mut largest: Option<usize> = None;
+            let mut largest_size = 0usize;
+            for (index, child) in map.values().enumerate() {
+                let size = serde_json::to_vec(child)
+                    .map(|bytes| bytes.len())
+                    .unwrap_or(0);
+                if size > largest_size {
+                    largest_size = size;
+                    largest = Some(index);
+                }
+            }
+            largest
+                .and_then(|index| map.values_mut().nth(index))
+                .is_some_and(shrink_largest_array)
+        }
+        _ => false,
+    }
+}
+
 pub(crate) fn public_graph_stats(store: &Store, _source_repo_id: &str) -> Result<GraphStats> {
     // One counting source for every surface. `status`, `doctor`,
     // `list_graph_stats`, and `debug_graph` all report counts from

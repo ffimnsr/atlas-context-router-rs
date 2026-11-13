@@ -215,9 +215,11 @@ pub(crate) fn parse_uri(uri: &str) -> Result<(AtlasUri, OverviewLevel)> {
                     repo_id: repo_id.clone(),
                     path: tail.join("/"),
                 },
-                ("symbol", [qname]) => AtlasUri::Symbol {
+                // Qualified names contain `/`; join the remaining segments so
+                // raw (unencoded) `packages/foo/src/lib.rs::fn::bar` forms work.
+                ("symbol", tail) if !tail.is_empty() => AtlasUri::Symbol {
                     repo_id: repo_id.clone(),
-                    qualified_name: qname.clone(),
+                    qualified_name: tail.join("/"),
                 },
                 _ => bail!("unknown repo uri form: '{uri}'"),
             }
@@ -274,7 +276,7 @@ pub(crate) fn parse_uri(uri: &str) -> Result<(AtlasUri, OverviewLevel)> {
 /// Resolve the filesystem root that owns `repo_id`.
 fn resolve_repo_root(current_repo_root: &str, repo_id: &str) -> Result<String> {
     let current = Utf8Path::new(current_repo_root);
-    if stable_repo_id(current) == repo_id {
+    if repo_id == "current" || stable_repo_id(current) == repo_id {
         return Ok(current_repo_root.to_owned());
     }
     if let Ok(registry) = RepoRegistry::load(current)
@@ -607,9 +609,12 @@ fn symbol_view(
                 db_path,
             )?;
             let resolved = structured(response)?;
+            // `resolve_symbol` exposes `best_match`; keep the older keys as
+            // fallbacks so resources stay compatible across payload revisions.
             let node = resolved
-                .get("match")
+                .get("best_match")
                 .cloned()
+                .or_else(|| resolved.get("match").cloned())
                 .or_else(|| resolved.get("symbol").cloned())
                 .unwrap_or(resolved);
             json!({

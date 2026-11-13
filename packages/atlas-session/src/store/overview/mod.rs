@@ -30,6 +30,6 @@ pub use types::{
     OverviewExportRequest, OverviewExportScope, OverviewFreshness, OverviewGraphProvenance,
     OverviewListFilter, OverviewPacketBudget, OverviewPacketEvidence, OverviewPacketFreshness,
     OverviewRanking, OverviewRecord, OverviewSearchFilter, OverviewSearchHit, OverviewSourceKind,
-    OverviewStaleFilter, OverviewSubject, OverviewSubjectKind, canonicalize_subject_path,
-    packet_id, subject_id,
+    OverviewStaleFilter, OverviewSubject, OverviewSubjectInput, OverviewSubjectKind,
+    canonicalize_subject_path, packet_id, subject_id,
 };

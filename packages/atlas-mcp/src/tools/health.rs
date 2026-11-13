@@ -8,96 +8,12 @@ use std::time::Instant;
 
 use crate::tool_result::{ToolSuccessEnvelope, normalized_tool_result_value};
 
+use super::health_retrieval::collect_retrieval_index_summary;
 use super::shared::{
     derive_graph_readiness, error_code_docs, error_message, error_suggestions, failure_category,
     graph_issue_code, inject_budget_metadata, load_budget_policy, open_store,
     pending_graph_relevant_changes, tool_result_value, u64_arg,
 };
-
-#[derive(Serialize)]
-struct RetrievalIndexSummary {
-    available: bool,
-    searchable: bool,
-    state: Option<String>,
-    files_discovered: i64,
-    files_indexed: i64,
-    chunks_written: i64,
-    chunks_reused: i64,
-    last_indexed_at: Option<String>,
-    last_error: Option<String>,
-    content_db_path: String,
-}
-
-fn collect_retrieval_index_summary(repo_root: &str, db_path: &str) -> RetrievalIndexSummary {
-    use atlas_contentstore::{ContentStore, IndexState};
-
-    let content_db_path = atlas_engine::paths::content_db_path(db_path);
-    match ContentStore::open(&content_db_path) {
-        Ok(mut store) => {
-            let _ = store.migrate();
-            match store.get_index_status(repo_root) {
-                Ok(Some(status)) => {
-                    let searchable = status.state == IndexState::Indexed;
-                    let state = match status.state {
-                        IndexState::Indexed => "indexed",
-                        IndexState::Indexing => "indexing",
-                        IndexState::IndexFailed => "index_failed",
-                    };
-                    RetrievalIndexSummary {
-                        available: true,
-                        searchable,
-                        state: Some(state.to_owned()),
-                        files_discovered: status.files_discovered,
-                        files_indexed: status.files_indexed,
-                        chunks_written: status.chunks_written,
-                        chunks_reused: status.chunks_reused,
-                        last_indexed_at: status.last_indexed_at,
-                        last_error: status.last_error,
-                        content_db_path,
-                    }
-                }
-                Ok(None) => RetrievalIndexSummary {
-                    available: false,
-                    searchable: false,
-                    state: None,
-                    files_discovered: 0,
-                    files_indexed: 0,
-                    chunks_written: 0,
-                    chunks_reused: 0,
-                    last_indexed_at: None,
-                    last_error: Some(
-                        "content store has no retrieval index state for this repo".to_owned(),
-                    ),
-                    content_db_path,
-                },
-                Err(error) => RetrievalIndexSummary {
-                    available: false,
-                    searchable: false,
-                    state: None,
-                    files_discovered: 0,
-                    files_indexed: 0,
-                    chunks_written: 0,
-                    chunks_reused: 0,
-                    last_indexed_at: None,
-                    last_error: Some(error.to_string()),
-                    content_db_path,
-                },
-            }
-        }
-        Err(error) => RetrievalIndexSummary {
-            available: false,
-            searchable: false,
-            state: None,
-            files_discovered: 0,
-            files_indexed: 0,
-            chunks_written: 0,
-            chunks_reused: 0,
-            last_indexed_at: None,
-            last_error: Some(error.to_string()),
-            content_db_path,
-        },
-    }
-}
 
 fn structural_orphans(store: &atlas_store_sqlite::Store, limit: usize) -> Vec<atlas_core::Node> {
     store.structural_orphan_nodes(limit).unwrap_or_default()

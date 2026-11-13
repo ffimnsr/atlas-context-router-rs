@@ -277,7 +277,15 @@ impl SessionStore {
         let subject_id = subject_id(&subject);
         let mut bounded = input.clone();
         bounded.subject = subject.clone();
-        let budget = bound_new_overview_record(&mut bounded)?;
+        let mut budget = bound_new_overview_record(&mut bounded)?;
+        // Ingest records whether an oversized body was routed to the content
+        // store; keep that signal in the same budget metadata block the store
+        // owns so readers see one consistent object.
+        budget.source_body_routed = bounded
+            .metadata
+            .pointer("/budget/source_body_routed")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
 
         let source_kind = bounded.source_kind;
         let previous = match bounded.supersedes_id.clone() {
@@ -296,8 +304,10 @@ impl SessionStore {
 
         let mut metadata = bounded.metadata.clone();
         if let Value::Object(map) = &mut metadata {
-            map.entry("budget".to_owned())
-                .or_insert_with(|| serde_json::to_value(&budget).unwrap_or(Value::Null));
+            map.insert(
+                "budget".to_owned(),
+                serde_json::to_value(&budget).unwrap_or(Value::Null),
+            );
         }
 
         let record = OverviewRecord {

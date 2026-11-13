@@ -15,6 +15,10 @@ pub enum OverviewCommand {
         #[arg(long = "subject")]
         subjects: Vec<String>,
 
+        /// Specific subject positional form (same as `--subject`).
+        #[arg(value_name = "SUBJECT")]
+        subjects_pos: Vec<String>,
+
         /// Export subjects affected by changed files only.
         #[arg(long)]
         changed: bool,

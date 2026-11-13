@@ -98,6 +98,28 @@ fn docs_completion_uses_context_file_for_heading_suggestions() {
 }
 
 #[test]
+fn parse_symbol_uri_accepts_raw_qualified_name_paths() {
+    let (parsed, level) = uris::parse_uri(
+        "atlas://repo/current/symbol/packages/atlas-core/src/health.rs::fn::classify_graph_store_error",
+    )
+    .expect("parse symbol uri");
+    assert_eq!(level, atlas_session::OverviewLevel::L1);
+    match parsed {
+        uris::AtlasUri::Symbol {
+            repo_id,
+            qualified_name,
+        } => {
+            assert_eq!(repo_id, "current");
+            assert_eq!(
+                qualified_name,
+                "packages/atlas-core/src/health.rs::fn::classify_graph_store_error"
+            );
+        }
+        other => panic!("expected symbol uri, got {other:?}"),
+    }
+}
+
+#[test]
 fn resources_read_docs_index_returns_markdown() {
     let dir = TempDir::new().expect("tempdir");
     let repo_root = dir.path().to_str().expect("repo root");

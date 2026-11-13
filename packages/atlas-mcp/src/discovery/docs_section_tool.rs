@@ -294,6 +294,39 @@ pub(crate) fn tool_get_docs_section(
 
         let mut response = render_tool_result(&normalized, output_format)?;
         response["file"] = serde_json::Value::String(normalized.file.clone());
+        // Flat aliases keep the CLI contract stable while the canonical
+        // nested `heading` object remains the MCP shape.
+        let structured = response
+            .get_mut("structuredContent")
+            .expect("docs section payload must be an object");
+        structured["selector_kind"] =
+            serde_json::Value::String(normalized.selector_mode.clone());
+        structured["heading_path"] = normalized
+            .heading
+            .as_ref()
+            .map(|heading| serde_json::Value::String(heading.path.clone()))
+            .unwrap_or(serde_json::Value::Null);
+        structured["heading_slug"] = normalized
+            .slug
+            .clone()
+            .map(serde_json::Value::String)
+            .unwrap_or(serde_json::Value::Null);
+        structured["start_line"] = normalized
+            .line_start
+            .map(serde_json::Value::from)
+            .unwrap_or(serde_json::Value::Null);
+        structured["end_line"] = normalized
+            .line_end
+            .map(serde_json::Value::from)
+            .unwrap_or(serde_json::Value::Null);
+        structured["omitted_byte_count"] = serde_json::Value::from(result.omitted_byte_count);
+        structured["heading_level"] = normalized
+            .heading
+            .as_ref()
+            .map(|heading| serde_json::Value::from(heading.level))
+            .unwrap_or(serde_json::Value::Null);
+        structured["line_count"] = serde_json::Value::from(normalized.summary.line_count);
+        structured["atlas_result_kind"] = serde_json::Value::String("docs_section".to_owned());
 
         Ok(response)
     })()

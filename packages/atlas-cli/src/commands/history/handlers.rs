@@ -60,7 +60,7 @@ pub(crate) fn run_history_status(cli: &Cli) -> Result<()> {
 
 pub(crate) fn run_history_build(cli: &Cli) -> Result<()> {
     let sub = match &cli.command {
-        Command::History { subcommand } => subcommand,
+        Command::History { subcommand, .. } => subcommand.as_ref().expect("history subcommand"),
         _ => unreachable!(),
     };
 
@@ -174,7 +174,7 @@ pub(crate) fn run_history_build(cli: &Cli) -> Result<()> {
 
 pub(crate) fn run_history_update(cli: &Cli) -> Result<()> {
     let sub = match &cli.command {
-        Command::History { subcommand } => subcommand,
+        Command::History { subcommand, .. } => subcommand.as_ref().expect("history subcommand"),
         _ => unreachable!(),
     };
 
@@ -268,7 +268,8 @@ pub(crate) fn run_history_update(cli: &Cli) -> Result<()> {
 pub(crate) fn run_history_rebuild(cli: &Cli) -> Result<()> {
     let commit_sha = match &cli.command {
         Command::History {
-            subcommand: HistoryCommand::Rebuild { commit_sha },
+            subcommand: Some(HistoryCommand::Rebuild { commit_sha }),
+            ..
         } => commit_sha.as_str(),
         _ => unreachable!(),
     };
@@ -326,12 +327,13 @@ pub(crate) fn run_history_diff(cli: &Cli) -> Result<()> {
     let (commit_a, commit_b, stat_only, full) = match &cli.command {
         Command::History {
             subcommand:
-                HistoryCommand::Diff {
+                Some(HistoryCommand::Diff {
                     commit_a,
                     commit_b,
                     stat_only,
                     full,
-                },
+                }),
+            ..
         } => (commit_a.as_str(), commit_b.as_str(), *stat_only, *full),
         _ => unreachable!(),
     };
@@ -396,11 +398,12 @@ pub(crate) fn run_history_symbol(cli: &Cli) -> Result<()> {
     let (qualified_name, stat_only, full) = match &cli.command {
         Command::History {
             subcommand:
-                HistoryCommand::Symbol {
+                Some(HistoryCommand::Symbol {
                     qualified_name,
                     stat_only,
                     full,
-                },
+                }),
+            ..
         } => (qualified_name.as_str(), *stat_only, *full),
         _ => unreachable!(),
     };
@@ -465,12 +468,13 @@ pub(crate) fn run_history_file(cli: &Cli) -> Result<()> {
     let (path, follow_renames, stat_only, full) = match &cli.command {
         Command::History {
             subcommand:
-                HistoryCommand::File {
+                Some(HistoryCommand::File {
                     path,
                     follow_renames,
                     stat_only,
                     full,
-                },
+                }),
+            ..
         } => (path.as_str(), *follow_renames, *stat_only, *full),
         _ => unreachable!(),
     };
@@ -534,12 +538,13 @@ pub(crate) fn run_history_dependency(cli: &Cli) -> Result<()> {
     let (source, target, stat_only, full) = match &cli.command {
         Command::History {
             subcommand:
-                HistoryCommand::Dependency {
+                Some(HistoryCommand::Dependency {
                     source,
                     target,
                     stat_only,
                     full,
-                },
+                }),
+            ..
         } => (source.as_str(), target.as_str(), *stat_only, *full),
         _ => unreachable!(),
     };
@@ -601,11 +606,12 @@ pub(crate) fn run_history_module(cli: &Cli) -> Result<()> {
     let (module, stat_only, full) = match &cli.command {
         Command::History {
             subcommand:
-                HistoryCommand::Module {
+                Some(HistoryCommand::Module {
                     module,
                     stat_only,
                     full,
-                },
+                }),
+            ..
         } => (module.as_str(), *stat_only, *full),
         _ => unreachable!(),
     };
@@ -660,7 +666,8 @@ pub(crate) fn run_history_module(cli: &Cli) -> Result<()> {
 pub(crate) fn run_history_churn(cli: &Cli) -> Result<()> {
     let (stat_only, full) = match &cli.command {
         Command::History {
-            subcommand: HistoryCommand::Churn { stat_only, full },
+            subcommand: Some(HistoryCommand::Churn { stat_only, full }),
+            ..
         } => (*stat_only, *full),
         _ => unreachable!(),
     };
@@ -715,13 +722,14 @@ pub(crate) fn run_history_prune(cli: &Cli) -> Result<()> {
     {
         Command::History {
             subcommand:
-                HistoryCommand::Prune {
+                Some(HistoryCommand::Prune {
                     keep_all,
                     keep_latest,
                     older_than_days,
                     keep_tagged_only,
                     keep_weekly,
-                },
+                }),
+            ..
         } => (
             *keep_all,
             *keep_latest,

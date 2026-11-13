@@ -16,6 +16,14 @@ pub(crate) struct HealthOutputFormatArgs {
 #[allow(dead_code)]
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct GetMetricsArgsSchema {
+    verbose: Option<bool>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct DbCheckArgsSchema {
     limit: Option<u64>,
     output_format: Option<String>,

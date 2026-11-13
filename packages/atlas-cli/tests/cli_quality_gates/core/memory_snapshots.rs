@@ -93,6 +93,14 @@ fn normalize_volatile(value: &mut Value, replacements: &[(&str, &str)]) {
     }
 }
 
+fn scrub_provenance(value: &mut Value) {
+    if let Some(provenance) = value.get_mut("atlas_provenance") {
+        provenance["repo_id"] = json!("<repo_id>");
+        provenance["registry_root_repo_id"] = json!("<repo_id>");
+        provenance["commit_sha"] = json!("<commit_sha>");
+    }
+}
+
 fn is_volatile_timestamp_key(key: &str) -> bool {
     matches!(
         key,
@@ -244,6 +252,7 @@ fn overview_show_and_search_json_snapshots() {
         ),
     );
     normalize_fixture_value(&mut show, &fixture);
+    scrub_provenance(&mut show);
     assert_snapshot("memory_overview_show.json", &show);
 
     let mut search = data(
@@ -254,6 +263,7 @@ fn overview_show_and_search_json_snapshots() {
         ),
     );
     normalize_fixture_value(&mut search, &fixture);
+    scrub_provenance(&mut search);
     assert_snapshot("memory_overview_search.json", &search);
 }
 

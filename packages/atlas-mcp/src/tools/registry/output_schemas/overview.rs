@@ -116,6 +116,8 @@ pub(crate) fn overview_show_output_schema() -> Value {
             "view": { "type": "object" },
             "record": { "type": ["object", "null"] },
             "matches": { "type": "array", "items": { "type": "object" } },
+            "candidates": { "type": "array", "items": { "type": "string" } },
+            "retry_guidance": { "type": "string" },
             "summary": summary_schema(
                 &[
                     "overview_id",

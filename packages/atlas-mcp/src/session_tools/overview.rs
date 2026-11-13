@@ -157,18 +157,24 @@ pub fn tool_overview_ingest(
     output_format: OutputFormat,
 ) -> Result<Value> {
     let analysis = if let Some(value) = args.and_then(|a| a.get("analysis")) {
-        match serde_json::from_value::<OverviewAnalysisInput>(value.clone()) {
+        match parse_analysis_value(value) {
             Ok(analysis) => analysis,
-            Err(error) => return overview_ingest_invalid_input(output_format, error.to_string()),
+            Err(error) => return overview_ingest_invalid_input(output_format, error),
         }
     } else if let Some(path) = string_arg(args, "path").or_else(|| string_arg(args, "input")) {
-        let raw = match std::fs::read_to_string(path) {
-            Ok(raw) => raw,
-            Err(error) => {
-                return overview_ingest_invalid_input(
-                    output_format,
-                    format!("cannot read overview analysis file {path}: {error}"),
-                );
+        // Accept inline JSON in `input` as well as a filesystem path; the
+        // guide documents both the object and the string form.
+        let raw = if path.trim_start().starts_with('{') {
+            path.to_owned()
+        } else {
+            match std::fs::read_to_string(path) {
+                Ok(raw) => raw,
+                Err(error) => {
+                    return overview_ingest_invalid_input(
+                        output_format,
+                        format!("cannot read overview analysis file {path}: {error}"),
+                    );
+                }
             }
         };
         match serde_json::from_str::<OverviewAnalysisInput>(&raw) {
@@ -314,21 +320,61 @@ pub fn tool_overview_show(
                 }
                 payload
             }
-            None => serde_json::json!({
-                "tool": "overview_show",
-                "repo_root": repo_root,
-                "found": false,
-                "code": "subject_not_found",
-                "subject": subject,
-                "record": Value::Null,
-                "matches": [],
-                "warnings": [format!(
-                    "No overview record matches '{subject}'. Run overview_search or overview_export to list subjects."
-                )],
-            }),
+            None => {
+                // A miss is a normal lookup result, but callers still need a
+                // path forward. Surface near-miss records instead of an empty
+                // list so typos and tag matches are discoverable.
+                let hits = session
+                    .search_overview_records(
+                        repo_root,
+                        subject,
+                        &OverviewSearchFilter {
+                            limit: Some(5),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default();
+                let matches = hits.into_iter().map(|hit| hit.record).collect::<Vec<_>>();
+                let candidates = matches
+                    .iter()
+                    .map(|record| {
+                        record
+                            .qualified_name
+                            .clone()
+                            .or_else(|| record.canonical_file_path.clone())
+                            .or_else(|| record.package_name.clone())
+                            .or_else(|| record.module_path.clone())
+                            .unwrap_or_else(|| record.subject_id.clone())
+                    })
+                    .collect::<Vec<_>>();
+                serde_json::json!({
+                    "tool": "overview_show",
+                    "repo_root": repo_root,
+                    "found": false,
+                    "code": "subject_not_found",
+                    "subject": subject,
+                    "record": Value::Null,
+                    "matches": matches,
+                    "candidates": candidates,
+                    "retry_guidance": "Retry with an exact subject id or one of the candidates, or run overview_search.",
+                    "warnings": [format!(
+                        "No overview record matches '{subject}'. Run overview_search or overview_export to list subjects."
+                    )],
+                })
+            }
         },
         output_format,
     )
+}
+
+fn parse_analysis_value(value: &Value) -> std::result::Result<OverviewAnalysisInput, String> {
+    match value {
+        Value::String(raw) => {
+            serde_json::from_str::<OverviewAnalysisInput>(raw).map_err(|error| error.to_string())
+        }
+        _ => serde_json::from_value::<OverviewAnalysisInput>(value.clone())
+            .map_err(|error| error.to_string()),
+    }
 }
 
 fn overview_ingest_invalid_input(output_format: OutputFormat, message: String) -> Result<Value> {

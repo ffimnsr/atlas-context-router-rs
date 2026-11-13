@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
-use atlas_store_sqlite::Store;
+use atlas_core::EdgeKind;
+use atlas_store_sqlite::{Store, TraceDirection, TraceOptions};
 
 use crate::cli::{Cli, Command, CommunitiesCommand, FlowsCommand};
 
@@ -33,9 +34,13 @@ pub fn run_flows(cli: &Cli) -> Result<()> {
         }
         FlowsCommand::Create {
             name,
+            name_flag,
             kind,
             description,
         } => {
+            let name = name.as_deref().or(name_flag.as_deref()).ok_or_else(|| {
+                anyhow::anyhow!("flow name required; pass a positional name or --name")
+            })?;
             let id = store.create_flow(name, kind.as_deref(), description.as_deref())?;
             if cli.json {
                 print_json(
@@ -44,6 +49,67 @@ pub fn run_flows(cli: &Cli) -> Result<()> {
                 )?;
             } else {
                 println!("Created flow '{name}' (id={id})");
+            }
+        }
+        FlowsCommand::Trace {
+            name,
+            from,
+            to,
+            depth,
+        } => {
+            let flow = store
+                .get_flow_by_name(name)?
+                .with_context(|| format!("flow '{name}' not found"))?;
+            let members = store.get_flow_members(flow.id)?;
+            let path = match (from.as_deref(), to.as_deref()) {
+                (Some(from), Some(to)) => {
+                    let kinds = [EdgeKind::Calls];
+                    let options = TraceOptions {
+                        direction: TraceDirection::Down,
+                        edge_kinds: &kinds,
+                        max_depth: *depth,
+                        max_nodes: 200,
+                    };
+                    store
+                        .trace_call_path(from, to, &options)
+                        .context("flow trace failed")?
+                }
+                _ => None,
+            };
+            if cli.json {
+                let path_json = path.as_ref().map(|result| {
+                    serde_json::json!({
+                        "from": result.from.qualified_name,
+                        "to": result.to.qualified_name,
+                        "nodes": result
+                            .path
+                            .as_ref()
+                            .map(|path| path.nodes.iter().map(|node| node.qualified_name.clone()).collect::<Vec<_>>()),
+                        "visited_nodes": result.visited_nodes,
+                        "truncated": result.truncated,
+                    })
+                });
+                print_json(
+                    "flows.trace",
+                    serde_json::json!({
+                        "flow": flow,
+                        "members": members,
+                        "path": path_json,
+                    }),
+                )?;
+            } else if let Some(path) = path {
+                if let Some(path) = path.path {
+                    for node in &path.nodes {
+                        println!("{}", node.qualified_name);
+                    }
+                } else {
+                    println!("No call path found from flow '{name}' endpoints.");
+                }
+            } else {
+                println!("Flow '{name}' members ({}):", members.len());
+                for member in &members {
+                    println!("  {}", member.node_qualified_name);
+                }
             }
         }
         FlowsCommand::Delete { name } => {
@@ -155,6 +221,38 @@ pub fn run_communities(cli: &Cli) -> Result<()> {
                         c.name,
                         c.level.unwrap_or(0)
                     );
+                }
+            }
+        }
+        CommunitiesCommand::Detect {
+            min_members,
+            dry_run,
+        } => {
+            let report = atlas_engine::detect_communities(
+                &store,
+                &atlas_engine::CommunityDetectionOptions {
+                    min_members: *min_members,
+                    persist: !*dry_run,
+                    ..Default::default()
+                },
+            )?;
+            if cli.json {
+                print_json("communities.detect", serde_json::to_value(&report)?)?;
+            } else {
+                println!(
+                    "Detected {} communities (modularity {:.3}, {} nodes, {} edges)",
+                    report.community_count, report.modularity, report.node_count, report.edge_count
+                );
+                for community in report.communities.iter().take(20) {
+                    println!(
+                        "  - {} members={} module={}",
+                        community.name,
+                        community.member_count,
+                        community.dominant_module.as_deref().unwrap_or("-")
+                    );
+                }
+                for warning in &report.warnings {
+                    eprintln!("warning: {warning}");
                 }
             }
         }

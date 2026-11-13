@@ -23,6 +23,7 @@ pub(super) fn run_export(cli: &Cli, repo: &str, db_path: &str) -> Result<()> {
                 OverviewCommand::Export {
                     scope,
                     subjects,
+                    subjects_pos,
                     changed,
                     since,
                     limit,
@@ -34,7 +35,11 @@ pub(super) fn run_export(cli: &Cli, repo: &str, db_path: &str) -> Result<()> {
                 },
         } => (
             scope.clone(),
-            subjects.clone(),
+            subjects
+                .iter()
+                .chain(subjects_pos.iter())
+                .cloned()
+                .collect::<Vec<_>>(),
             *changed,
             since.clone(),
             *limit,

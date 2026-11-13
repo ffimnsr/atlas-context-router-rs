@@ -62,9 +62,9 @@ pub use self::overview::{
     OverviewFreshness, OverviewGraphProvenance, OverviewLevel, OverviewLevelView,
     OverviewListFilter, OverviewPacketBudget, OverviewPacketEvidence, OverviewPacketFreshness,
     OverviewRanking, OverviewRecord, OverviewSearchFilter, OverviewSearchHit, OverviewSourceKind,
-    OverviewStaleFilter, OverviewSubject, OverviewSubjectKind, bound_new_overview_record,
-    canonicalize_subject_path, packet_id, render_level, subject_id, truncate_chars,
-    validate_confidence,
+    OverviewStaleFilter, OverviewSubject, OverviewSubjectInput, OverviewSubjectKind,
+    bound_new_overview_record, canonicalize_subject_path, packet_id, render_level, subject_id,
+    truncate_chars, validate_confidence,
 };
 pub use self::types::{
     AgentMemorySummary, AgentPartitionSummary, AgentResponsibilitySummary, CurationResult,

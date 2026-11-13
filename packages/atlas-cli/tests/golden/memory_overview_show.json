@@ -1,49 +1,113 @@
 {
-  "id": "<id>",
+  "tool": "overview_show",
   "repo_root": "<repo_root>",
-  "subject_id": "<id>",
-  "subject_kind": "function",
-  "package_name": "sample",
-  "module_path": "src",
-  "canonical_file_path": "src/lib.rs",
-  "qualified_name": "src/lib.rs::fn::helper",
-  "node_kind": "function",
-  "line_start": 1,
-  "line_end": 3,
-  "title": "helper",
-  "summary": "Formats a greeting with a suffix.",
-  "description_preview": "Builds the greeting through Greeter::greet_twice.",
-  "responsibilities": [
-    "format greetings"
-  ],
-  "flow": [],
-  "inputs": [
-    "name: &str"
-  ],
-  "outputs": [
-    "String"
-  ],
-  "invariants": [],
-  "gotchas": [],
-  "examples": [],
-  "tags": [
-    "fixture"
-  ],
-  "source_kind": "manual",
-  "commit_sha": "fixture-sha",
-  "freshness": "fresh",
-  "confidence": 0.8,
-  "created_at": "<timestamp>",
-  "updated_at": "<timestamp>",
-  "metadata": {
-    "budget": {
-      "title_truncated": false,
-      "summary_truncated": false,
-      "description_preview_truncated": false,
-      "omitted_list_items": 0,
-      "source_body_routed": false
+  "found": true,
+  "subject": "<id>",
+  "record": {
+    "id": "<id>",
+    "repo_root": "<repo_root>",
+    "subject_id": "<id>",
+    "subject_kind": "function",
+    "package_name": "sample",
+    "module_path": "src",
+    "canonical_file_path": "src/lib.rs",
+    "qualified_name": "src/lib.rs::fn::helper",
+    "node_kind": "function",
+    "line_start": 1,
+    "line_end": 3,
+    "title": "helper",
+    "summary": "Formats a greeting with a suffix.",
+    "description_preview": "Builds the greeting through Greeter::greet_twice.",
+    "responsibilities": [
+      "format greetings"
+    ],
+    "flow": [],
+    "inputs": [
+      "name: &str"
+    ],
+    "outputs": [
+      "String"
+    ],
+    "invariants": [],
+    "gotchas": [],
+    "examples": [],
+    "tags": [
+      "fixture"
+    ],
+    "source_kind": "manual",
+    "commit_sha": "fixture-sha",
+    "freshness": "fresh",
+    "confidence": 0.8,
+    "created_at": "<timestamp>",
+    "updated_at": "<timestamp>",
+    "metadata": {
+      "budget": {
+        "title_truncated": false,
+        "summary_truncated": false,
+        "description_preview_truncated": false,
+        "omitted_list_items": 0,
+        "source_body_routed": false
+      }
     }
   },
+  "matches": [
+    {
+      "id": "<id>",
+      "repo_root": "<repo_root>",
+      "subject_id": "<id>",
+      "subject_kind": "function",
+      "package_name": "sample",
+      "module_path": "src",
+      "canonical_file_path": "src/lib.rs",
+      "qualified_name": "src/lib.rs::fn::helper",
+      "node_kind": "function",
+      "line_start": 1,
+      "line_end": 3,
+      "title": "helper",
+      "summary": "Formats a greeting with a suffix.",
+      "description_preview": "Builds the greeting through Greeter::greet_twice.",
+      "responsibilities": [
+        "format greetings"
+      ],
+      "flow": [],
+      "inputs": [
+        "name: &str"
+      ],
+      "outputs": [
+        "String"
+      ],
+      "invariants": [],
+      "gotchas": [],
+      "examples": [],
+      "tags": [
+        "fixture"
+      ],
+      "source_kind": "manual",
+      "commit_sha": "fixture-sha",
+      "freshness": "fresh",
+      "confidence": 0.8,
+      "created_at": "<timestamp>",
+      "updated_at": "<timestamp>",
+      "metadata": {
+        "budget": {
+          "title_truncated": false,
+          "summary_truncated": false,
+          "description_preview_truncated": false,
+          "omitted_list_items": 0,
+          "source_body_routed": false
+        }
+      }
+    }
+  ],
+  "summary": {
+    "overview_id": "<id>",
+    "subject_id": "<id>",
+    "subject_kind": "function",
+    "freshness": "fresh",
+    "confidence": 0.8
+  },
+  "warnings": [],
+  "level": "l1",
   "view": {
     "level": "l1",
     "freshness": "fresh",
@@ -63,5 +127,16 @@
     "invariants": [],
     "gotchas": [],
     "truncated": false
+  },
+  "atlas_provenance": {
+    "repo_root": "<repo_root>",
+    "repo_id": "<repo_id>",
+    "commit_sha": "<commit_sha>",
+    "db_path": "<repo_root>/.atlas/worldtree.db",
+    "indexed_file_count": 0,
+    "last_indexed_at": null,
+    "registry_root_repo_id": "<repo_id>",
+    "registry_repo_count": 1,
+    "selected_repo_ids": []
   }
 }

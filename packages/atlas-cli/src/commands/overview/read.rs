@@ -1,29 +1,50 @@
 use anyhow::{Context, Result};
 use atlas_session::{
-    OverviewFreshness, OverviewLevel, OverviewListFilter, OverviewSearchFilter, OverviewSourceKind,
-    OverviewStaleFilter, OverviewSubjectKind, render_level,
+    OverviewFreshness, OverviewListFilter, OverviewSearchFilter, OverviewSourceKind,
+    OverviewStaleFilter, OverviewSubjectKind,
 };
 
 use crate::cli::{Cli, Command, OverviewCommand};
 
 use super::{open_graph_store, open_session_store, print_json};
+use crate::commands::print_tool_json;
 
 pub(super) fn run_read(cli: &Cli, repo: &str, db_path: &str) -> Result<()> {
     match &cli.command {
         Command::Overview {
             subcommand: OverviewCommand::Show { subject, level },
         } => {
-            let session = open_session_store(db_path)?;
-            let record = session.resolve_overview_subject(repo, subject)?;
             if cli.json {
-                let mut value = serde_json::to_value(&record)?;
-                if let Some(level) = level {
-                    let level: OverviewLevel = level.parse()?;
-                    value["view"] = serde_json::to_value(render_level(&record, level))?;
+                return print_tool_json(
+                    "overview.show",
+                    "overview_show",
+                    serde_json::json!({ "subject": subject, "level": level }),
+                    repo,
+                    db_path,
+                );
+            }
+            let session = open_session_store(db_path)?;
+            match session.resolve_overview_subject(repo, subject) {
+                Ok(record) => print_record(&record),
+                Err(_) => {
+                    let hits = session
+                        .search_overview_records(
+                            repo,
+                            subject,
+                            &OverviewSearchFilter {
+                                limit: Some(5),
+                                ..Default::default()
+                            },
+                        )
+                        .unwrap_or_default();
+                    println!("Overview subject '{subject}' not found.");
+                    if !hits.is_empty() {
+                        println!("Candidates:");
+                        for hit in hits {
+                            println!("  - {}", subject_label(&hit.record));
+                        }
+                    }
                 }
-                print_json("overview.show", value)?;
-            } else {
-                print_record(&record);
             }
         }
         Command::Overview {
@@ -40,6 +61,25 @@ pub(super) fn run_read(cli: &Cli, repo: &str, db_path: &str) -> Result<()> {
                     level,
                 },
         } => {
+            if cli.json {
+                return print_tool_json(
+                    "overview.search",
+                    "overview_search",
+                    serde_json::json!({
+                        "query": query,
+                        "subject_kind": subject_kind,
+                        "freshness": freshness,
+                        "package": package,
+                        "module": module,
+                        "file": file,
+                        "source_kind": source_kind,
+                        "limit": limit,
+                        "level": level,
+                    }),
+                    repo,
+                    db_path,
+                );
+            }
             let session = open_session_store(db_path)?;
             let filter = OverviewSearchFilter {
                 subject_kind: parse_kind(subject_kind.as_deref())?,
@@ -51,36 +91,17 @@ pub(super) fn run_read(cli: &Cli, repo: &str, db_path: &str) -> Result<()> {
                 limit: *limit,
             };
             let hits = session.search_overview_records(repo, query, &filter)?;
-            if cli.json {
-                let level = level
-                    .as_deref()
-                    .map(str::parse::<OverviewLevel>)
-                    .transpose()?;
-                let payload = match level {
-                    Some(level) => serde_json::json!({
-                        "hits": hits.iter().map(|hit| serde_json::json!({
-                            "score": hit.score,
-                            "ranking": hit.ranking,
-                            "record": hit.record,
-                            "view": render_level(&hit.record, level),
-                        })).collect::<Vec<_>>(),
-                    }),
-                    None => serde_json::to_value(&hits)?,
-                };
-                print_json("overview.search", payload)?;
-            } else {
-                println!("Overview search: {} hit(s)", hits.len());
-                for hit in &hits {
-                    println!(
-                        "  [{:.2}] {} · {} ({} · confidence {:.2})",
-                        hit.score,
-                        subject_label(&hit.record),
-                        hit.record.subject_kind,
-                        hit.record.freshness,
-                        hit.record.confidence
-                    );
-                    println!("      id: {}", hit.record.id);
-                }
+            println!("Overview search: {} hit(s)", hits.len());
+            for hit in &hits {
+                println!(
+                    "  [{:.2}] {} · {} ({} · confidence {:.2})",
+                    hit.score,
+                    subject_label(&hit.record),
+                    hit.record.subject_kind,
+                    hit.record.freshness,
+                    hit.record.confidence
+                );
+                println!("      id: {}", hit.record.id);
             }
         }
         Command::Overview {

@@ -166,6 +166,14 @@ pub(crate) fn resources_read(
         }
     } else if let Some(path_with_heading) = uri.strip_prefix("atlas://docs/") {
         let (file, heading) = docs::split_docs_uri(path_with_heading)?;
+        // URI segments are percent-encoded; decode both the path and heading
+        // so `%20` and other escapes resolve to real documentation targets.
+        let file = file
+            .split('/')
+            .map(uris::decode_segment)
+            .collect::<Result<Vec<_>>>()?
+            .join("/");
+        let heading = uris::decode_segment(heading)?;
         let response = crate::tools::call(
             "get_docs_section",
             Some(&json!({

@@ -21,8 +21,8 @@ pub use memoir::MemoirCommand;
 pub use overview::OverviewCommand;
 pub use subcommands::{
     AnalyzeCommand, CommunitiesCommand, ConfigCommand, DocsCommand, FeedbackCommand, FlowsCommand,
-    HistoryCommand, InitMode, InsightsCommand, InstallMode, MemoryCommand, RefactorCommand,
-    RepoCommand, SessionCommand,
+    HistoryCommand, InitMode, InsightsCommand, InsightsLargeFunctionMode, InstallMode,
+    MemoryCommand, RefactorCommand, RepoCommand, SessionCommand,
 };
 pub use uri::UriCommand;
 
@@ -927,9 +927,17 @@ pub enum Command {
     /// `?level=l0|l1|l2` selects disclosure depth for repo tree/file/symbol
     /// URIs. Bare `atlas://repo`, `atlas://file/<path>`, and `atlas://<repo_id>`
     /// forms are not part of the grammar; use the canonical forms above.
+    #[command(args_conflicts_with_subcommands = true)]
     Uri {
+        /// Canonical atlas:// URI (shorthand for `uri read`).
+        uri: Option<String>,
+
+        /// Disclosure level for the shorthand read form.
+        #[arg(long)]
+        level: Option<String>,
+
         #[command(subcommand)]
-        subcommand: UriCommand,
+        subcommand: Option<UriCommand>,
     },
 
     /// Inspect and prune query-conditioned experience edges.
@@ -975,9 +983,29 @@ pub enum Command {
     },
 
     /// Query, build, and inspect historical graph snapshots per git commit.
+    #[command(args_conflicts_with_subcommands = true)]
     History {
         #[command(subcommand)]
-        subcommand: HistoryCommand,
+        subcommand: Option<HistoryCommand>,
+
+        /// Repo-relative file path (shorthand for `history file`).
+        path: Option<String>,
+
+        /// Symbol name to scope the file history to (shorthand form).
+        #[arg(long)]
+        symbol: Option<String>,
+
+        /// Follow git-detected renames across indexed snapshots.
+        #[arg(long)]
+        follow_renames: bool,
+
+        /// Emit only compact summary fields.
+        #[arg(long, conflicts_with = "full")]
+        stat_only: bool,
+
+        /// Emit expanded human-readable details.
+        #[arg(long, conflicts_with = "stat_only")]
+        full: bool,
     },
 
     /// Print CLI version, build commit hash, and build date.

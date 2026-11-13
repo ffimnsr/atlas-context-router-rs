@@ -13,10 +13,100 @@ use crate::cli::{Cli, Command};
 use super::{
     check_graph_readiness, db_path, derive_graph_readiness, derive_graph_readiness_open_failed,
     load_budget_policy, load_embedding_config, print_json, query_display_path, readiness_overrides,
-    resolve_repo,
+    resolve_repo, tool_json_value,
 };
 
 const MAX_MULTI_REPO_SELECTION: usize = 32;
+
+/// Preserve the historical CLI `results[].node` view while the canonical
+/// payload lives under `matches[]` with flattened node fields.
+fn add_legacy_query_results(data: &mut serde_json::Value) {
+    if let Some(query) = data.get_mut("query")
+        && let Some(query) = query.as_object_mut()
+    {
+        let aliases = [
+            ("limit", "requested_limit"),
+            ("graph_expand", "expand"),
+            ("graph_max_hops", "expand_hops"),
+            ("fuzzy_match", "fuzzy"),
+            ("regex_pattern", "regex"),
+        ];
+        for (legacy, canonical) in aliases {
+            if let Some(value) = query.get(canonical).cloned() {
+                query.insert(legacy.to_owned(), value);
+            }
+        }
+    }
+    if let Some(legend) = data
+        .get("summary")
+        .and_then(|summary| summary.get("ranking_evidence_legend"))
+        .cloned()
+    {
+        data["ranking_evidence_legend"] = legend;
+    }
+    if let Some(usage) = data
+        .get("summary")
+        .and_then(|summary| summary.get("usage_edges_included"))
+        .cloned()
+        && let Some(query) = data.get_mut("query")
+        && let Some(query) = query.as_object_mut()
+    {
+        query.insert("usage_edges_included".to_owned(), usage);
+    }
+    let Some(matches_value) = data.get("matches").cloned() else {
+        return;
+    };
+    let Some(matches) = matches_value.as_array() else {
+        return;
+    };
+    data["budget"] = serde_json::json!({
+        "budget_status": "within_budget",
+        "budget_hit": false,
+        "budget_observed": matches.len(),
+        "budget_limit": data
+            .get("query")
+            .and_then(|query| query.get("applied_limit"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        "partial": false,
+        "safe_to_answer": true,
+    });
+    let results = matches
+        .iter()
+        .map(|entry| {
+            let mut node = entry.clone();
+            if let Some(object) = node.as_object_mut() {
+                object.remove("score");
+                object.remove("ranking_evidence");
+                object.remove("repo");
+                if let Some(qn) = object.get("qn").and_then(serde_json::Value::as_str) {
+                    let name = qn.rsplit("::").next().unwrap_or(qn).to_owned();
+                    object.insert("qualified_name".to_owned(), serde_json::json!(qn));
+                    object.insert("name".to_owned(), serde_json::json!(name));
+                }
+                if let Some(file) = object.get("file").cloned() {
+                    object.insert("file_path".to_owned(), file);
+                }
+                if let Some(line) = object.get("line").cloned() {
+                    object.insert("line_start".to_owned(), line.clone());
+                    object.insert("line_end".to_owned(), line);
+                }
+                if let Some(lang) = object.get("lang").cloned() {
+                    object.insert("language".to_owned(), lang);
+                }
+                object.insert("id".to_owned(), serde_json::json!(0));
+                object.insert("is_test".to_owned(), serde_json::json!(false));
+            }
+            serde_json::json!({
+                "score": entry.get("score").cloned().unwrap_or(serde_json::Value::Null),
+                "ranking_evidence": entry.get("ranking_evidence").cloned().unwrap_or(serde_json::Value::Null),
+                "node": node,
+                "repo": entry.get("repo").cloned().unwrap_or(serde_json::Value::Null),
+            })
+        })
+        .collect::<Vec<_>>();
+    data["results"] = serde_json::Value::Array(results);
+}
 
 fn query_owner_identity(node: &atlas_core::Node) -> Option<String> {
     node.extra_json.as_object().and_then(|extra| {
@@ -220,6 +310,39 @@ pub fn run_query(cli: &Cli) -> Result<()> {
         cli,
     )? {
         eprintln!("Warning: {warning}");
+    }
+
+    if cli.json {
+        // Emit the MCP payload so CLI and MCP query results share one shape.
+        let mut args = serde_json::json!({
+            "kind": kind,
+            "language": language,
+            "include_files": include_files,
+            "subpath": subpath,
+            "exact_dir": exact_dir,
+            "exclude_subpaths": exclude_subpaths,
+            "limit": limit,
+            "expand": expand,
+            "expand_hops": expand_hops,
+            "fuzzy": fuzzy,
+            "hybrid": hybrid,
+            "semantic": semantic,
+            "allow_stale": allow_stale,
+            "allow_partial": allow_partial,
+        });
+        if regex {
+            args["regex"] = serde_json::json!(text);
+        } else {
+            args["text"] = serde_json::json!(text);
+        }
+        if all_repos {
+            args["repo_scope"] = serde_json::json!({ "kind": "all" });
+        } else if let Some(repo_id) = repo_id.as_deref() {
+            args["repo_scope"] = serde_json::json!({ "kind": "repo_id", "repo_id": repo_id });
+        }
+        let mut data = tool_json_value("query_graph", args, &repo, &db_path)?;
+        add_legacy_query_results(&mut data);
+        return print_json("query", data);
     }
 
     if text.trim().is_empty() {
@@ -515,6 +638,28 @@ pub fn run_explain_query(cli: &Cli) -> Result<()> {
 
     let repo = resolve_repo(cli)?;
     let db_path = db_path(cli, &repo);
+    if cli.json {
+        let mut args = serde_json::json!({
+            "kind": kind,
+            "language": language,
+            "subpath": subpath,
+            "limit": limit,
+        });
+        if regex {
+            args["regex"] = serde_json::json!(text);
+        } else {
+            args["text"] = serde_json::json!(text);
+        }
+        let mut data = tool_json_value("explain_query", args, &repo, &db_path)?;
+        if let Some(normalized) = data.get("normalized_query").cloned() {
+            for key in ["active_query_mode", "search_path", "ranking_factors"] {
+                if let Some(value) = normalized.get(key).cloned() {
+                    data[key] = value;
+                }
+            }
+        }
+        return print_json("explain_query", data);
+    }
     let subpath = subpath.map(|raw| {
         find_repo_root(Utf8Path::new(&repo))
             .ok()

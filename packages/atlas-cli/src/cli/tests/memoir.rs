@@ -56,7 +56,7 @@ fn parse_memoir_add_concept_command() {
                 }
         } if graph == "Architecture"
             && name == "parser"
-            && description == "source parser"
+            && description.as_deref() == Some("source parser")
             && kind.as_deref() == Some("component")
             && source_id.as_deref() == Some("artifact-1")
     ));
@@ -96,7 +96,7 @@ fn parse_memoir_link_command() {
         } if graph == "Architecture"
             && source == "parser"
             && target == "lexer"
-            && relation == "depends_on"
+            && relation.as_deref() == Some("depends_on")
             && confidence == 0.5
             && source_id.as_deref() == Some("artifact-2")
     ));
@@ -109,19 +109,55 @@ fn parse_memoir_inspect_command_defaults_depth_to_one() {
         cli.command,
         Command::Memoir {
             subcommand: MemoirCommand::Inspect {
-                ref concept,
+                ref targets,
                 ref graph,
                 depth: 1,
                 ref relation,
                 ..
             }
-        } if concept == "parser" && graph.is_none() && relation.is_none()
+        } if targets == &["parser".to_owned()] && graph.is_none() && relation.is_none()
     ));
 }
 
 #[test]
-fn parse_memoir_link_requires_relation() {
-    let error = Cli::try_parse_from(["atlas", "memoir", "link", "Architecture", "parser", "lexer"])
-        .expect_err("--relation must be required");
-    assert!(error.to_string().contains("--relation"));
+fn parse_memoir_link_accepts_positional_relation() {
+    let cli = parse(&[
+        "atlas",
+        "memoir",
+        "link",
+        "Architecture",
+        "parser",
+        "lexer",
+        "depends_on",
+    ]);
+    assert!(matches!(
+        cli.command,
+        Command::Memoir {
+            subcommand: MemoirCommand::Link {
+                ref relation_positional,
+                ..
+            }
+        } if relation_positional.as_deref() == Some("depends_on")
+    ));
+}
+
+#[test]
+fn parse_memoir_inspect_accepts_graph_positionally() {
+    let cli = parse(&[
+        "atlas",
+        "memoir",
+        "inspect",
+        "Architecture",
+        "HealthDiagnostics",
+    ]);
+    assert!(matches!(
+        cli.command,
+        Command::Memoir {
+            subcommand: MemoirCommand::Inspect {
+                ref targets,
+                depth: 1,
+                ..
+            }
+        } if targets == &["Architecture".to_owned(), "HealthDiagnostics".to_owned()]
+    ));
 }

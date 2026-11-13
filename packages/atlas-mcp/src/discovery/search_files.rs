@@ -35,15 +35,10 @@ pub(crate) fn tool_search_files(
         let exclude_globs = string_array_arg(args, "exclude_globs")?;
         let case_sensitive = bool_arg(args, "case_sensitive").unwrap_or(false);
         let subpath = normalized_optional_subpath(str_arg(args, "subpath")?);
-        // Discovery listing has no review-context payload cost, so the caller
-        // sets the cap explicitly instead of inheriting the 20-file
-        // `review_context_extraction` default.
+        // Discovery listing has no review-context payload cost, so honor the
+        // caller cap directly instead of inheriting the 20-file review budget.
         let requested_max_results = u64_arg(args, "max_results").unwrap_or(100) as usize;
-        let result_limit = budgets.resolve_limit(
-            policy.review_context_extraction.files,
-            "review_context_extraction.max_files",
-            Some(requested_max_results),
-        );
+        let result_limit = requested_max_results.clamp(1, 10_000);
 
         let name_matcher = build_globset(&[&pattern], case_sensitive)
             .with_context(|| format!("invalid pattern glob: {pattern}"))?;

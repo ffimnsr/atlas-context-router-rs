@@ -90,6 +90,7 @@ pub fn refresh_overview_plan(
     let mut possibly_stale = Vec::new();
     let mut orphaned = Vec::new();
     let mut unchanged_count = 0;
+    let mut applied_count = 0usize;
 
     for record in records {
         let subject = record.subject();
@@ -109,8 +110,8 @@ pub fn refresh_overview_plan(
 
         if !resolved || file_deleted {
             orphaned.push(item(&record, "subject_no_longer_resolves", 90));
-            if apply {
-                session.mark_overview_freshness(&record.id, OverviewFreshness::Orphaned)?;
+            if apply && mark_if_changed(session, &record, OverviewFreshness::Orphaned)? {
+                applied_count += 1;
             }
             continue;
         }
@@ -125,16 +126,16 @@ pub fn refresh_overview_plan(
                 },
                 100,
             ));
-            if apply {
-                session.mark_overview_freshness(&record.id, OverviewFreshness::Stale)?;
+            if apply && mark_if_changed(session, &record, OverviewFreshness::Stale)? {
+                applied_count += 1;
             }
             continue;
         }
 
         if dependent_changed(&record, &changed_paths, &changed_qnames, &edges, &matched) {
             possibly_stale.push(item(&record, "dependent_change", 60));
-            if apply {
-                session.mark_overview_freshness(&record.id, OverviewFreshness::PossiblyStale)?;
+            if apply && mark_if_changed(session, &record, OverviewFreshness::PossiblyStale)? {
+                applied_count += 1;
             }
             continue;
         }
@@ -145,11 +146,6 @@ pub fn refresh_overview_plan(
     sort_items(&mut direct_stale);
     sort_items(&mut possibly_stale);
     sort_items(&mut orphaned);
-    let applied_count = if apply {
-        direct_stale.len() + possibly_stale.len() + orphaned.len()
-    } else {
-        0
-    };
 
     Ok(OverviewRefreshPlan {
         schema_version: OVERVIEW_SCHEMA_VERSION,
@@ -163,6 +159,18 @@ pub fn refresh_overview_plan(
         orphaned,
         unchanged_count,
     })
+}
+
+fn mark_if_changed(
+    session: &mut SessionStore,
+    record: &atlas_session::OverviewRecord,
+    target: OverviewFreshness,
+) -> Result<bool> {
+    if record.freshness == target {
+        return Ok(false);
+    }
+    session.mark_overview_freshness(&record.id, target)?;
+    Ok(true)
 }
 
 fn dependent_changed(

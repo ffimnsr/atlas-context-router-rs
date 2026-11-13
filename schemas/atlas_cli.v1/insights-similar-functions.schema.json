@@ -10,7 +10,7 @@
     "command": { "const": "insights_similar_functions" },
     "data": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "required": ["source", "thresholds", "summary", "findings", "matches", "atlas_provenance"],
       "properties": {
         "source": { "type": "object", "additionalProperties": true },

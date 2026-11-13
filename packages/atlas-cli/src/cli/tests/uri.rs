@@ -13,10 +13,11 @@ fn parse_uri_commands() {
     assert!(matches!(
         cli.command,
         Command::Uri {
-            subcommand: UriCommand::Read {
+            subcommand: Some(UriCommand::Read {
                 ref uri,
                 ref level
-            }
+            }),
+            ..
         } if uri == "atlas://repo/r/file/src%2Flib.rs" && level.as_deref() == Some("l2")
     ));
 
@@ -24,7 +25,8 @@ fn parse_uri_commands() {
     assert!(matches!(
         cli.command,
         Command::Uri {
-            subcommand: UriCommand::List { ref uri }
+            subcommand: Some(UriCommand::List { ref uri }),
+            ..
         } if uri == "atlas://repo/r/tree/src"
     ));
 
@@ -39,11 +41,12 @@ fn parse_uri_commands() {
     assert!(matches!(
         cli.command,
         Command::Uri {
-            subcommand: UriCommand::Grep {
+            subcommand: Some(UriCommand::Grep {
                 ref pattern,
                 regex: true,
                 ..
-            }
+            }),
+            ..
         } if pattern == "token"
     ));
 
@@ -57,7 +60,8 @@ fn parse_uri_commands() {
     assert!(matches!(
         cli.command,
         Command::Uri {
-            subcommand: UriCommand::Search { ref query, .. }
+            subcommand: Some(UriCommand::Search { ref query, .. }),
+            ..
         } if query == "parser"
     ));
 }

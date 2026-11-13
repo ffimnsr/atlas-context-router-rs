@@ -1,4 +1,7 @@
 {
+  "tool": "overview_search",
+  "repo_root": "<repo_root>",
+  "query": "greeting",
   "hits": [
     {
       "score": 0.0,
@@ -67,5 +70,22 @@
         "truncated": false
       }
     }
-  ]
+  ],
+  "summary": {
+    "hit_count": 1,
+    "limit": 20
+  },
+  "warnings": [],
+  "level": "l0",
+  "atlas_provenance": {
+    "repo_root": "<repo_root>",
+    "repo_id": "<repo_id>",
+    "commit_sha": "<commit_sha>",
+    "db_path": "<repo_root>/.atlas/worldtree.db",
+    "indexed_file_count": 0,
+    "last_indexed_at": null,
+    "registry_root_repo_id": "<repo_id>",
+    "registry_repo_count": 1,
+    "selected_repo_ids": []
+  }
 }

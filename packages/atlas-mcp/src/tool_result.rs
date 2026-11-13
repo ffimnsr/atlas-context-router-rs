@@ -390,6 +390,10 @@ fn tool_retry_guidance(detail: &str) -> &'static str {
         "Run graph build/update or allow stale/partial mode when supported, then retry."
     } else if lowered.contains("create_missing") {
         "Retry with create_missing: true to create the missing memoir concepts, or add them first."
+    } else if lowered.contains("memoir") && lowered.contains("not found") {
+        "Create the memoir graph/concept first, or pass create_missing: true where supported, then retry."
+    } else if lowered.contains("memoir") && lowered.contains("already exists") {
+        "Reuse the existing memoir identity or choose a different name, then retry."
     } else if lowered.contains("overview analysis")
         || lowered.contains("provide an `analysis` object")
     {
@@ -454,6 +458,8 @@ fn classify_tool_execution_error(message: &str, detail: &str) -> (ToolErrorCode,
         || lowered.contains("invalid text-asset extension patterns")
         || lowered.contains("invalid overview analysis")
         || lowered.contains("unknown memoir relation")
+        || (lowered.contains("memoir") && lowered.contains("not found"))
+        || (lowered.contains("memoir") && lowered.contains("already exists"))
         || lowered.contains("unknown overview subject kind")
         || lowered.contains("is ambiguous")
         || lowered.contains("create_missing")

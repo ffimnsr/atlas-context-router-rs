@@ -8,7 +8,7 @@ use crate::cli::{Cli, Command};
 
 use super::{
     check_graph_readiness, db_path, derive_graph_readiness, derive_graph_readiness_open_failed,
-    print_json, readiness_overrides, resolve_repo,
+    print_json, print_tool_json, readiness_overrides, resolve_repo,
 };
 
 pub fn run_symbols(cli: &Cli) -> Result<()> {
@@ -262,31 +262,25 @@ fn run_symbol_resolve(
     )
     .context("symbol resolution failed")?;
 
-    let status = resolution.status();
     let matches = resolution.matches;
     let match_count = matches.len();
     let best_match = matches.first();
 
     if cli.json {
-        print_json(
+        let repo = resolve_repo(cli)?;
+        let db_path = db_path(cli, &repo);
+        print_tool_json(
             "symbols",
+            "resolve_symbol",
             serde_json::json!({
-                "tool": "symbols",
-                "action": "resolve",
-                "query": {
-                    "name": name,
-                    "file": file,
-                    "kind": kind,
-                    "language": language,
-                },
-                "status": status,
-                "ambiguous": match_count > 1,
-                "resolution_stage": resolution.stage.map(|stage| stage.as_str()),
-                "match_count": match_count,
-                "best_match": best_match.map(symbol_json).unwrap_or(serde_json::Value::Null),
-                "matches": matches.iter().map(symbol_json).collect::<Vec<_>>(),
-                "truncated": resolution.truncated,
+                "name": name,
+                "file": file,
+                "kind": kind,
+                "language": language,
+                "limit": limit.max(1),
             }),
+            &repo,
+            &db_path,
         )?;
     } else if let Some(node) = best_match {
         println!(
@@ -304,16 +298,4 @@ fn run_symbol_resolve(
         println!("No symbols matched.");
     }
     Ok(())
-}
-
-fn symbol_json(node: &atlas_core::Node) -> serde_json::Value {
-    serde_json::json!({
-        "qualified_name": node.qualified_name,
-        "name": node.name,
-        "kind": node.kind.as_str(),
-        "language": node.language,
-        "file_path": node.file_path,
-        "line_start": node.line_start,
-        "line_end": node.line_end,
-    })
 }

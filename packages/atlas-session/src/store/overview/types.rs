@@ -506,7 +506,7 @@ pub struct OverviewAnalysisInput {
     /// validated deterministically without storing raw packet bodies.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence_ids: Vec<String>,
-    pub subject: OverviewSubject,
+    pub subject: OverviewSubjectInput,
     #[serde(default)]
     pub title: String,
     pub summary: String,
@@ -543,6 +543,37 @@ pub struct OverviewAnalysisInput {
     pub source_ids: Vec<String>,
     #[serde(default = "default_metadata")]
     pub metadata: Value,
+}
+
+/// Overview subject accepted by ingest: either a fully structured subject or
+/// a compact reference string (file path, qualified name, package, or module).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum OverviewSubjectInput {
+    Structured(OverviewSubject),
+    Reference(String),
+}
+
+impl From<OverviewSubject> for OverviewSubjectInput {
+    fn from(subject: OverviewSubject) -> Self {
+        Self::Structured(subject)
+    }
+}
+
+impl OverviewSubjectInput {
+    pub fn as_reference(&self) -> Option<&str> {
+        match self {
+            Self::Reference(value) => Some(value),
+            Self::Structured(_) => None,
+        }
+    }
+
+    pub fn into_structured(self) -> Option<OverviewSubject> {
+        match self {
+            Self::Structured(subject) => Some(subject),
+            Self::Reference(_) => None,
+        }
+    }
 }
 
 /// Search/list ranking evidence for one overview hit.

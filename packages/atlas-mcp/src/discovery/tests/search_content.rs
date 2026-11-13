@@ -165,7 +165,7 @@ fn search_content_max_results_truncates() {
 }
 
 #[test]
-fn search_content_max_results_is_clamped_by_central_budget_policy() {
+fn search_content_honors_requested_max_results_without_review_budget_clamp() {
     let files: Vec<(String, String)> = (0..210)
         .map(|i| (format!("src/f{i}.rs"), format!("fn target_{i}() {{}}")))
         .collect();
@@ -183,13 +183,10 @@ fn search_content_max_results_is_clamped_by_central_budget_policy() {
     let resp = tool_search_content(Some(&args), &root, OutputFormat::Json).unwrap();
     let body = parse_tool_json(resp.clone());
 
-    assert_eq!(resp["budget_status"], "partial_result");
-    assert_eq!(resp["budget_hit"], true);
-    assert_eq!(resp["budget_name"], "review_context_extraction.max_nodes");
-    assert_eq!(resp["budget_limit"], 200);
-    assert_eq!(resp["budget_observed"], 201);
-    assert_eq!(body["summary"]["hit_count"], 200);
-    assert_eq!(body["truncated"], true);
+    assert_eq!(resp["budget_status"], "within_budget");
+    assert_eq!(resp["budget_hit"], false);
+    assert_eq!(body["summary"]["hit_count"], 210);
+    assert_eq!(body["truncated"], false);
 }
 
 #[test]

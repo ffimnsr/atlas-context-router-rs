@@ -60,9 +60,13 @@ fn overview_fixtures_cover_all_subject_kinds() {
 
     for (name, raw, kind) in fixtures {
         let input = parse(name, raw);
-        assert_eq!(input.subject.kind, kind, "{name}");
-        input
+        let subject = input
             .subject
+            .clone()
+            .into_structured()
+            .unwrap_or_else(|| panic!("{name}: fixture must use a structured subject"));
+        assert_eq!(subject.kind, kind, "{name}");
+        subject
             .validated()
             .unwrap_or_else(|error| panic!("{name}: {error}"));
     }
@@ -81,9 +85,14 @@ fn stale_fixture_uses_an_older_commit() {
         "stale_function",
         include_str!("overview_fixture_stale_function.json"),
     );
-    assert_ne!(stale.subject.commit_sha, current.subject.commit_sha);
+    let current = current
+        .subject
+        .into_structured()
+        .expect("structured subject");
+    let stale = stale.subject.into_structured().expect("structured subject");
+    assert_ne!(stale.commit_sha, current.commit_sha);
     assert_eq!(
-        stale.subject.qualified_name, current.subject.qualified_name,
+        stale.qualified_name, current.qualified_name,
         "same subject identity must survive commit drift"
     );
 }

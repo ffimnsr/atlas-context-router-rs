@@ -707,7 +707,7 @@ fn call_inner(
         "search_templates" => tool_search_templates(args, repo_root, output_format),
         "search_text_assets" => tool_search_text_assets(args, repo_root, output_format),
         "broker_status" => tool_broker_status(repo_root, db_path, worker_threads, output_format),
-        "get_metrics" => tool_get_metrics(output_format),
+        "get_metrics" => tool_get_metrics(args, output_format),
         "status" => tool_status(repo_root, db_path, output_format),
         "doctor" => tool_doctor(repo_root, db_path, output_format),
         "db_check" => tool_db_check(args, repo_root, db_path, output_format),
@@ -848,6 +848,8 @@ fn inject_provenance(
 
     response["atlas_provenance"] = serde_json::json!({
         "repo_root": repo_root,
+        "repo_id": atlas_repo::stable_repo_id(camino::Utf8Path::new(repo_root)),
+        "commit_sha": atlas_repo::head_ref(camino::Utf8Path::new(repo_root)),
         "db_path": db_path,
         "indexed_file_count": indexed_file_count,
         "last_indexed_at": last_indexed_at,

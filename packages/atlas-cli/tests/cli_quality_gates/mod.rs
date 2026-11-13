@@ -253,6 +253,19 @@ fn assert_or_update_golden_json(name: &str, value: &Value) {
 fn normalize_query_results(value: &mut Value) {
     if let Some(object) = value.as_object_mut() {
         object.remove("latency_ms");
+        object.remove("atlas_provenance");
+    }
+    if let Some(matches) = value["matches"].as_array_mut() {
+        for entry in matches {
+            entry["score"] = json!(0.0);
+            if let Some(repo) = entry["repo"].as_object_mut() {
+                repo.insert("repo_id".to_owned(), json!("<repo_id>"));
+            }
+            if let Some(evidence) = entry["ranking_evidence"].as_object_mut() {
+                evidence.insert("raw_score".to_string(), json!(0.0));
+                evidence.insert("final_score".to_string(), json!(0.0));
+            }
+        }
     }
     if let Some(query) = value["query"].as_object_mut() {
         query.remove("repo_ids");

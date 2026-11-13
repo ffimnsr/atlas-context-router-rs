@@ -31,8 +31,8 @@ pub enum MemoirCommand {
         /// Concept name; unique inside the graph (case-insensitive).
         name: String,
 
-        /// Concept description or summary.
-        description: String,
+        /// Concept description or summary (optional).
+        description: Option<String>,
 
         /// Concept kind label (default: concept).
         #[arg(long)]
@@ -58,11 +58,13 @@ pub enum MemoirCommand {
         /// Target concept name.
         target: String,
 
-        /// Relation type: depends_on, part_of, contradicts, refines, replaces,
-        /// caused_by, fixed_by, blocked_by, decided_by, or related_to.
-        /// Aliases replaced_by and separate_from are normalized.
-        #[arg(long)]
-        relation: String,
+        /// Relation type flag form.
+        #[arg(long = "relation")]
+        relation: Option<String>,
+
+        /// Relation type positional form (alias for `--relation`).
+        #[arg(value_name = "RELATION")]
+        relation_positional: Option<String>,
 
         /// Relation confidence between 0.0 and 1.0 (default: 1.0).
         #[arg(long, default_value_t = 1.0)]
@@ -82,9 +84,13 @@ pub enum MemoirCommand {
     },
 
     /// Inspect a concept's bounded neighbourhood with relation direction.
+    ///
+    /// Accepts either `inspect <CONCEPT> --graph <GRAPH>` or the guide form
+    /// `inspect <GRAPH> <CONCEPT>`.
     Inspect {
-        /// Concept name to inspect.
-        concept: String,
+        /// Concept name, or graph name when two positionals are supplied.
+        #[arg(value_name = "GRAPH|CONCEPT", num_args = 1..=2)]
+        targets: Vec<String>,
 
         /// Graph name; omit to resolve across graphs (ambiguous names fail).
         #[arg(long)]

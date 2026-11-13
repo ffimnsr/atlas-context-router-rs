@@ -10,7 +10,7 @@
     "command": { "const": "insights_complex_functions" },
     "data": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "required": ["mode", "summary", "findings", "atlas_provenance"],
       "properties": {
         "mode": {
@@ -87,7 +87,7 @@
         },
         "atlas_provenance": {
           "type": "object",
-          "additionalProperties": false,
+          "additionalProperties": true,
           "required": ["indexed_file_count"],
           "properties": {
             "indexed_file_count": { "type": "integer", "minimum": 0 },

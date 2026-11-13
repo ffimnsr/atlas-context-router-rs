@@ -18,7 +18,7 @@ use crate::cli::{AnalyzeCommand, Cli, Command, RefactorCommand};
 use super::feedback_adjust::{FeedbackAdjuster, evidence_json};
 use super::{
     check_graph_readiness, db_path, derive_graph_readiness, derive_graph_readiness_open_failed,
-    print_json, readiness_overrides, resolve_repo,
+    print_json, print_json_bounded, readiness_overrides, resolve_repo,
 };
 
 fn print_refactor_result(result: &atlas_core::RefactorDryRunResult, dry_run: bool) {
@@ -139,7 +139,7 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                     if !feedback_evidence.is_empty() {
                         payload["feedback_evidence"] = evidence_json(&feedback_evidence);
                     }
-                    print_json("analyze_remove", payload)?;
+                    print_json_bounded("analyze_remove", payload)?;
                 } else {
                     println!("Removal impact for: {symbol}");
                     if !feedback_evidence.is_empty() {
@@ -556,7 +556,7 @@ pub fn run_refactor(cli: &Cli) -> Result<()> {
                     if !feedback_evidence.is_empty() {
                         payload["feedback_evidence"] = evidence_json(&feedback_evidence);
                     }
-                    print_json("refactor_remove_dead", payload)?;
+                    print_json_bounded("refactor_remove_dead", payload)?;
                 } else {
                     print_refactor_result(&result, *dry_run);
                     if !feedback_evidence.is_empty() {

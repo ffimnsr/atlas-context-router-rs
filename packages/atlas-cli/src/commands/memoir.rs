@@ -62,7 +62,7 @@ pub fn run_memoir(cli: &Cli) -> Result<()> {
                 scope: parse_scope(scope.as_deref())?,
                 graph: graph.clone(),
                 name: name.clone(),
-                description: description.clone(),
+                description: description.clone().unwrap_or_default(),
                 kind: kind.clone().unwrap_or_else(|| "concept".to_owned()),
                 source_id: source_id.clone(),
                 metadata: serde_json::json!({}),
@@ -86,18 +86,27 @@ pub fn run_memoir(cli: &Cli) -> Result<()> {
             source,
             target,
             relation,
+            relation_positional,
             confidence,
             source_id,
             scope,
             allow_missing_concepts,
         } => {
+            let relation = relation
+                .as_deref()
+                .or(relation_positional.as_deref())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "relation required; pass a positional RELATION or --relation <TYPE>"
+                    )
+                })?;
             let relation = store.link_memoir_concepts(&NewMemoirRelation {
                 repo_root: repo.clone(),
                 scope: parse_scope(scope.as_deref())?,
                 graph: graph.clone(),
                 source: source.clone(),
                 target: target.clone(),
-                relation: relation.clone(),
+                relation: relation.to_owned(),
                 confidence: *confidence,
                 source_id: source_id.clone(),
                 metadata: serde_json::json!({}),
@@ -119,12 +128,21 @@ pub fn run_memoir(cli: &Cli) -> Result<()> {
         }
 
         MemoirCommand::Inspect {
-            concept,
+            targets,
             graph,
             depth,
             relation,
             scope,
         } => {
+            let (graph, concept) = match (targets.as_slice(), graph.as_deref()) {
+                ([graph_name, concept], None) => (Some(graph_name.clone()), concept.clone()),
+                ([concept], graph_name) => (graph_name.map(str::to_owned), concept.clone()),
+                _ => {
+                    anyhow::bail!(
+                        "inspect requires <CONCEPT> with optional --graph, or <GRAPH> <CONCEPT>"
+                    )
+                }
+            };
             let inspection = store.inspect_memoir_concept(&MemoirInspectQuery {
                 repo_root: repo.clone(),
                 graph: graph.clone(),

@@ -644,6 +644,9 @@ pub enum FeedbackCommand {
 
     /// Deterministic feedback statistics.
     Stats,
+
+    /// Report feedback-driven confidence adjustment weights (idempotent).
+    Adjust,
 }
 
 /// Sub-commands for `atlas flows`.
@@ -654,8 +657,13 @@ pub enum FlowsCommand {
 
     /// Create a new flow.
     Create {
-        /// Name for the new flow.
-        name: String,
+        /// Name for the new flow (positional or `--name`).
+        #[arg(value_name = "NAME")]
+        name: Option<String>,
+
+        /// Name for the new flow (flag form).
+        #[arg(long = "name")]
+        name_flag: Option<String>,
 
         /// Optional kind label (e.g. `auth`, `data-pipeline`).
         #[arg(long)]
@@ -664,6 +672,24 @@ pub enum FlowsCommand {
         /// Optional human-readable description.
         #[arg(long)]
         description: Option<String>,
+    },
+
+    /// Trace a call path through a flow or list its ordered members.
+    Trace {
+        /// Name of the flow.
+        name: String,
+
+        /// Optional start symbol qualified name.
+        #[arg(long)]
+        from: Option<String>,
+
+        /// Optional target symbol qualified name.
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Maximum traversal depth.
+        #[arg(long, default_value_t = 5)]
+        depth: u32,
     },
 
     /// Delete a flow by name.
@@ -719,6 +745,17 @@ pub enum FlowsCommand {
 pub enum CommunitiesCommand {
     /// List all communities.
     List,
+
+    /// Detect communities with deterministic Louvain modularity clustering.
+    Detect {
+        /// Minimum members required to persist a detected community.
+        #[arg(long, default_value_t = 2)]
+        min_members: usize,
+
+        /// Compute the partition without writing communities.
+        #[arg(long)]
+        dry_run: bool,
+    },
 
     /// Create a new community.
     Create {

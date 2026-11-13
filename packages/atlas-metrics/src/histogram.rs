@@ -72,8 +72,11 @@ pub struct HistogramBucketSnapshot {
 pub struct HistogramSnapshot {
     pub count: u64,
     pub sum: u64,
+    #[serde(rename = "min_ms")]
     pub min: Option<u64>,
+    #[serde(rename = "max_ms")]
     pub max: Option<u64>,
+    #[serde(rename = "mean_ms")]
     pub mean: f64,
     pub p50: u64,
     pub p90: u64,

@@ -9,7 +9,7 @@ use crate::cli::{Cli, Command};
 
 use super::{
     check_graph_readiness, db_path, derive_graph_readiness, derive_graph_readiness_open_failed,
-    print_json, readiness_overrides, resolve_repo,
+    print_json, print_tool_json, readiness_overrides, resolve_repo,
 };
 
 pub fn run_man(cli: &Cli) -> Result<()> {
@@ -131,7 +131,22 @@ pub fn run_docs_section(cli: &Cli) -> Result<()> {
     };
 
     if cli.json {
-        print_json("docs_section", serde_json::to_value(&result)?)
+        let selector = if let Some(heading) = heading {
+            serde_json::json!({ "kind": "heading", "heading": heading })
+        } else {
+            serde_json::json!({ "kind": "line", "line": line.unwrap_or(0) })
+        };
+        print_tool_json(
+            "docs_section",
+            "get_docs_section",
+            serde_json::json!({
+                "file": canonical.as_str(),
+                "selector": selector,
+                "max_bytes": max_bytes,
+            }),
+            &repo,
+            &db_path,
+        )
     } else {
         println!("{}", render_docs_section_text(&result));
         Ok(())

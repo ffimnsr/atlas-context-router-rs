@@ -10,7 +10,7 @@
     "command": { "const": "insights_infer_modules" },
     "data": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "required": ["summary", "findings", "modules", "atlas_provenance"],
       "properties": {
         "summary": { "type": "object", "additionalProperties": false, "required": ["total_findings", "generated_at"], "properties": { "total_findings": { "type": "integer", "minimum": 0 }, "highest_severity": { "type": ["string", "null"], "enum": ["info", "low", "medium", "high", null] }, "generated_at": { "type": "string" } } },

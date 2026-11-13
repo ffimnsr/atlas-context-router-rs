@@ -9,11 +9,18 @@ use serde_json::Value;
 
 pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
     match name {
-        "broker_status" | "status" | "doctor" | "get_metrics" => {
+        "broker_status" | "status" | "doctor" => {
             Some(typed_schema_with_descriptions::<HealthOutputFormatArgs>(&[
                 ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
             ]))
         }
+        "get_metrics" => Some(typed_schema_with_descriptions::<GetMetricsArgsSchema>(&[
+            (
+                "properties/verbose",
+                "Include per-histogram bucket arrays (default false).",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
         "db_check" => Some(typed_schema_with_descriptions::<DbCheckArgsSchema>(&[
             (
                 "properties/limit",

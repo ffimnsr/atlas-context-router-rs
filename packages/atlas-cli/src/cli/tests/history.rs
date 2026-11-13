@@ -13,7 +13,11 @@ fn parse_history_update_with_repair() {
         "--max-commits",
         "25",
     ]);
-    if let Command::History { subcommand } = cli.command {
+    if let Command::History {
+        subcommand: Some(subcommand),
+        ..
+    } = cli.command
+    {
         match subcommand {
             HistoryCommand::Update {
                 branch,
@@ -35,7 +39,11 @@ fn parse_history_update_with_repair() {
 #[test]
 fn parse_history_build_with_yes() {
     let cli = parse(&["atlas", "history", "build", "--yes"]);
-    if let Command::History { subcommand } = cli.command {
+    if let Command::History {
+        subcommand: Some(subcommand),
+        ..
+    } = cli.command
+    {
         match subcommand {
             HistoryCommand::Build { yes, .. } => assert!(yes),
             _ => panic!("expected history build"),
@@ -47,7 +55,11 @@ fn parse_history_build_with_yes() {
 #[test]
 fn parse_history_update_with_yes() {
     let cli = parse(&["atlas", "history", "update", "--yes"]);
-    if let Command::History { subcommand } = cli.command {
+    if let Command::History {
+        subcommand: Some(subcommand),
+        ..
+    } = cli.command
+    {
         match subcommand {
             HistoryCommand::Update { yes, .. } => assert!(yes),
             _ => panic!("expected history update"),
@@ -64,7 +76,11 @@ fn parse_history_rebuild_commit() {
         "rebuild",
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     ]);
-    if let Command::History { subcommand } = cli.command {
+    if let Command::History {
+        subcommand: Some(subcommand),
+        ..
+    } = cli.command
+    {
         match subcommand {
             HistoryCommand::Rebuild { commit_sha } => {
                 assert_eq!(commit_sha, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
@@ -85,7 +101,11 @@ fn parse_history_diff_commits() {
         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "--stat-only",
     ]);
-    if let Command::History { subcommand } = cli.command {
+    if let Command::History {
+        subcommand: Some(subcommand),
+        ..
+    } = cli.command
+    {
         match subcommand {
             HistoryCommand::Diff {
                 commit_a,
@@ -113,7 +133,11 @@ fn parse_history_symbol_query() {
         "src/lib.rs::fn::helper",
         "--full",
     ]);
-    if let Command::History { subcommand } = cli.command {
+    if let Command::History {
+        subcommand: Some(subcommand),
+        ..
+    } = cli.command
+    {
         match subcommand {
             HistoryCommand::Symbol {
                 qualified_name,
@@ -133,7 +157,11 @@ fn parse_history_symbol_query() {
 #[test]
 fn parse_history_file_query() {
     let cli = parse(&["atlas", "history", "file", "src/lib.rs", "--follow-renames"]);
-    if let Command::History { subcommand } = cli.command {
+    if let Command::History {
+        subcommand: Some(subcommand),
+        ..
+    } = cli.command
+    {
         match subcommand {
             HistoryCommand::File {
                 path,
@@ -162,7 +190,11 @@ fn parse_history_dependency_query() {
         "src/lib.rs::method::Greeter::greet_twice",
         "--stat-only",
     ]);
-    if let Command::History { subcommand } = cli.command {
+    if let Command::History {
+        subcommand: Some(subcommand),
+        ..
+    } = cli.command
+    {
         match subcommand {
             HistoryCommand::Dependency {
                 source,
@@ -184,7 +216,11 @@ fn parse_history_dependency_query() {
 #[test]
 fn parse_history_module_query() {
     let cli = parse(&["atlas", "history", "module", "src/lib.rs"]);
-    if let Command::History { subcommand } = cli.command {
+    if let Command::History {
+        subcommand: Some(subcommand),
+        ..
+    } = cli.command
+    {
         match subcommand {
             HistoryCommand::Module {
                 module,
@@ -204,7 +240,11 @@ fn parse_history_module_query() {
 #[test]
 fn parse_history_churn_command() {
     let cli = parse(&["atlas", "history", "churn", "--full"]);
-    if let Command::History { subcommand } = cli.command {
+    if let Command::History {
+        subcommand: Some(subcommand),
+        ..
+    } = cli.command
+    {
         match subcommand {
             HistoryCommand::Churn { stat_only, full } => {
                 assert!(!stat_only);
@@ -229,7 +269,11 @@ fn parse_history_prune_command() {
         "--keep-tagged-only",
         "--keep-weekly",
     ]);
-    if let Command::History { subcommand } = cli.command {
+    if let Command::History {
+        subcommand: Some(subcommand),
+        ..
+    } = cli.command
+    {
         match subcommand {
             HistoryCommand::Prune {
                 keep_all,

@@ -10,11 +10,11 @@ use atlas_repo::find_repo_root;
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 
-use crate::cli::{Cli, Command, InsightsCommand};
+use crate::cli::{Cli, Command, InsightsCommand, InsightsLargeFunctionMode};
 
 use super::{
     check_graph_readiness, db_path, derive_graph_readiness, derive_graph_readiness_open_failed,
-    print_json, readiness_overrides, resolve_repo,
+    print_json, print_tool_json, readiness_overrides, resolve_repo,
 };
 
 fn insights_command_label(subcommand: &InsightsCommand) -> &'static str {
@@ -29,6 +29,21 @@ fn insights_command_label(subcommand: &InsightsCommand) -> &'static str {
         InsightsCommand::Duplicates { .. } => "insights:duplicates",
         InsightsCommand::InferModules { .. } => "insights:infer-modules",
         InsightsCommand::LabelComponents { .. } => "insights:label-components",
+    }
+}
+
+fn insights_json_command_label(subcommand: &InsightsCommand) -> &'static str {
+    match subcommand {
+        InsightsCommand::Architecture { .. } => "insights_architecture",
+        InsightsCommand::Metrics { .. } => "insights_metrics",
+        InsightsCommand::Risk { .. } => "insights_risk",
+        InsightsCommand::Patterns { .. } => "insights_patterns",
+        InsightsCommand::LargeFunctions { .. } => "insights_large_functions",
+        InsightsCommand::ComplexFunctions { .. } => "insights_complex_functions",
+        InsightsCommand::SimilarFunctions { .. } => "insights_similar_functions",
+        InsightsCommand::Duplicates { .. } => "insights_duplicates",
+        InsightsCommand::InferModules { .. } => "insights_infer_modules",
+        InsightsCommand::LabelComponents { .. } => "insights_label_components",
     }
 }
 
@@ -73,6 +88,121 @@ fn normalize_insights_files(repo: &str, files: &[String]) -> Result<Vec<String>>
                 .with_context(|| format!("invalid explicit file path '{path}'"))
         })
         .collect()
+}
+
+/// Map one CLI insight subcommand to its MCP tool name and arguments.
+fn insights_mcp_request(
+    subcommand: &InsightsCommand,
+    repo: &str,
+) -> Result<(&'static str, serde_json::Value)> {
+    let (tool, mut args) = match subcommand {
+        InsightsCommand::Architecture { limit } => (
+            "analyze_architecture",
+            serde_json::json!({ "limit": limit }),
+        ),
+        InsightsCommand::Metrics { limit } => {
+            ("analyze_metrics", serde_json::json!({ "limit": limit }))
+        }
+        InsightsCommand::Risk { symbol } => {
+            ("assess_risk", serde_json::json!({ "symbol": symbol }))
+        }
+        InsightsCommand::Patterns { limit } => {
+            ("analyze_patterns", serde_json::json!({ "limit": limit }))
+        }
+        InsightsCommand::LargeFunctions {
+            files,
+            threshold,
+            complexity_threshold,
+            cognitive_threshold,
+            nesting_threshold,
+            mode,
+            limit,
+            include_tests,
+        } => (
+            "find_large_functions",
+            serde_json::json!({
+                "files": normalize_insights_files(repo, files)?,
+                "threshold": threshold,
+                "complexity_threshold": complexity_threshold,
+                "cognitive_threshold": cognitive_threshold,
+                "nesting_threshold": nesting_threshold,
+                "mode": match mode {
+                    InsightsLargeFunctionMode::Large => "large",
+                    InsightsLargeFunctionMode::Complex => "complex",
+                    InsightsLargeFunctionMode::LargeOrComplex => "large-or-complex",
+                },
+                "limit": limit,
+                "include_tests": include_tests,
+            }),
+        ),
+        InsightsCommand::ComplexFunctions {
+            files,
+            complexity_threshold,
+            cognitive_threshold,
+            nesting_threshold,
+            limit,
+            include_tests,
+        } => (
+            "find_complex_functions",
+            serde_json::json!({
+                "files": normalize_insights_files(repo, files)?,
+                "complexity_threshold": complexity_threshold,
+                "cognitive_threshold": cognitive_threshold,
+                "nesting_threshold": nesting_threshold,
+                "limit": limit,
+                "include_tests": include_tests,
+            }),
+        ),
+        InsightsCommand::SimilarFunctions {
+            symbol,
+            min_score,
+            limit,
+            include_same_file,
+        } => (
+            "find_similar_functions",
+            serde_json::json!({
+                "symbol": symbol,
+                "min_score": min_score,
+                "limit": limit,
+                "include_same_file": include_same_file,
+            }),
+        ),
+        InsightsCommand::Duplicates {
+            files,
+            min_score,
+            limit,
+            include_tests,
+            suppressions,
+        } => (
+            "find_duplicates",
+            serde_json::json!({
+                "files": normalize_insights_files(repo, files)?,
+                "min_score": min_score,
+                "limit": limit,
+                "include_tests": include_tests,
+                "suppressions": suppressions,
+            }),
+        ),
+        InsightsCommand::InferModules { limit } => {
+            ("infer_modules", serde_json::json!({ "limit": limit }))
+        }
+        InsightsCommand::LabelComponents {
+            files,
+            symbols,
+            limit,
+        } => (
+            "label_components",
+            serde_json::json!({
+                "files": normalize_insights_files(repo, files)?,
+                "symbols": symbols,
+                "limit": limit,
+            }),
+        ),
+    };
+    // CLI JSON mirrors the richer pre-parity report, so request full details;
+    // the MCP payload ceiling still bounds the result.
+    args["verbose"] = serde_json::json!(true);
+    Ok((tool, args))
 }
 
 pub fn run_insights(cli: &Cli) -> Result<()> {
@@ -124,6 +254,24 @@ pub fn run_insights(cli: &Cli) -> Result<()> {
             eprintln!("Warning: {warning}");
         }
 
+        let subcommand = match &cli.command {
+            Command::Insights { subcommand, .. } => subcommand,
+            _ => unreachable!(),
+        };
+
+        if cli.json {
+            // Route JSON through MCP so insight payloads share one shape and
+            // honor the same byte budget as the MCP surface.
+            let (tool, args) = insights_mcp_request(subcommand, &repo)?;
+            return print_tool_json(
+                insights_json_command_label(subcommand),
+                tool,
+                args,
+                &repo,
+                &db_path,
+            );
+        }
+
         let atlas_dir = atlas_engine::paths::atlas_dir(&repo);
         let config =
             atlas_engine::Config::load(&atlas_dir).context("cannot load .atlas/config.toml")?;
@@ -133,11 +281,6 @@ pub fn run_insights(cli: &Cli) -> Result<()> {
             .context("cannot load insights layer rules")?;
         let engine =
             InsightsEngine::new(&store, insights).context("cannot initialize insights engine")?;
-
-        let subcommand = match &cli.command {
-            Command::Insights { subcommand, .. } => subcommand,
-            _ => unreachable!(),
-        };
 
         match subcommand {
             InsightsCommand::Architecture { limit } => {

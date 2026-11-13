@@ -10,7 +10,7 @@
     "command": { "const": "insights_risk" },
     "data": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "required": ["summary", "findings", "atlas_provenance"],
       "properties": {
         "summary": {
@@ -83,7 +83,7 @@
         },
         "atlas_provenance": {
           "type": "object",
-          "additionalProperties": false,
+          "additionalProperties": true,
           "required": ["indexed_file_count"],
           "properties": {
             "indexed_file_count": { "type": "integer", "minimum": 0 },
