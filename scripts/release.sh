@@ -68,7 +68,9 @@ need_cmd() {
 }
 
 manifest_paths() {
-  git ls-files 'packages/*/Cargo.toml'
+  # (glob) pathspec keeps '*' from crossing '/' so nested testdata fixtures
+  # such as packages/atlas-engine/tests/testdata/*/Cargo.toml stay untouched.
+  git ls-files ':(glob)packages/*/Cargo.toml'
 }
 
 manifest_version() {
@@ -472,4 +474,6 @@ main() {
   printf 'Released %s -> %s (%s)\n' "$old_version" "$version" "$tag_name"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
