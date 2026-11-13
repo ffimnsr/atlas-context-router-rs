@@ -16,6 +16,7 @@ pub(super) use super::shared::{DEFAULT_OUTPUT_DESCRIPTION, tool_result_value};
 
 mod analysis;
 mod context_ops;
+mod counting;
 mod graph;
 mod health;
 mod parity_args;

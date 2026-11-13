@@ -168,6 +168,7 @@ pub(super) fn tool_list_symbols(
         repo_id: repo_id.as_deref(),
         exact_dir: exact_dir.as_deref(),
         exclude_subpaths: &exclude_subpaths,
+        include_synthetic: false,
     };
     let page = store
         .list_nodes(&filter, limit, offset)

@@ -25,6 +25,7 @@ impl<'s> InsightsEngine<'s> {
         let has_explicit_symbols = !explicit_symbols.is_empty();
 
         let mut assignments = Vec::new();
+        let mut file_level_rows = BTreeSet::new();
         let mut file_paths = snapshot
             .owner_by_file
             .keys()
@@ -43,6 +44,7 @@ impl<'s> InsightsEngine<'s> {
                 if labels.is_empty() {
                     continue;
                 }
+                file_level_rows.insert(file_path.clone());
                 assignments.push(ComponentLabelAssignment {
                     file_path: file_path.clone(),
                     qualified_name: None,
@@ -61,7 +63,13 @@ impl<'s> InsightsEngine<'s> {
             // The file-level assignment above already represents file nodes;
             // emitting them again as `qualified_name` rows double-counts
             // against `limit` (observed as the same path appearing twice).
-            if node.kind == NodeKind::File || node.qualified_name == node.file_path {
+            // Synthesized owner/workspace graphs are emitted as `package`
+            // nodes under `.atlas/synthetic/`, so container kinds must dedupe
+            // against the file row too, not just `NodeKind::File`.
+            if file_level_rows.contains(&node.file_path)
+                && (matches!(node.kind, NodeKind::File | NodeKind::Package)
+                    || node.qualified_name == node.file_path)
+            {
                 continue;
             }
             let labels = labels_for_symbol(node);

@@ -28,8 +28,8 @@ pub(super) const DEFAULT_INSIGHT_PAYLOAD_BYTE_LIMIT: usize = 32 * 1024;
 /// Maximum occurrences/evidence entries kept per repeated-chain finding.
 pub(super) const MAX_PATTERN_OCCURRENCES: usize = 5;
 
-/// Maximum owned symbols/root paths kept per module in compact mode.
-const MAX_COMPACT_MODULE_PATHS: usize = 5;
+/// Maximum file paths listed per compact finding.
+const MAX_COMPACT_FINDING_FILES: usize = 5;
 
 /// Resolve the caller-provided `max_bytes` override, if any.
 pub(super) fn payload_byte_limit(args: Option<&Value>) -> usize {
@@ -66,7 +66,7 @@ pub(super) fn compact_finding(finding: &InsightFinding) -> Value {
         .filter_map(|evidence| evidence.file_path.as_deref())
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
-        .take(MAX_COMPACT_MODULE_PATHS)
+        .take(MAX_COMPACT_FINDING_FILES)
         .collect::<Vec<_>>();
     json!({
         "id": finding.id,
@@ -96,6 +96,8 @@ pub(super) fn limit_modules(modules: &mut Vec<InferredModule>, limit: Option<usi
 
 /// Compact module shape for `infer_modules`: drops the owned-symbol and
 /// root-path lists while keeping counts, dependencies, confidence, and evidence.
+/// Root paths stay available only through `verbose: true`, where the full
+/// module list is serialized.
 pub(super) fn compact_modules(modules: &[InferredModule]) -> Vec<Value> {
     modules
         .iter()
@@ -108,13 +110,7 @@ pub(super) fn compact_modules(modules: &[InferredModule]) -> Vec<Value> {
                 "internal_symbol_count": module.internal_symbol_count,
                 "export_ratio": module.export_ratio,
                 "file_count": module.file_count,
-                "root_paths_preview": module
-                    .root_paths
-                    .iter()
-                    .take(MAX_COMPACT_MODULE_PATHS)
-                    .cloned()
-                    .collect::<Vec<_>>(),
-                "root_paths_omitted": module.root_paths.len().saturating_sub(MAX_COMPACT_MODULE_PATHS),
+                "root_path_count": module.root_paths.len(),
                 "outbound_dependencies": module.outbound_dependencies,
                 "inbound_dependencies": module.inbound_dependencies,
                 "confidence": module.confidence,

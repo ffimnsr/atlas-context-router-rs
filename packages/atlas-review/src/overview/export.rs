@@ -97,6 +97,14 @@ pub fn export_overview_packets(
         packets.push(packet);
     }
 
+    // One rollup flag for the whole export: subject truncation and per-packet
+    // budget degradation are the same signal to callers.
+    let packet_budget_hit = packets.iter().any(|packet| packet.budget.budget_hit);
+    let omitted_bytes = packets
+        .iter()
+        .map(|packet| packet.budget.omitted_bytes)
+        .sum();
+
     Ok(OverviewExportResult {
         schema_version: OVERVIEW_SCHEMA_VERSION,
         repo_root: repo_root.to_owned(),
@@ -108,8 +116,8 @@ pub fn export_overview_packets(
         omitted_subject_count,
         budget: OverviewPacketBudget {
             max_tokens,
-            budget_hit: omitted_subject_count > 0,
-            omitted_bytes: 0,
+            budget_hit: omitted_subject_count > 0 || packet_budget_hit,
+            omitted_bytes,
         },
     })
 }

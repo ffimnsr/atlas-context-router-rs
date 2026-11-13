@@ -568,8 +568,10 @@ pub(super) fn tool_doctor(
                             GraphBuildState::BuildFailed => ("build_failed", false),
                         };
                         let detail = if is_ok {
+                            // Build-time telemetry, not the live graph totals:
+                            // `graph_stats` is the canonical live count.
                             format!(
-                                "state={state_str} nodes={} edges={}",
+                                "state={state_str} nodes_written_last_build={} edges_written_last_build={}",
                                 bs.nodes_written, bs.edges_written
                             )
                         } else if let Some(err) = bs.last_error {

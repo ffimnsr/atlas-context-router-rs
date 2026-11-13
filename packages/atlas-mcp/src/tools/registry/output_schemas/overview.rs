@@ -28,7 +28,10 @@ pub(crate) fn overview_export_output_schema() -> Value {
                     "omitted_subject_count",
                     "graph_freshness",
                     "safe_to_answer",
-                    "budget_hit"
+                    "requested_max_tokens",
+                    "max_tokens",
+                    "budget_hit",
+                    "omitted_bytes"
                 ],
                 json!({
                     "packet_count": { "type": "integer" },
@@ -36,7 +39,10 @@ pub(crate) fn overview_export_output_schema() -> Value {
                     "omitted_subject_count": { "type": "integer" },
                     "graph_freshness": { "type": "string" },
                     "safe_to_answer": { "type": "boolean" },
-                    "budget_hit": { "type": "boolean" }
+                    "requested_max_tokens": { "type": ["integer", "null"] },
+                    "max_tokens": { "type": "integer" },
+                    "budget_hit": { "type": "boolean" },
+                    "omitted_bytes": { "type": "integer" }
                 })
             ),
             "warnings": warnings_schema()

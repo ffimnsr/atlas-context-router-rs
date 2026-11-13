@@ -255,6 +255,15 @@ fn export_budget_truncation_sets_budget_metadata() {
     .unwrap();
     assert!(!result.packets.is_empty());
     assert!(result.budget.max_tokens == 256);
+    // Packet-level degradation must roll up into the export budget flag.
+    assert!(
+        result.budget.budget_hit,
+        "packet budget hit must roll up into the export budget"
+    );
+    assert!(
+        result.budget.omitted_bytes > 0,
+        "packet omissions must roll up into omitted_bytes"
+    );
 }
 
 #[test]

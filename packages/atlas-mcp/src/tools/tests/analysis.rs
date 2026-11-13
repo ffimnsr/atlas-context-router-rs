@@ -505,6 +505,13 @@ fn assess_risk_matches_direct_report_json() {
         .expect("direct analysis");
     let mut direct_value = serde_json::to_value(&direct.report).expect("serialize report");
     direct_value["summary"]["generated_at"] = tool_value["summary"]["generated_at"].clone();
+    // `verbose: true` is a strict superset: identity and score fields from the
+    // compact payload stay alongside the full report.
+    direct_value["tool"] = serde_json::json!("assess_risk");
+    direct_value["target"] = serde_json::json!(direct.target.qualified_name);
+    direct_value["score"] = serde_json::json!(direct.score);
+    direct_value["classification"] = serde_json::json!(direct.classification);
+    direct_value["top_factors"] = serde_json::json!(direct.factor_contributions);
 
     assert_eq!(tool_value, direct_value);
     assert_provenance(&resp, "/repo", &fixture.db_path);
@@ -658,18 +665,20 @@ fn r4_insight_tools_keep_full_report_in_json_structured_content() {
         metrics,
     );
 
-    let risk = serde_json::to_value(
-        &engine
-            .assess_risk(
-                "/repo",
-                RiskAssessmentTarget::Symbol {
-                    symbol: "src/service.rs::fn::compute".to_owned(),
-                },
-            )
-            .expect("risk direct")
-            .report,
-    )
-    .expect("serialize risk report");
+    let risk_analysis = engine
+        .assess_risk(
+            "/repo",
+            RiskAssessmentTarget::Symbol {
+                symbol: "src/service.rs::fn::compute".to_owned(),
+            },
+        )
+        .expect("risk direct");
+    let mut risk = serde_json::to_value(&risk_analysis.report).expect("serialize risk report");
+    risk["tool"] = serde_json::json!("assess_risk");
+    risk["target"] = serde_json::json!(risk_analysis.target.qualified_name);
+    risk["score"] = serde_json::json!(risk_analysis.score);
+    risk["classification"] = serde_json::json!(risk_analysis.classification);
+    risk["top_factors"] = serde_json::json!(risk_analysis.factor_contributions);
     assert_json_structured_content_matches_direct_report(
         "assess_risk",
         serde_json::json!({ "symbol": "src/service.rs::fn::compute", "verbose": true }),
@@ -812,5 +821,46 @@ fn infer_modules_applies_limit_to_modules_and_hides_owned_symbols_in_compact_mod
     for module in payload["modules"].as_array().expect("modules array") {
         assert!(module.get("owned_symbols").is_none());
         assert!(module.get("root_paths").is_none());
+        assert!(
+            module.get("root_paths_preview").is_none(),
+            "compact modules must not preview root paths"
+        );
+        assert!(module.get("root_paths_omitted").is_none());
+        assert!(
+            module.get("root_path_count").is_some(),
+            "compact modules must still report the root path count"
+        );
+    }
+}
+
+#[test]
+fn find_large_functions_compact_keeps_governing_threshold_at_candidate_level() {
+    let fixture = setup_mcp_fixture();
+    let resp = call(
+        "find_large_functions",
+        Some(&serde_json::json!({
+            "threshold": 1,
+            "mode": "large",
+            "output_format": "json"
+        })),
+        "/repo",
+        &fixture.db_path,
+    )
+    .expect("find_large_functions call");
+    let payload: serde_json::Value =
+        serde_json::from_str(&unwrap_tool_text(resp)).expect("parse json");
+
+    assert_eq!(payload["details_omitted"], serde_json::json!(true));
+    let candidates = payload["candidates"].as_array().expect("candidates array");
+    assert!(!candidates.is_empty(), "fixture must produce candidates");
+    for candidate in candidates {
+        assert!(
+            candidate.get("governing_threshold").is_some(),
+            "compact candidates must carry governing_threshold"
+        );
+        assert!(
+            candidate.get("threshold_kind").is_some(),
+            "compact candidates must carry threshold_kind"
+        );
     }
 }

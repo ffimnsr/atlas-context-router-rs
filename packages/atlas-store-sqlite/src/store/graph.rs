@@ -35,6 +35,10 @@ pub struct NodeListFilter<'a> {
     pub exact_dir: Option<&'a str>,
     /// Excluded canonical subpath prefixes.
     pub exclude_subpaths: &'a [String],
+    /// Include synthesized owner/workspace metadata rows under
+    /// `.atlas/synthetic/`. Defaults to `false` so symbol inventories match the
+    /// canonical `graph_stats()` totals.
+    pub include_synthetic: bool,
 }
 
 /// One deterministic page of nodes plus the total number of matching rows.
@@ -298,7 +302,7 @@ impl Store {
         let kind = filter.kind.map(normalize_kind_alias);
         let subpath_upper = filter.subpath.and_then(prefix_upper_bound);
         let exact_dir_value = filter.exact_dir;
-        let exclude_prefixes: Vec<String> = filter
+        let mut exclude_prefixes: Vec<String> = filter
             .exclude_subpaths
             .iter()
             .map(|prefix| {
@@ -309,6 +313,12 @@ impl Store {
                 format!("{escaped}%")
             })
             .collect();
+        // Synthetic owner/workspace metadata lives in `.atlas/synthetic/` and is
+        // excluded from `graph_stats()`. Keep the inventory in the same scope
+        // unless the caller explicitly opts in.
+        if !filter.include_synthetic {
+            exclude_prefixes.push(".atlas/synthetic%".to_owned());
+        }
         let exclude_json = serde_json::to_string(&exclude_prefixes).ok();
         let where_clause = "WHERE (?1 IS NULL OR kind = ?1)
                    AND (?2 IS NULL OR language = ?2)

@@ -411,7 +411,9 @@ pub fn postprocess_graph(
 
     let store =
         Store::open(db_path).with_context(|| format!("cannot open database at {db_path}"))?;
-    let stats = store.stats().context("cannot read graph stats")?;
+    // Use the canonical live-count source so `affected_file_count` matches
+    // `status.indexed_file_count` instead of counting synthetic metadata rows.
+    let stats = store.graph_stats().context("cannot read graph stats")?;
     match graph_identity(&store, repo_root, &stats)? {
         GraphIdentity::Legacy => {
             return Ok(legacy_identity_summary(

@@ -135,6 +135,29 @@ fn overview_ingest_invalid_payload_returns_structured_invalid_input() {
 }
 
 #[test]
+fn overview_export_reports_max_tokens_clamp() {
+    let (_dir, repo_root, db_path) = setup();
+
+    let exported = json_call(
+        tool_overview_export,
+        serde_json::json!({ "scope": "project", "max_tokens": 200 }),
+        &repo_root,
+        &db_path,
+    );
+
+    assert_eq!(exported["summary"]["requested_max_tokens"], 200);
+    assert_eq!(exported["summary"]["max_tokens"], 256);
+    let warnings = exported["warnings"].as_array().expect("warnings array");
+    assert!(
+        warnings
+            .iter()
+            .filter_map(|warning| warning.as_str())
+            .any(|warning| warning.contains("clamped")),
+        "clamped max_tokens must surface a warning, got: {warnings:?}"
+    );
+}
+
+#[test]
 fn overview_export_packet_ingest_validates_packet_id() {
     let (_dir, repo_root, db_path) = setup();
 

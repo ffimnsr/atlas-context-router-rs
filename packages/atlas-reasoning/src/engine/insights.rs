@@ -79,7 +79,7 @@ impl<'s> InsightsEngine<'s> {
     }
 
     pub fn architecture_report(&self, findings: Vec<InsightFinding>) -> ArchitectureReport {
-        let findings = self.prepare_findings(findings);
+        let findings = self.prepare_architecture_findings(findings);
         ArchitectureReport {
             summary: InsightSummary::from_findings(&findings, self.generated_at.clone()),
             findings,
@@ -138,6 +138,22 @@ impl<'s> InsightsEngine<'s> {
         findings
     }
 
+    /// Architecture findings rank by signal class before generic
+    /// severity/score. File hotspots can carry a much larger raw score than a
+    /// high-coupling module, so a purely score-ranked trim can evict every
+    /// structural finding. The stable re-sort keeps severity order inside each
+    /// class.
+    fn prepare_architecture_findings(&self, findings: Vec<InsightFinding>) -> Vec<InsightFinding> {
+        let mut findings = findings
+            .into_iter()
+            .filter(|finding| !self.is_ignored_finding(finding))
+            .collect::<Vec<_>>();
+        sort_insight_findings(&mut findings);
+        findings.sort_by_key(architecture_signal_rank);
+        trim_insight_findings(&mut findings, self.config.max_findings);
+        findings
+    }
+
     fn prepare_findings_preserving_order(
         &self,
         findings: Vec<InsightFinding>,
@@ -169,6 +185,18 @@ impl<'s> InsightsEngine<'s> {
                         .any(|candidate| candidate.eq_ignore_ascii_case(kind))
                 })
         })
+    }
+}
+
+/// Ranking band for architecture findings: rarer structural signals first.
+fn architecture_signal_rank(finding: &InsightFinding) -> u8 {
+    match finding.category.as_str() {
+        "architecture_cycle" => 0,
+        "layer_violation" => 1,
+        "architecture_module_health" => 2,
+        "architecture_cluster" => 3,
+        "architecture_file_health" => 4,
+        _ => 5,
     }
 }
 

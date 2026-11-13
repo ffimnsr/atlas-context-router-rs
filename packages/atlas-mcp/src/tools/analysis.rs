@@ -178,8 +178,21 @@ pub(super) fn tool_assess_risk(
             "top_factors": analysis.factor_contributions.iter().take(5).collect::<Vec<_>>(),
         }),
     );
+    // `verbose: true` must be a strict superset of the compact payload: the
+    // raw report alone drops the target identity, score, and classification.
+    let mut full_payload = serde_json::to_value(&analysis.report)?;
+    if let Some(object) = full_payload.as_object_mut() {
+        object.insert("tool".to_owned(), json!("assess_risk"));
+        object.insert("target".to_owned(), json!(analysis.target.qualified_name));
+        object.insert("score".to_owned(), json!(analysis.score));
+        object.insert("classification".to_owned(), json!(analysis.classification));
+        object.insert(
+            "top_factors".to_owned(),
+            json!(analysis.factor_contributions),
+        );
+    }
     insight_report_response(
-        &analysis.report,
+        &full_payload,
         compact,
         output_format,
         verbose,
@@ -348,7 +361,7 @@ pub(super) fn tool_find_complex_functions(
         db_path,
         output_format,
         Some(LargeFunctionMode::Complex),
-        "complex_function_report",
+        "complex_functions",
     )
 }
 

@@ -861,8 +861,10 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
                         if is_ok {
                             checks.push(CheckResult::pass(
                                 "graph_build_state",
+                                // Build-time telemetry, not the live graph totals;
+                                // the `graph_stats` check carries live counts.
                                 format!(
-                                    "state={state_str} nodes={} edges={}",
+                                    "state={state_str} nodes_written_last_build={} edges_written_last_build={}",
                                     bs.nodes_written, bs.edges_written
                                 ),
                             ));

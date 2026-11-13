@@ -115,20 +115,36 @@ pub fn tool_overview_export(
         Some(&mut session),
         &request,
     )?;
+    let requested_max_tokens = u64_arg(args, "max_tokens").map(|value| value as usize);
+    let mut warnings = Vec::new();
+    // The export service enforces a floor so a packet stays usable; surface the
+    // clamp instead of silently echoing a different value than the request.
+    if let Some(requested) = requested_max_tokens
+        && requested != result.budget.max_tokens
+    {
+        warnings.push(format!(
+            "max_tokens {requested} clamped to effective {}",
+            result.budget.max_tokens
+        ));
+    }
+    let summary = serde_json::json!({
+        "packet_count": result.packets.len(),
+        "subject_count": result.subject_count,
+        "omitted_subject_count": result.omitted_subject_count,
+        "graph_freshness": result.freshness.state,
+        "safe_to_answer": result.freshness.safe_to_answer,
+        "requested_max_tokens": requested_max_tokens,
+        "max_tokens": result.budget.max_tokens,
+        "budget_hit": result.budget.budget_hit,
+        "omitted_bytes": result.budget.omitted_bytes,
+    });
     build_tool_result_value(
         &serde_json::json!({
             "tool": "overview_export",
             "repo_root": repo_root,
             "result": result,
-            "summary": {
-                "packet_count": result.packets.len(),
-                "subject_count": result.subject_count,
-                "omitted_subject_count": result.omitted_subject_count,
-                "graph_freshness": result.freshness.state,
-                "safe_to_answer": result.freshness.safe_to_answer,
-                "budget_hit": result.budget.budget_hit,
-            },
-            "warnings": [],
+            "summary": summary,
+            "warnings": warnings,
         }),
         output_format,
     )

@@ -90,6 +90,15 @@ pub struct LargeFunctionCandidate {
     pub complex_match: bool,
     pub ranking_reason: String,
     pub score: f64,
+    /// Threshold that actually drove the candidate's complexity signal.
+    /// Hoisted to candidate level so compact output keeps it even when
+    /// `details` is omitted by `details_omitted`.
+    #[serde(default)]
+    pub governing_threshold: usize,
+    /// Metric backing `governing_threshold` (`loc`, `cyclomatic_complexity`,
+    /// `cognitive_complexity`, or `nesting_depth`).
+    #[serde(default)]
+    pub threshold_kind: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -296,30 +305,40 @@ fn rank_large_function_candidates(
                 changed_file_boost,
             };
 
-            Some(LargeFunctionCandidate {
-                file_path: metric.node.file_path.clone(),
-                qualified_name: metric.node.qualified_name.clone(),
-                display_name: metric.node.name.clone(),
-                node_kind: metric.node.kind.as_str().to_owned(),
-                line_start: metric.node.line_start,
-                line_end: metric.node.line_end,
-                loc,
-                cyclomatic_complexity: cyclomatic,
-                cognitive_complexity: cognitive,
-                max_nesting_depth: nesting,
-                branch_count,
-                threshold,
-                complexity_threshold: Some(complexity_threshold),
-                cognitive_threshold: Some(cognitive_threshold),
-                nesting_threshold: Some(nesting_threshold),
-                fan_in: metric.fan_in,
-                fan_out: metric.fan_out,
-                module_boundary_crossings: boundary_crossings,
-                changed_file_boost,
-                large_match,
-                complex_match,
-                ranking_reason: ranking_reason(reason_input),
-                score,
+            Some({
+                let mut candidate = LargeFunctionCandidate {
+                    file_path: metric.node.file_path.clone(),
+                    qualified_name: metric.node.qualified_name.clone(),
+                    display_name: metric.node.name.clone(),
+                    node_kind: metric.node.kind.as_str().to_owned(),
+                    line_start: metric.node.line_start,
+                    line_end: metric.node.line_end,
+                    loc,
+                    cyclomatic_complexity: cyclomatic,
+                    cognitive_complexity: cognitive,
+                    max_nesting_depth: nesting,
+                    branch_count,
+                    threshold,
+                    complexity_threshold: Some(complexity_threshold),
+                    cognitive_threshold: Some(cognitive_threshold),
+                    nesting_threshold: Some(nesting_threshold),
+                    // Filled in below; the helper reads the candidate's own
+                    // threshold fields, so it cannot run before construction.
+                    governing_threshold: threshold,
+                    threshold_kind: "loc".to_owned(),
+                    fan_in: metric.fan_in,
+                    fan_out: metric.fan_out,
+                    module_boundary_crossings: boundary_crossings,
+                    changed_file_boost,
+                    large_match,
+                    complex_match,
+                    ranking_reason: ranking_reason(reason_input),
+                    score,
+                };
+                let (governing_threshold, threshold_kind) = governing_threshold(&candidate);
+                candidate.governing_threshold = governing_threshold;
+                candidate.threshold_kind = threshold_kind.to_owned();
+                candidate
             })
         })
         .collect::<Vec<_>>();
@@ -384,7 +403,10 @@ fn candidate_to_finding(
             "loc_threshold".to_owned(),
             serde_json::json!(candidate.threshold),
         );
-        let (governing_threshold, threshold_kind) = governing_threshold(candidate);
+        let (governing_threshold, threshold_kind) = (
+            candidate.governing_threshold,
+            candidate.threshold_kind.as_str(),
+        );
         object.insert(
             "governing_threshold".to_owned(),
             serde_json::json!(governing_threshold),

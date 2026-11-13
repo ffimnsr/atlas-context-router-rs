@@ -157,8 +157,8 @@
       "check": "graph_build_state",
       "status": "pass",
       "ok": true,
-      "message": "state=built nodes=7 edges=8",
-      "detail": "state=built nodes=7 edges=8",
+      "message": "state=built nodes_written_last_build=7 edges_written_last_build=8",
+      "detail": "state=built nodes_written_last_build=7 edges_written_last_build=8",
       "issue_code": null,
       "details": {
         "label": "graph_build_state",
