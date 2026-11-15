@@ -2,6 +2,7 @@
 name = "atlas-agent-events"
 version = "1.7.9"
 license.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Shared agent event service for native hook capture and MCP fallback capture"
 

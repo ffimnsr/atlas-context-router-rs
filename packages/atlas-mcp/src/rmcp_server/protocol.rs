@@ -217,24 +217,6 @@ pub(super) fn client_interaction_capabilities(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::client_interaction_capabilities;
-
-    #[test]
-    fn task_capability_requires_tasks_extension() {
-        assert!(!client_interaction_capabilities(Some(&json!({}))).supports_tasks);
-        assert!(
-            client_interaction_capabilities(Some(&json!({
-                "extensions": {"io.modelcontextprotocol/tasks": {}}
-            })))
-            .supports_tasks
-        );
-    }
-}
-
 pub(super) fn request_id_string(context: &RequestContext<RoleServer>) -> String {
     match serde_json::to_value(&context.id) {
         Ok(Value::String(value)) => value,
@@ -323,5 +305,23 @@ pub(super) fn map_task_api_error(error: crate::tasks::TaskApiError) -> McpError 
         | crate::tasks::TaskApiErrorKind::NotReady => {
             crate::rmcp_error::internal_error(error.into_anyhow())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::client_interaction_capabilities;
+
+    #[test]
+    fn task_capability_requires_tasks_extension() {
+        assert!(!client_interaction_capabilities(Some(&json!({}))).supports_tasks);
+        assert!(
+            client_interaction_capabilities(Some(&json!({
+                "extensions": {"io.modelcontextprotocol/tasks": {}}
+            })))
+            .supports_tasks
+        );
     }
 }

@@ -99,7 +99,7 @@ fn rename_single_file_symbol() {
         .expect("plan");
 
     assert!(!plan.edits.is_empty(), "expected at least one edit");
-    assert!(plan.affected_files.contains(&src.to_string()));
+    assert!(plan.affected_files.iter().any(|path| path == src));
     assert_eq!(plan.estimated_safety, SafetyBand::Safe);
 
     // Dry run.
@@ -184,8 +184,8 @@ fn rename_multi_file_symbol() {
         .unwrap();
 
     assert!(
-        plan.affected_files.contains(&def_file.to_string())
-            || plan.affected_files.contains(&ref_file.to_string()),
+        plan.affected_files.iter().any(|path| path == def_file)
+            || plan.affected_files.iter().any(|path| path == ref_file),
         "affected files: {:?}",
         plan.affected_files
     );

@@ -103,10 +103,10 @@ pub fn run_symbols(cli: &Cli) -> Result<()> {
             .unwrap_or(raw)
     };
     let subpath = subpath
-        .map(&normalize)
+        .map(normalize)
         .filter(|prefix| !prefix.trim().is_empty());
     let exact_dir = exact_dir
-        .map(&normalize)
+        .map(normalize)
         .filter(|scope| !scope.trim().is_empty());
     let exclude_subpaths: Vec<String> = exclude_subpaths
         .into_iter()
@@ -115,7 +115,7 @@ pub fn run_symbols(cli: &Cli) -> Result<()> {
         .collect();
 
     if let Some(name) = resolve {
-        let file_filter = file.map(&normalize);
+        let file_filter = file.map(normalize);
         return run_symbol_resolve(
             cli,
             &store,

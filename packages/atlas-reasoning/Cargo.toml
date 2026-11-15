@@ -2,6 +2,7 @@
 name = "atlas-reasoning"
 version = "1.7.9"
 license.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Autonomous code reasoning engine for Atlas — removal impact, dead code, refactor safety, rename radius, and change risk"
 publish = false

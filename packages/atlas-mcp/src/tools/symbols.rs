@@ -144,7 +144,7 @@ pub(super) fn tool_list_symbols(
     };
     let exact_dir = str_arg(args, "exact_dir")?
         .map(str::to_owned)
-        .map(&normalize_scope)
+        .map(normalize_scope)
         .filter(|scope| !scope.trim().is_empty());
     let exclude_subpaths: Vec<String> = args
         .and_then(|value| value.get("exclude_subpaths"))

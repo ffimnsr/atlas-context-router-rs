@@ -99,8 +99,16 @@ fn rollback_and_reupgrade_restore_content_schema() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(version, 3);
-    assert!(!table_columns(&store.conn, "chunks").contains(&"chunk_id".to_string()));
-    assert!(!table_columns(&store.conn, "sources").contains(&"identity_kind".to_string()));
+    assert!(
+        !table_columns(&store.conn, "chunks")
+            .iter()
+            .any(|column| column == "chunk_id")
+    );
+    assert!(
+        !table_columns(&store.conn, "sources")
+            .iter()
+            .any(|column| column == "identity_kind")
+    );
 
     store.migrate().unwrap();
     let restored_version: i32 = store
@@ -108,14 +116,46 @@ fn rollback_and_reupgrade_restore_content_schema() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(restored_version, crate::migrations::LATEST_VERSION);
-    assert!(table_columns(&store.conn, "chunks").contains(&"chunk_id".to_string()));
-    assert!(table_columns(&store.conn, "sources").contains(&"identity_kind".to_string()));
-    assert!(table_columns(&store.conn, "sources").contains(&"agent_id".to_string()));
-    assert!(table_columns(&store.conn, "sources").contains(&"repo_roots_json".to_string()));
-    assert!(table_columns(&store.conn, "sources").contains(&"repo_id".to_string()));
-    assert!(table_columns(&store.conn, "sources").contains(&"repo_ids_json".to_string()));
-    assert!(table_columns(&store.conn, "sources").contains(&"relative_path".to_string()));
-    assert!(table_columns(&store.conn, "sources").contains(&"parent_dir".to_string()));
+    assert!(
+        table_columns(&store.conn, "chunks")
+            .iter()
+            .any(|column| column == "chunk_id")
+    );
+    assert!(
+        table_columns(&store.conn, "sources")
+            .iter()
+            .any(|column| column == "identity_kind")
+    );
+    assert!(
+        table_columns(&store.conn, "sources")
+            .iter()
+            .any(|column| column == "agent_id")
+    );
+    assert!(
+        table_columns(&store.conn, "sources")
+            .iter()
+            .any(|column| column == "repo_roots_json")
+    );
+    assert!(
+        table_columns(&store.conn, "sources")
+            .iter()
+            .any(|column| column == "repo_id")
+    );
+    assert!(
+        table_columns(&store.conn, "sources")
+            .iter()
+            .any(|column| column == "repo_ids_json")
+    );
+    assert!(
+        table_columns(&store.conn, "sources")
+            .iter()
+            .any(|column| column == "relative_path")
+    );
+    assert!(
+        table_columns(&store.conn, "sources")
+            .iter()
+            .any(|column| column == "parent_dir")
+    );
 }
 
 #[test]

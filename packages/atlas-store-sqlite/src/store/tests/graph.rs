@@ -90,8 +90,8 @@ fn find_dependents_returns_importing_files() {
     let deps = store
         .find_dependents_for_qnames_for_repo("repo_test", &["a.rs::struct::Foo"])
         .unwrap();
-    assert!(deps.contains(&"b.rs".to_string()));
-    assert!(!deps.contains(&"a.rs".to_string()));
+    assert!(deps.iter().any(|entry| entry == "b.rs"));
+    assert!(!deps.iter().any(|entry| entry == "a.rs"));
 }
 
 // --- impact_radius -------------------------------------------------------
@@ -118,7 +118,7 @@ fn impact_radius_one_hop() {
             .iter()
             .any(|n| n.qualified_name == "b.rs::fn::b")
     );
-    assert!(result.impacted_files.contains(&"b.rs".to_string()));
+    assert!(result.impacted_files.iter().any(|entry| entry == "b.rs"));
 }
 
 #[test]
@@ -187,7 +187,7 @@ fn impact_radius_finds_dependents_when_seed_file_exceeds_node_cap() {
             .any(|node| node.qualified_name == "b.rs::fn::b"),
         "dependents must survive a seed-heavy file"
     );
-    assert!(result.impacted_files.contains(&"b.rs".to_string()));
+    assert!(result.impacted_files.iter().any(|entry| entry == "b.rs"));
 }
 
 #[test]

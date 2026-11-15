@@ -2,6 +2,7 @@
 name = "atlas-token-count"
 version = "1.7.9"
 license.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Deterministic token counting backed by local tokenizer files or byte heuristics"
 publish = false

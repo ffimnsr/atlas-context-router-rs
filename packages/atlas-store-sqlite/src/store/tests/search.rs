@@ -1251,5 +1251,5 @@ fn traverse_from_qnames_finds_dependents_when_seed_set_meets_node_cap() {
             .any(|node| node.qualified_name == "b.rs::fn::b"),
         "dependents must survive a seed-heavy traversal"
     );
-    assert!(result.impacted_files.contains(&"b.rs".to_string()));
+    assert!(result.impacted_files.iter().any(|entry| entry == "b.rs"));
 }

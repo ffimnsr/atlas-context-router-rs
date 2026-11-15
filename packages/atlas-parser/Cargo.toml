@@ -2,6 +2,7 @@
 name = "atlas-parser"
 version = "1.7.9"
 license.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Tree-sitter based source parsing and parser registry for Atlas"
 publish = false

@@ -131,9 +131,6 @@ tokenizers = { version = "0.23", default-features = false, features = ["fancy-re
 atlas-core      = { path = "packages/atlas-core", version = "1.7.6" }
 atlas-engine    = { path = "packages/atlas-engine", version = "1.7.6" }
 atlas-mcp       = { path = "packages/atlas-mcp", version = "1.7.6" }
-atlas-reasoning = { path = "packages/atlas-reasoning", version = "1.7.6" }
-atlas-agent-events = { path = "packages/atlas-agent-events", version = "1.7.6" }
-atlas-docs      = { path = "packages/atlas-docs", version = "1.7.6" }
 atlas-token-count = { path = "packages/atlas-token-count", version = "1.7.6" }
 atlas-metrics   = { path = "packages/atlas-metrics", version = "1.7.6" }
 

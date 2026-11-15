@@ -2,6 +2,7 @@
 name = "atlas-docs"
 version = "1.7.9"
 license.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Markdown documentation generation and dependency diagram export for Atlas code graphs"
 

@@ -238,7 +238,6 @@ dependencies = [
 name = "atlas-core"
 version = "1.7.9"
 dependencies = [
- "camino",
  "serde",
  "serde_json",
  "thiserror",
@@ -323,7 +322,6 @@ version = "1.7.9"
 dependencies = [
  "atlas-core",
  "serde_json",
- "tracing",
 ]
 
 [[package]]

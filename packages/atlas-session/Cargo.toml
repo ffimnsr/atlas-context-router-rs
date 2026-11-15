@@ -2,6 +2,7 @@
 name = "atlas-session"
 version = "1.7.9"
 license.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Session identity, event ledger, and resume snapshots for Atlas context memory"
 publish = false

@@ -228,7 +228,11 @@ fn rollback_and_reupgrade_restore_latest_schema() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(downgraded_version, 3);
-    assert!(!table_columns(&store.conn, "files").contains(&"owner_id".to_string()));
+    assert!(
+        !table_columns(&store.conn, "files")
+            .iter()
+            .any(|column| column == "owner_id")
+    );
     let rollback_events: i64 = store
         .conn
         .query_row(
@@ -403,7 +407,7 @@ fn stats_returns_languages() {
         .unwrap();
 
     let stats = store.stats().unwrap();
-    assert!(stats.languages.contains(&"rust".to_string()));
+    assert!(stats.languages.iter().any(|language| language == "rust"));
 }
 
 #[test]

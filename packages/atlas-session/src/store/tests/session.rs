@@ -67,7 +67,11 @@ fn rollback_and_reupgrade_restore_session_schema() {
         )
         .unwrap();
     assert_eq!(decision_exists, 0);
-    assert!(table_columns(&store.conn, "session_meta").contains(&"session_id".to_string()));
+    assert!(
+        table_columns(&store.conn, "session_meta")
+            .iter()
+            .any(|column| column == "session_id")
+    );
 
     store.migrate().unwrap();
     let restored_version: i32 = store

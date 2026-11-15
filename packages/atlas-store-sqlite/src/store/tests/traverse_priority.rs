@@ -79,5 +79,5 @@ fn traverse_keeps_cross_file_calls_edge_under_small_node_budget() {
         Some("z.rs::fn::caller"),
         "calls edges must rank ahead of containment rows"
     );
-    assert!(result.impacted_files.contains(&"z.rs".to_string()));
+    assert!(result.impacted_files.iter().any(|entry| entry == "z.rs"));
 }
