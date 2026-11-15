@@ -1,8 +1,3 @@
-// Clap's derive materialises the whole subcommand tree by value; boxing every
-// variant would churn call sites without any runtime benefit. The lint fires on
-// macro-generated code, so it has to be allowed for the whole module.
-#![allow(clippy::large_unopt_stack_frames)]
-
 use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 
