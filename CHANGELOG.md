@@ -36,6 +36,27 @@ Versioning policy may evolve while Atlas is still moving quickly, but release no
 - drop the unused `windows-sys` target dependency from `atlas-cli` and the stale `#[allow(deprecated)]` around `std::env::home_dir`; allow `Zlib` in `deny.toml` for `foldhash` 0.2 and remove the obsolete `number_prefix` advisory ignore now that `indicatif` 0.18 no longer pulls it
 - extract the Unix stdio broker (daemon attach/spawn, stdio relay, reconnect loop) and its signal handling into `commands/platform/broker.rs` / `commands/platform/broker_signals.rs`, bringing `platform.rs` back under the 1K LOC threshold
 
+## 1.7.9 - 2026-11-15
+
+### Features
+
+- add skills and move the core agent instruction to cli (`f6d02d9`)
+- add skills core reference with option (`c7a388a`)
+- update skill setup (`5f4b96b`)
+- add correct golden tests (`6d0ea0d`)
+
+
+### Fixes
+
+- prioritize impact direction and bound session telemetry (`1813eba`)
+- bound backlog reporting and downgrade unresolved dead code (`6b47ec3`)
+
+
+### Documentation
+
+- update ISSUES.md for new findings (`812db44`)
+
+
 ## 1.7.8 - 2026-11-13
 
 ### Features
