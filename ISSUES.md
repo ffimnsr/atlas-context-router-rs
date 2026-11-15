@@ -464,99 +464,119 @@ Run context: full `AGENTS_MCP_TESTS.md` sweep on `main` @ `5663106e`, clean work
 
 ### New defects — retrieval, module inference, and analysis
 
-- [ ] **fix(embed_chunks)**: dry-run pending count is capped by the request limit, so the true backlog is unverifiable.
+- [x] **fix(embed_chunks)**: dry-run pending count is capped by the request limit, so the true backlog is unverifiable.
   - Repro: `embed_chunks {"dry_run":true,"limit":5}` then `{"dry_run":true,"limit":10}`
   - Observed: `pending_chunks=5` then `pending_chunks=10`; `provider="unconfigured"`, `model="all-minilm"`, `model_pulled=false`, `embedded_chunks=0`, `dimension=null`
   - Expected: `pending_chunks` is the stable backlog total; report `min(total, limit)` separately (e.g. `pending_chunks_selected`)
   - Repro note: with no `[search.embedding] url`, a true backlog cannot be cross-checked; compare against `get_context_stats.retrieval_index` (20 files indexed, 77 chunks written)
   - Regression: `embed_chunks_dry_run_reports_total_backlog`
-- [ ] **fix(infer_modules)**: `limit` slices in module-id order, not by symbol count, so the largest module is excluded.
+  - Fix: `EmbedChunkReport.pending_chunks` is now the unbounded backlog (new `Store::pending_embedding_chunk_count`); the run batch is reported as `pending_chunks_selected`. CLI `embed`/update printing and the auto-embed batch loop use `pending_chunks_selected`. Tests: `dry_run_reports_total_backlog_not_the_run_limit` (atlas-engine), `pending_embedding_chunk_count_ignores_selection_limits` (atlas-store-sqlite).
+- [x] **fix(infer_modules)**: `limit` slices in module-id order, not by symbol count, so the largest module is excluded.
   - Repro: `infer_modules {"limit":5}`
   - Observed: returned `module_id`s in this order — `cargo:fuzz/Cargo.toml` (175 nodes), `cargo:packages/atlas-adapters/Cargo.toml` (225), `cargo:packages/atlas-agent-events/Cargo.toml` (324), `cargo:packages/atlas-cli/Cargo.toml` (1657), `cargo:packages/atlas-contentstore/Cargo.toml` (267); `module_count=30`, `modules_truncated=true`; `cargo:packages/atlas-mcp/Cargo.toml` (2893 nodes) never returned
   - Expected: top 5 by `node_count`, or an explicit ordering field so callers can re-sort; `modules_truncated` already exists and works
   - Root cause: page slice happens before count ranking. Regression: `infer_modules_limits_by_node_count`
-- [ ] **fix(analyze_dead_code)**: receiver method calls and trait impls resolve with no inbound edges, producing `definite` false positives.
+  - Fix: `limit_modules` in `packages/atlas-mcp/src/tools/analysis_bounds.rs` now sorts by `node_count` descending (tie-break `module_id`) before truncating. Test: `infer_modules_limit_selects_largest_modules` (atlas-mcp).
+- [x] **fix(analyze_dead_code)**: receiver method calls and trait impls resolve with no inbound edges, producing `definite` false positives.
   - Repro: `analyze_dead_code {"subpath":"packages/atlas-core/src","limit":5}`
   - Observed candidates (all `certainty:"high"`, `certainty_class:"definite"`, reasons `["no inbound call, reference, or import edges","method with zero callers"]`): `budget.rs::method::BudgetReport::default` L380, `budget.rs::method::BudgetPolicy::default` L461, `budget.rs::method::BudgetManager::default` L655, `clock.rs::method::Clock::now_utc` L8, `clock.rs::method::SystemClock::now_utc` L15; `summary.candidate_count=29`, `certainty_counts.high=28`
   - Counter-evidence (verified in source): `packages/atlas-core/src/clock.rs:38` is `SystemClock.now_utc();` inside `pub fn now_utc()`, so a call site exists but no `calls` edge is recorded
   - Expected: called receiver methods and trait/`Default` impls are not emitted as definite dead code; downgrade when the receiver type is known but the method edge is unresolved
   - Regression: `dead_code_ignores_called_trait_impl_methods`
-- [ ] **fix(analyze_architecture)**: synthetic owner metadata ranks first and inflates module coupling.
+  - Fix: `ReasoningEngine::detect_dead_code` now downgrades `high` method candidates to `medium` with an explicit blocker in three cases: (a) the parent `impl` block references a trait (`Store::trait_impl_method_qnames`), (b) call sites exist for the parser's short targets `Type::method`/`Type.method()` (`Store::inbound_semantic_edge_targets`), (c) the method is declared directly in a `trait` block. Tests: `dead_code_downgrades_receiver_method_with_short_call_target`, `dead_code_downgrades_trait_method_declarations` (atlas-reasoning), `inbound_semantic_edge_targets_reports_short_method_targets`, `trait_impl_method_qnames_reports_only_trait_implementations` (atlas-store-sqlite).
+- [x] **fix(analyze_architecture)**: synthetic owner metadata ranks first and inflates module coupling.
   - Repro: `analyze_architecture {"limit":5,"verbose":false}`
   - Observed: first finding id `architecture:module:module:.atlas/synthetic/owners/workspace/cargo`, message `module module:.atlas/synthetic/owners/workspace/cargo coupling 22.00 exceeds threshold 15.00`, score 1022; the first five `module_edges` all have `source_module="module:.atlas/synthetic/owners/workspace/cargo"` pointing at cargo packages; `counts.high_coupling_module_count=1`, `module_count=30`, `modules_truncated=true`; remaining findings are file hotspots (`Cargo.toml` 174 nodes, `packages/atlas-mcp/Cargo.toml` 148)
   - Expected: `.atlas/synthetic/**` owner nodes excluded from module coupling/findings, or reported in a separate synthetic bucket
   - Regression: `architecture_findings_exclude_synthetic_owners`
+  - Fix: `analyze_architecture` drops modules whose files are all under `.atlas/synthetic/`, drops their incident module edges, and filters synthetic file metrics before building findings. Test: `architecture_findings_exclude_synthetic_owner_modules` (atlas-reasoning).
 
 ### New defects — minor schema and contract inconsistencies
 
-- [ ] `feedback_record`: success does not return the `stored` boolean asserted by Tool 64.1.
+- [x] `feedback_record`: success does not return the `stored` boolean asserted by Tool 64.1.
   - Repro: `feedback_record {"tool":"analyze_safety","symbol":"packages/atlas-core/src/health.rs::fn::classify_graph_store_error","predicted":"safety score >= 0.5","actual":"safety score 0.39 (band risky)","correction":"recompute with fan_in 4, fan_out 3, cross_module 1"}` (appends one record to `session.db`)
   - Observed: `record.id`, `record.predicted`/`record.actual`/`record.correction`, `summary.record_id`, `summary.is_false_positive_evidence=true`, `repo_root`; `analysis_kind` defaults to `""`; no `stored` key
   - Expected: either add `stored:true` to the sweep envelope or change 64.1 to assert `summary.record_id`
-- [ ] `get_context_stats`: envelope omits `tool` and `warnings` keys that sibling tools emit.
+  - Fix: top-level `stored:true` and `summary.stored:true` added to the response and to `feedback_record_output_schema`. Test: `feedback_record_reports_stored_true`.
+- [x] `get_context_stats`: envelope omits `tool` and `warnings` keys that sibling tools emit.
   - Repro: `get_context_stats {}`
   - Observed keys: `agent_id`, `bridge_dir_path`, `bridge_file_count=0`, `chunk_count=59`, `content_db_path`, `event_count=131`, `retrieval_index`, `session_db_path`, `session_id`, `source_count=14` — no `tool`, no `warnings`
   - Expected: same envelope contract as other stable-object tools
-- [ ] `overview_show`: a canonical file path is ambiguous and the file subject is typed `symbol`, so Tool 72.1 cannot pass.
+  - Fix: payload now emits `tool:"get_context_stats"` and `warnings: []`; existing schema already allowed both. Test: `test_get_context_stats_empty` asserts them.
+- [x] `overview_show`: a canonical file path is ambiguous and the file subject is typed `symbol`, so Tool 72.1 cannot pass.
   - Repro: `overview_show {"target":"packages/atlas-core/src/health.rs"}`
   - Observed: `overview subject 'packages/atlas-core/src/health.rs' is ambiguous; candidates: packages/atlas-core/src/health.rs::fn::classify_graph_store_error (function), packages/atlas-core/src/health.rs (symbol)`
   - Expected (guide 72.1): the canonical file subject resolves and returns the file record; the file node should report `subject_kind:"file"` as `overview_export` does
   - Fix: exact canonical-path match must precede qname/prefix matching, and file subjects must be stamped `file`
-- [ ] `man`: unsupported-namespace rejection is plain text with a stray space and no structured error code.
+  - Implemented: `resolve_overview_subject` prefers the file record (`subject_kind: file` or `node_kind: file`) when the target is a canonical path and normalizes legacy `symbol` file records to `file` on read; `subject_kind_for_node` now stamps `File`/`Package` graph nodes; overview ingest resolves canonical paths before qnames. Tests: `resolve_overview_subject_prefers_file_subject_for_canonical_path`, `resolve_overview_subject_prefers_legacy_file_node_kind` (atlas-session), `node_subject_stamps_file_and_package_subject_kinds` (atlas-review).
+- [x] `man`: unsupported-namespace rejection is plain text with a stray space and no structured error code.
   - Repro: `man {"namespace":"cli","tool_name":"query_graph"}`
   - Observed: `unsupported manual namespace 'cli' ; only 'mcp' is supported Use namespace 'mcp' with an exact exported tool name, then retry.`
   - Expected: `invalid_input` code plus clean punctuation, routed through the shared input classifier
-- [ ] `tool_search`: multi-token queries have no score floor, so generic tokens flood results.
+  - Fix: manual error text/payload moved to `packages/atlas-mcp/src/tools/manual_errors.rs` with one message builder; message is now `unsupported manual namespace 'cli'; only 'mcp' is supported`. Test: `man_namespace_rejection_is_structured_invalid_input` asserts `code` and `message`.
+- [x] `tool_search`: multi-token queries have no score floor, so generic tokens flood results.
   - Repro: `tool_search {"query":"dead code detection","limit":10}`
   - Observed: `returned_matches=9`, `total_matches=9`; top `analyze_dead_code` score 100, then eight tools at score 10 from the single token `code`/`detection`: `build_graph`, `doctor`, `experience_inspect`, `memoir_create`, `query_graph`, `search_content`, `search_files`, `search_text_assets`
   - Expected: either a relative cut-off for multi-token queries or an explicit `minimum_score` input
-- [ ] `tool_list`: descriptors expose `result_contract:"stable-object"` but no `outputSchema`, although `tool_help` documents `output_response` fields.
+  - Fix: relative floor for multi-token queries (`top_score / 6`, best match always kept). Test: `tool_search_multi_token_query_drops_single_token_noise`; existing `tool_search_matches_trace_calls_for_caller_callee_intent` still passes.
+- [x] `tool_list`: descriptors expose `result_contract:"stable-object"` but no `outputSchema`, although `tool_help` documents `output_response` fields.
   - Repro: `tool_list {"category":"graph"}` (full inventory: omit `category`, or `{"include_schemas":true}` scoped by category to stay within budget)
   - Observed: 81 tools total; each descriptor has `name`, `title`, `category`, `description`, `read_only`, `destructive`, `idempotent`, `state_changing`, `open_world`, `result_contract`; no `outputSchema` key
   - Expected: either advertise output schemas or state that `tool_help` is the schema surface
+  - Fix: `include_schemas:true` now also attaches `outputSchema`; guidance gains `schema_surface` naming `tool_help`. Test: `tool_list_only_includes_input_schemas_on_request`.
 
 ### Doc drift — align `AGENTS_MCP_TESTS.md` with actual response shapes
 
-- [ ] Tool 25.3 passes `stage:"metrics"`, which is not a valid stage id; the tool correctly fails structured.
+- [x] Tool 25.3 passes `stage:"metrics"`, which is not a valid stage id; the tool correctly fails structured.
   - Repro: `postprocess_graph {"stage":"metrics","dry_run":true}`
   - Observed: `summary.ok=false`, `summary.state="failed"`, `summary.error_code="unknown_stage"`, `summary.message="unknown postprocess stage 'metrics'"`, `summary.supported_stage_count=5`, `planned_stages=[]`, `scope.stage_filter="metrics"`
   - Fix: update 25.3 and its CLI parity line to `architecture_metrics` (valid set: `flows`, `communities`, `architecture_metrics`, `query_hints`, `large_function_summaries`). Previous run marked Tool 25 aligned; this line was missed.
-- [ ] Tool 74.1 asserts exactly 80 tools; the registry exports 81 and the guide's section title says 81.
+  - Applied: Test 25.3 now passes `architecture_metrics` and documents the valid stage set plus `unknown_stage`.
+- [x] Tool 74.1 asserts exactly 80 tools; the registry exports 81 and the guide's section title says 81.
   - Repro: `tool_list {}` and read `total_tools` (use `{"category":"graph"}` to keep the payload small; `{"include_schemas":true}` is large)
   - Observed: `total_tools=81`; per-category probe returned `returned_tools=6` with `applied_category:"health"`
   - Fix: assert the current count, or a `>= 80` floor plus a name-set check.
-- [ ] Tool 70.1/70.3 payloads are rejected.
+  - Applied: Test 74.1 now asserts `total_tools == 81` and mentions `outputSchema` + `guidance.schema_surface`.
+- [x] Tool 70.1/70.3 payloads are rejected.
   - Repro: `overview_ingest {"analysis":{"subject":"packages/atlas-core/src/health.rs","summary":"Core error classification and graph health diagnostics module","confidence":0.95}}`
   - Observed: `missing field `schema_version``; a description or non-empty detail array is also required; success returns record metadata rather than an `ingested` boolean
   - Fix: update fixtures and assertions. Note 72.1 is still ambiguous for canonical file paths — see the `overview_show` defect.
-- [ ] Tool 77.1 asserts `structuredContent.manual`; the payload is flat.
+  - Applied: Test 70.1/70.3 fixtures now include `schema_version`, `summary`, and non-empty `details`; assertions target `record.id`/`summary.overview_id`.
+- [x] Tool 77.1 asserts `structuredContent.manual`; the payload is flat.
   - Repro: `man {"namespace":"mcp","tool_name":"query_graph"}` and `man {"namespace":"cli","tool_name":"query_graph"}`
   - Observed: flat keys `description`, `input_args`, `input_contract`, `output_response`, `usage`, `payload_truncated`; bad namespace returns `unsupported manual namespace 'cli' ; only 'mcp' is supported Use namespace 'mcp' with an exact exported tool name, then retry.`
   - Fix: update 77.1 field paths and 77.3 expected rejection text.
-- [ ] Tool 5.2 asserts keyed `edges_by_kind.calls`; the payload is a pair array.
+  - Applied: Test 77.1 asserts flat keys; 77.3 asserts `code: invalid_input`, `details.accepted_namespaces`, and the cleaned message.
+- [x] Tool 5.2 asserts keyed `edges_by_kind.calls`; the payload is a pair array.
   - Repro: `debug_graph {"limit":5}`
   - Observed: `edges_by_kind=[["calls",76604],["contains",26330],["references",2592],["imports",159],["implements",4]]`, `nodes_by_kind` pairs, `top_files` length 5, `orphan_node_count=5`
   - Fix: update 5.2 to the pair shape, matching 5.1 and `registry/output_schemas/health.rs`.
-- [ ] Tool 9.1 asserts `summary.total_matches`; actual keys are `match_count`/`returned_count`.
+  - Applied: Test 5.2 now asserts the pair array shape.
+- [x] Tool 9.1 asserts `summary.total_matches`; actual keys are `match_count`/`returned_count`.
   - Repro: `query_graph {"text":"classify_graph_store_error","limit":5}`
   - Observed: `summary.match_count=5`, `summary.returned_count=5`, `truncated=true`; `truncated` reflects remaining FTS candidates, not a clipped page
   - Fix: assert `summary.match_count >= 1` and drop the `total_matches` path.
-- [ ] Tools 33.1/33.2 assert `details.*` while passing `verbose:false`; compact policy sets `details_omitted:true` and keeps hub/bottleneck in `ranking_reason` and the chain only in `id`/`message`.
+  - Applied: Test 9.1 asserts `summary.match_count >= 1`.
+- [x] Tools 33.1/33.2 assert `details.*` while passing `verbose:false`; compact policy sets `details_omitted:true` and keeps hub/bottleneck in `ranking_reason` and the chain only in `id`/`message`.
   - Repro: `analyze_patterns {"limit":5,"verbose":false}` then `{"limit":5,"verbose":true}`
   - Fix: either pass `verbose:true` in those tests or retarget the assertions.
-- [ ] Tool 35.1 needs a semantics decision, not just a field rename.
+  - Applied: 33.1/33.2 now pass `verbose:true` and document compact-mode behavior.
+- [x] Tool 35.1 needs a semantics decision, not just a field rename.
   - Repro: `find_complex_functions {"complexity_threshold":15,"limit":5}`
   - Observed: every candidate carries `cyclomatic_complexity` 32-63, `complexity_threshold:15`, `complex_match:true`, and `loc` 535-654 with `threshold_kind:"loc"`, `governing_threshold:80`, `details_omitted:true`; `ranking_reason` reads `loc 654/80; cyclomatic 46/15; cognitive 137/20; ...`
   - Fix: LOC genuinely has the largest excess, so the current rule is self-consistent while guide 35.1 expects `threshold_kind:"cyclomatic"` in `details`. Either expose `details` in compact mode or assert per-candidate `cyclomatic_complexity >= complexity_threshold`; also reconcile 35.3's `"cyclomatic_complexity"` with the guide's `"cyclomatic"`.
+  - Applied: 35.1 asserts per-candidate `cyclomatic_complexity >= 15` and explains governing-threshold selection; 35.3 asserts `cyclomatic_complexity`/`complex_match`.
 - [x] Tool 42.2 is **verified correct** — `read_file_excerpt {"file":"packages/atlas-core/src/health.rs","selector":{"kind":"ranges","ranges":[[44,48],[68,72]]}}` returns two snippets (`lines.emitted=10`, `ranges.emitted=2`). Do not change this fixture; the earlier run-3 report of a schema mismatch was a harness error.
-- [ ] Clarify orphan-count scope: `db_check` reports `orphan_node_count=0` while `debug_graph` reports `orphan_node_count=5`.
+- [x] Clarify orphan-count scope: `db_check` reports `orphan_node_count=0` while `debug_graph` reports `orphan_node_count=5`.
   - Repro: `db_check {"limit":10}` then `debug_graph {"limit":5}`
   - Observed: `db_check.summary.orphan_node_count=0`, `debug_graph.summary.orphan_node_count=5`; the five are `kind:"file"`: `fuzz/fuzz_targets/parser_handlers.rs`, `fuzz/fuzz_targets/regex_sql_udf.rs`, `packages/atlas-cli/tests/cli_quality_gates.rs`, `packages/atlas-contextsave/src/lib.rs`, `packages/atlas-parser/tests/fixtures/javascript/bad_syntax.js`
   - Fix: state the difference (structural query excludes file kind) instead of implying parity.
-- [ ] Costly defaults worth documenting as bounded usage.
+  - Applied: Test 4.2 documents that `db_check` counts structural orphans only and excludes `file` rows.
+- [x] Costly defaults worth documenting as bounded usage.
   - Repro: `analyze_metrics {}` (no `limit`); `postprocess_graph {"dry_run":true}`; `tool_help {"name":"query_graph"}`; `man {"namespace":"mcp","tool_name":"query_graph"}`
   - Observed: `analyze_metrics` ~40 KB; community dry-run inlines all 317 communities (~26k node names); `tool_help`/`man` 10-20 KB each with `payload_truncated`
   - Fix: document byte/token expectations and recommend bounded args.
+  - Applied: Section 2.1 rule 8 now lists the high-volume defaults and bounded-arg guidance.
 
 ### Test-run leftovers (cleanup pending)
 

@@ -121,6 +121,11 @@ pub fn subject_kind_for_node(node: &Node) -> OverviewSubjectKind {
     match node.kind {
         atlas_core::NodeKind::Function => OverviewSubjectKind::Function,
         atlas_core::NodeKind::Method => OverviewSubjectKind::Method,
+        // Graph file/package nodes are first-class overview subjects; stamping
+        // them as generic symbols makes `overview_show` unable to resolve a
+        // canonical file path to its file record.
+        atlas_core::NodeKind::File => OverviewSubjectKind::File,
+        atlas_core::NodeKind::Package => OverviewSubjectKind::Package,
         _ => OverviewSubjectKind::Symbol,
     }
 }

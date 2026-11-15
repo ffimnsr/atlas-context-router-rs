@@ -28,6 +28,12 @@ const QUERY_STOPWORDS: &[&str] = &[
 /// allowed for them.
 const MIN_FUZZY_TOKEN_CHARS: usize = 5;
 
+/// Multi-token `tool_search` queries keep only matches scoring at least
+/// `top_score / MULTI_TOKEN_SCORE_FLOOR_DIVISOR`. A divisor of 6 keeps real
+/// secondary hits (for example `symbol_neighbors` at 20 when the top score is
+/// 110) while dropping single-token noise at 10 against a 100-point top hit.
+const MULTI_TOKEN_SCORE_FLOOR_DIVISOR: u32 = 6;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct ToolInventoryEntry {
     pub name: String,
@@ -42,6 +48,8 @@ pub(crate) struct ToolInventoryEntry {
     pub open_world: bool,
     #[serde(rename = "inputSchema", skip_serializing_if = "Option::is_none")]
     pub input_schema: Option<Value>,
+    #[serde(rename = "outputSchema", skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -49,6 +57,9 @@ pub(crate) struct ToolInventoryGuidance {
     pub list: String,
     pub search: String,
     pub help: String,
+    /// Where full input/output schemas can be read when `include_schemas` is
+    /// false.
+    pub schema_surface: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -183,6 +194,7 @@ pub(crate) fn tool_tool_search(args: Option<&Value>, output_format: OutputFormat
             .cmp(&left.score)
             .then_with(|| left.name.cmp(&right.name))
     });
+    apply_multi_token_score_floor(query, &mut matches);
 
     let total_matches = matches.len();
     matches.truncate(limit);
@@ -261,6 +273,13 @@ fn inventory_entries(include_schemas: bool) -> Vec<ToolInventoryEntry> {
                     .unwrap_or("text-only")
                     .to_owned(),
                 input_schema: include_schemas.then(|| Value::Object((*tool.input_schema).clone())),
+                output_schema: include_schemas
+                    .then(|| {
+                        tool.output_schema
+                            .as_ref()
+                            .map(|schema| Value::Object((**schema).clone()))
+                    })
+                    .flatten(),
                 read_only,
                 state_changing: !read_only,
                 destructive,
@@ -284,6 +303,7 @@ fn guidance() -> ToolInventoryGuidance {
         list: "tool_list".to_owned(),
         search: "tool_search { query }".to_owned(),
         help: "tool_help { name }".to_owned(),
+        schema_surface: "tool_help { name } returns input_contract and output_response; pass include_schemas=true to tool_list for raw JSON schemas".to_owned(),
     }
 }
 
@@ -438,6 +458,21 @@ fn score_match(query: &str, tool: &ToolInventoryEntry) -> Option<ToolSearchMatch
         match_reasons: reasons,
         score_factors: factors,
     })
+}
+
+/// Drop weak tail matches for multi-token queries.
+///
+/// A single generic token (for example `code` in "dead code detection") scores
+/// low but above zero, which used to flood results with unrelated tools. For
+/// multi-token queries keep only matches that reach a fraction of the best
+/// score; the best match always survives so a query never returns nothing.
+fn apply_multi_token_score_floor(query: &str, matches: &mut Vec<ToolSearchMatch>) {
+    if query_tokens(query).count() < 2 || matches.len() < 2 {
+        return;
+    }
+    let top_score = matches[0].score;
+    let floor = (top_score / MULTI_TOKEN_SCORE_FLOOR_DIVISOR).max(1);
+    matches.retain(|item| item.score >= floor);
 }
 
 fn push_factor(
@@ -640,6 +675,37 @@ mod tests {
     }
 
     #[test]
+    fn tool_search_multi_token_query_drops_single_token_noise() {
+        let response = tool_tool_search(
+            Some(&json!({ "query": "dead code detection", "limit": 10 })),
+            OutputFormat::Json,
+        )
+        .expect("tool_search response");
+        let names = response["structuredContent"]["matches"]
+            .as_array()
+            .expect("matches array")
+            .iter()
+            .map(|item| item["name"].as_str().expect("match name"))
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"analyze_dead_code"));
+        for noisy in [
+            "build_graph",
+            "doctor",
+            "experience_inspect",
+            "memoir_create",
+            "query_graph",
+            "search_content",
+            "search_files",
+            "search_text_assets",
+        ] {
+            assert!(
+                !names.contains(&noisy),
+                "single generic token must not surface {noisy}: {names:?}"
+            );
+        }
+    }
+
+    #[test]
     fn tool_list_only_includes_input_schemas_on_request() {
         let compact = tool_tool_list(None, OutputFormat::Json).expect("compact tool_list");
         let compact_tools = compact["structuredContent"]["tools"]
@@ -663,6 +729,12 @@ mod tests {
             full_tools
                 .iter()
                 .all(|tool| tool.get("inputSchema").is_some())
+        );
+        assert!(
+            full_tools
+                .iter()
+                .any(|tool| tool.get("outputSchema").is_some()),
+            "include_schemas must advertise output schemas too"
         );
     }
 }

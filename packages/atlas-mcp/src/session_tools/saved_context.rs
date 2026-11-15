@@ -573,6 +573,7 @@ pub fn tool_get_context_stats(
 
     let mut response = tool_result_value(
         &serde_json::json!({
+            "tool": "get_context_stats",
             "session_id": session_id.as_str(),
             "agent_id": agent_id,
             "event_count": event_count,
@@ -583,6 +584,7 @@ pub fn tool_get_context_stats(
             "session_db_path": session_db,
             "bridge_dir_path": bridge_dir.to_string_lossy(),
             "retrieval_index": retrieval_index,
+            "warnings": [],
         }),
         output_format,
     )?;

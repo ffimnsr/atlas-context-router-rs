@@ -417,6 +417,24 @@ impl Store {
         Ok(rows)
     }
 
+    /// Count every chunk that still has no embedding.
+    ///
+    /// Unlike [`Store::chunks_missing_embeddings`] this is not bounded by a run
+    /// limit, so callers can report the stable backlog total separately from the
+    /// batch they selected.
+    pub fn pending_embedding_chunk_count(&self) -> Result<usize> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM retrieval_chunks WHERE embedding IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(db_err)?;
+        Ok(usize::try_from(count).unwrap_or(0))
+    }
+
     /// Persist a computed embedding for the given chunk `id`.
     ///
     /// `embedding` is stored as little-endian IEEE 754 `f32` bytes.

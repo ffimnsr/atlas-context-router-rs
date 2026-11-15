@@ -88,9 +88,19 @@ pub(super) fn compact_findings(findings: &[InsightFinding]) -> Vec<Value> {
 
 /// Bound the module list for `infer_modules`; `limit` applies to modules as
 /// well as findings.
+///
+/// Modules are ranked before truncation so `limit` returns the largest modules
+/// instead of an arbitrary `module_id` slice; ties break on `module_id` for
+/// deterministic output.
 pub(super) fn limit_modules(modules: &mut Vec<InferredModule>, limit: Option<usize>) {
     if let Some(limit) = limit {
-        *modules = std::mem::take(modules).into_iter().take(limit).collect();
+        modules.sort_by(|left, right| {
+            right
+                .node_count
+                .cmp(&left.node_count)
+                .then_with(|| left.module_id.cmp(&right.module_id))
+        });
+        modules.truncate(limit);
     }
 }
 

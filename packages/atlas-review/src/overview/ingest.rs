@@ -241,10 +241,8 @@ fn resolve_subject_input(
         ));
     }
 
-    if let Some(index) = by_qname.get(reference) {
-        return Ok(util::node_subject(&nodes[*index], repo_root, head));
-    }
-
+    // An exact canonical path wins over qname/prefix matching so a file subject
+    // is not shadowed by a symbol that merely resolves through the same string.
     let canonical = util::canonical_path(repo_root, reference).ok();
     if let Some(path) = canonical.as_deref() {
         if let Some(indexes) = by_file.get(path)
@@ -261,6 +259,10 @@ fn resolve_subject_input(
         if absolute.is_dir() {
             return Ok(util::module_subject(reference, repo_root, head));
         }
+    }
+
+    if let Some(index) = by_qname.get(reference) {
+        return Ok(util::node_subject(&nodes[*index], repo_root, head));
     }
 
     let packages = util::collect_packages(&[], nodes);

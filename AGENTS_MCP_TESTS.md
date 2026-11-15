@@ -107,6 +107,10 @@ Before completing a test run, verify:
    - Tool numbering and heading text in this guide have drifted between runs. Always locate a tool by its `snake_case` MCP tool name (`tool_list`, `query_graph`, …) and treat section numbers as display-only.
 8. **Bound High-Volume Tools**:
    - `analyze_patterns` returns the largest payloads in this guide. Always call it with a small `limit` and without `verbose`; never request the full report against the real repository in one turn.
+   - `analyze_metrics {}` without `limit` emits roughly 40 KB on this repository; pass `limit` (and keep `verbose` off) unless the full distribution set is required.
+   - `postprocess_graph {"dry_run":true}` inlines every community (317 on this repo, ~26k node names). Scope with `stage` or accept the payload cost.
+   - `tool_help` and `man` return 10-20 KB each and may set `payload_truncated`; call them for one tool at a time.
+   - `tool_list` without `category` returns all 81 descriptors; use `category` for a scoped inventory and add `include_schemas` only when schemas are actually needed.
 
 
 ---
@@ -441,6 +445,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 **Expected Clean Output & Assertions**:
 - Verify `structuredContent.summary.orphan_node_count` is returned as an integer
 - Verify `structuredContent.orphan_nodes` array length is <= 10
+- Orphan scope differs from `debug_graph`: `db_check` counts structural orphans only (it excludes `file`-kind rows), so `db_check` can report `0` while `debug_graph` reports `5` file rows with no edges. Compare them only after applying the same kind filter.
 
 **CLI Parity Command**:
 ```./target/debug/atlas db-check --json```
@@ -513,9 +518,10 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `structuredContent.edges_by_kind.calls > 50000` (observed 75295)
-- Verify `structuredContent.edges_by_kind.contains > 20000` (observed 26007)
-- Verify `structuredContent.edges_by_kind.references > 1000` (observed 2570)
+- Verify `structuredContent.edges_by_kind` is a pair array (`[[kind, count], ...]`), matching `nodes_by_kind` and the debug-graph output schema
+- Verify `calls > 50000` (observed 76604)
+- Verify `contains > 20000` (observed 26330)
+- Verify `references > 1000` (observed 2592)
 - Treat these as proportional floors: `calls` and `contains` dominate, while `references` is a smaller cross-file signal.
 
 **CLI Parity Command**:
@@ -851,7 +857,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 **Expected Clean Output & Assertions**:
 - Verify `structuredContent.matches` contains the function node
 - Verify no node in `matches` has `kind == 'file'`
-- Check `structuredContent.summary.total_matches >= 1`
+- Verify `structuredContent.summary.match_count >= 1`; `truncated` reflects remaining FTS candidates, not a clipped page (there is no `total_matches` key)
 
 **CLI Parity Command**:
 ```./target/debug/atlas query 'classify_graph_store_error' --json```
@@ -2251,7 +2257,8 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 **Expected Clean Output & Assertions**:
 - Verify `structuredContent.limit` is not echoed (request-side cap only)
-- Verify `structuredContent.pending_chunks` and `dry_run` are unchanged by the cap
+- Verify `structuredContent.pending_chunks` remains the full backlog total and `structuredContent.pending_chunks_selected` equals `min(pending_chunks, limit)`
+- Verify `dry_run` is unchanged by the cap
 
 **CLI Parity Command**:
 ```./target/debug/atlas query --embed --dry-run --json```
@@ -2289,7 +2296,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 #### Tool 25: `postprocess_graph`
 **Description**: Runs explicit derived-analytics postprocessing after build/update without reparsing source files.
-**Canonical CLI Parity Command**: `./target/debug/atlas postprocess --stage metrics --dry-run --json`
+**Canonical CLI Parity Command**: `./target/debug/atlas postprocess --dry-run --json`
 
 ##### Test 25.1: Dry Run Derived Analytics Lifecycle Preview
 **Intent in Plain English**: Preview which postprocessing stages (metrics, cycles, dead code) would execute without altering tables.
@@ -2306,7 +2313,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - Verify `structuredContent.planned_stages` lists the stage ids `flows`, `communities`, `architecture_metrics`, `query_hints`, and `large_function_summaries`
 
 **CLI Parity Command**:
-```./target/debug/atlas postprocess --stage metrics --dry-run --json```
+```./target/debug/atlas postprocess --dry-run --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -2330,7 +2337,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 - With changed files, only in-scope stages execute
 
 **CLI Parity Command**:
-```./target/debug/atlas postprocess --stage metrics --dry-run --json```
+```./target/debug/atlas postprocess --dry-run --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -2339,21 +2346,22 @@ Agent executes the CLI command with `--json` and compares the JSON `data` object
 Agent verifies that the data returned matches the agent's expected semantic model. If unexpected fields, schema discrepancies, or status errors occur, the agent must flag the behavior for defect logging in Section 1.
 
 ##### Test 25.3: Execute Single-Stage Analytics
-**Intent in Plain English**: Execute only the 'metrics' calculation stage.
+**Intent in Plain English**: Execute only the 'architecture_metrics' calculation stage.
 
 **MCP Arguments (JSON)**:
 ```json
 {
-  "stage": "metrics",
+  "stage": "architecture_metrics",
   "dry_run": true
 }
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify only the `metrics` stage is scheduled
+- Verify only the `architecture_metrics` stage is scheduled (`scope.stage_filter` echoes it, `planned_stages` contains one entry)
+- Valid stage ids are `flows`, `communities`, `architecture_metrics`, `query_hints`, and `large_function_summaries`; any other value fails structured with `error_code: "unknown_stage"`
 
 **CLI Parity Command**:
-```./target/debug/atlas postprocess --stage metrics --dry-run --json```
+```./target/debug/atlas postprocess --stage architecture_metrics --dry-run --json```
 
 **CLI Parity Verification Statement**:
 Agent executes the CLI command with `--json` and compares the JSON `data` object with MCP `structuredContent`. Agent confirms that status codes, symbol names, file paths, and counts match identically without regression.
@@ -2922,13 +2930,14 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```json
 {
   "limit": 5,
-  "verbose": false
+  "verbose": true
 }
 ```
 
 **Expected Clean Output & Assertions**:
 - Verify findings include `pattern_centrality` entries whose `details` mark `hub` and/or `bottleneck`
 - Verify not every finding is `pattern_repeated_chain`; category diversity is enforced before the score-ranked trim
+- Compact mode (`verbose: false`) sets `details_omitted: true` and keeps the hub/bottleneck signal in `ranking_reason`; assert `details` only with `verbose: true`
 
 **CLI Parity Command**:
 ```./target/debug/atlas insights patterns --json```
@@ -2946,12 +2955,13 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```json
 {
   "limit": 3,
-  "verbose": false
+  "verbose": true
 }
 ```
 
 **Expected Clean Output & Assertions**:
 - Verify findings include `pattern_deep_chain` entries with `details.depth` and `details.chain`
+- Compact mode keeps the chain only in `id`/`message` and sets `details_omitted: true`
 
 **CLI Parity Command**:
 ```./target/debug/atlas insights patterns --json```
@@ -3086,9 +3096,9 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify all returned functions have cyclomatic complexity >= 15
+- Verify every candidate reports `cyclomatic_complexity >= 15` (per-candidate field; there is no `details` block in compact mode)
 - Verify exact complexity score is reported
-- Verify `details.governing_threshold` names the threshold that triggered the finding and `details.threshold_kind` is `cyclomatic`
+- Verify each candidate carries `threshold_kind` and `governing_threshold`. `threshold_kind` names whichever threshold has the largest excess, so a very large function can report `loc` even when cyclomatic complexity also exceeds its threshold. Assert `threshold_kind == "cyclomatic"` only for candidates whose cyclomatic excess is the largest.
 
 **CLI Parity Command**:
 ```./target/debug/atlas insights complex-functions --complexity-threshold 15 --limit 5 --json```
@@ -3137,6 +3147,7 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 
 **Expected Clean Output & Assertions**:
 - Verify evaluates `select_graph_health_error_code` or `classify_graph_store_error`
+- Assert on per-candidate `cyclomatic_complexity` (not a `cyclomatic` field) and `complex_match`
 
 **CLI Parity Command**:
 ```./target/debug/atlas insights complex-functions --json```
@@ -5856,15 +5867,18 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```json
 {
   "analysis": {
+    "schema_version": 1,
     "subject": "packages/atlas-core/src/health.rs",
     "summary": "Core error classification and graph health diagnostics module",
+    "details": ["classifies graph store errors", "maps error codes to docs anchors"],
     "confidence": 0.95
   }
 }
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `structuredContent.ingested == true` or valid record id returned
+- `schema_version` is required; a description or a non-empty `details` array is also required
+- Verify `structuredContent.record.id` and `structuredContent.summary.overview_id` are returned (there is no `ingested` boolean)
 - Verify validated before persistence
 
 **CLI Parity Command**:
@@ -5906,12 +5920,13 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 **MCP Arguments (JSON)**:
 ```json
 {
-  "input": "{\"subject\":\"packages/atlas-mcp\",\"summary\":\"Full MCP protocol implementation\"}"
+  "input": "{\"schema_version\":1,\"subject\":\"packages/atlas-mcp\",\"summary\":\"Full MCP protocol implementation\",\"details\":[\"tool registry\",\"transport wiring\"]}"
 }
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify successful ingestion routing
+- Verify successful ingestion routing and that an oversized body is routed to the content store with `summary.source_body_routed` set
+- Verify the returned record metadata (`record.id`, `summary.overview_id`) instead of an `ingested` boolean
 
 **CLI Parity Command**:
 ```./target/debug/atlas overview ingest overview.json --json```
@@ -6167,9 +6182,10 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `structuredContent.tools` count is exactly 80
+- Verify `structuredContent.total_tools` is `81` (assert a `>= 80` floor plus a name-set check if the registry grows)
 - Verify every tool descriptor has `name`, `description`, and `result_contract`
-- Verify `include_schemas: true` adds `inputSchema` to every descriptor; omitting it keeps the inventory compact
+- Verify `include_schemas: true` adds `inputSchema` and `outputSchema` to descriptors; omitting it keeps the inventory compact
+- Verify `guidance.schema_surface` names `tool_help` as the schema surface
 
 **CLI Parity Command**:
 ```N/A — no CLI inventory verb exists; use MCP `tool_list` with `{"include_schemas": true}` for the schema-bearing inventory.```
@@ -6392,8 +6408,8 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify `structuredContent.manual` contains grammar rules and regex syntax
-- Verify detailed description of intent phrases ('who calls', 'what breaks')
+- The payload is flat: verify top-level `description`, `input_args`, `input_contract`, `output_response`, `usage`, and `payload_truncated` keys
+- Verify `input_contract.notes` and `output_response.response_fields` describe intent phrases ('who calls', 'what breaks') and regex syntax
 
 **CLI Parity Command**:
 ```./target/debug/atlas man mcp query_graph --json```
@@ -6439,7 +6455,8 @@ Agent verifies that the data returned matches the agent's expected semantic mode
 ```
 
 **Expected Clean Output & Assertions**:
-- Verify validation error requiring `namespace: 'mcp'`
+- Verify `structuredContent.code == "invalid_input"` and `structuredContent.details.accepted_namespaces == ["mcp"]`
+- Verify `structuredContent.message` is `unsupported manual namespace 'cli'; only 'mcp' is supported` (clean punctuation, no stray space)
 
 **CLI Parity Command**:
 ```./target/debug/atlas man cli query_graph --json```

@@ -40,7 +40,8 @@ pub(crate) fn tool_list_output_schema() -> Value {
                     "destructive": { "type": "boolean" },
                     "idempotent": { "type": "boolean" },
                     "open_world": { "type": "boolean" },
-                    "inputSchema": { "type": "object" }
+                    "inputSchema": { "type": "object" },
+                    "outputSchema": { "type": "object" }
                 },
                 "required": [
                     "name",
@@ -61,9 +62,10 @@ pub(crate) fn tool_list_output_schema() -> Value {
                 "properties": {
                     "list": { "type": "string" },
                     "search": { "type": "string" },
-                    "help": { "type": "string" }
+                    "help": { "type": "string" },
+                    "schema_surface": { "type": "string" }
                 },
-                "required": ["list", "search", "help"]
+                "required": ["list", "search", "help", "schema_surface"]
             }
         })),
     )
@@ -127,9 +129,10 @@ pub(crate) fn tool_search_output_schema() -> Value {
                 "properties": {
                     "list": { "type": "string" },
                     "search": { "type": "string" },
-                    "help": { "type": "string" }
+                    "help": { "type": "string" },
+                    "schema_surface": { "type": "string" }
                 },
-                "required": ["list", "search", "help"]
+                "required": ["list", "search", "help", "schema_surface"]
             }
         }),
         &[

@@ -42,8 +42,12 @@ pub struct EmbedChunkReport {
     pub provider: String,
     /// Model sent to the embedding backend.
     pub model: String,
-    /// Number of chunks selected for this run (capped by `options.limit`).
+    /// Total chunks still missing an embedding before this run.
+    ///
+    /// This is the stable backlog size; it does not depend on `options.limit`.
     pub pending_chunks: usize,
+    /// Number of chunks selected for this run (capped by `options.limit`).
+    pub pending_chunks_selected: usize,
     /// Number of chunks whose vectors were persisted.
     pub embedded_chunks: usize,
     /// Number of chunks that failed to embed or persist.
@@ -86,15 +90,19 @@ pub fn embed_pending_chunks(
     let store =
         Store::open(db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
+    let pending_chunks = store
+        .pending_embedding_chunk_count()
+        .context("failed to count retrieval chunks")?;
     let chunks = store
         .chunks_missing_embeddings(options.limit.max(1))
         .context("failed to read retrieval chunks")?;
-    let pending_chunks = chunks.len();
+    let pending_chunks_selected = chunks.len();
 
     let mut report = EmbedChunkReport {
         provider,
         model,
         pending_chunks,
+        pending_chunks_selected,
         embedded_chunks: 0,
         failed_chunks: 0,
         dimension: None,
@@ -204,8 +212,37 @@ mod tests {
 
         assert!(report.dry_run);
         assert_eq!(report.pending_chunks, 0);
+        assert_eq!(report.pending_chunks_selected, 0);
         assert_eq!(report.embedded_chunks, 0);
         assert_eq!(report.provider, "unconfigured");
         assert_eq!(report.model, crate::config::DEFAULT_EMBED_MODEL);
+    }
+
+    #[test]
+    fn dry_run_reports_total_backlog_not_the_run_limit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("worldtree.db");
+        let db_path = db_path.to_string_lossy().to_string();
+        let repo_root = dir.path().to_string_lossy().to_string();
+
+        let store = atlas_store_sqlite::Store::open(&db_path).expect("open store");
+        for index in 0..4 {
+            store
+                .upsert_chunk("repo_test", &format!("q{index}"), 0, "chunk text")
+                .expect("seed chunk");
+        }
+
+        let report = embed_pending_chunks(
+            &repo_root,
+            &db_path,
+            EmbedChunkOptions {
+                limit: 2,
+                dry_run: true,
+            },
+        )
+        .expect("dry run");
+
+        assert_eq!(report.pending_chunks, 4, "backlog must ignore the limit");
+        assert_eq!(report.pending_chunks_selected, 2);
     }
 }

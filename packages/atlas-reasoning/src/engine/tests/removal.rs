@@ -3,7 +3,7 @@
 
 use super::super::ReasoningEngine;
 use super::{attach_owner, edge, make_store, node, seed_graph};
-use atlas_core::{EdgeKind, ImpactClass, NodeKind, ReferenceScope, SafetyBand};
+use atlas_core::{ConfidenceTier, EdgeKind, ImpactClass, NodeKind, ReferenceScope, SafetyBand};
 
 #[test]
 fn removal_simple_call_graph() {
@@ -252,6 +252,87 @@ fn dead_code_entrypoint_suppressed() {
             .iter()
             .any(|candidate| candidate.node.name == "main"),
         "main entrypoint should be suppressed"
+    );
+}
+
+#[test]
+fn dead_code_downgrades_receiver_method_with_short_call_target() {
+    let mut store = make_store();
+    let mut method = node(
+        0,
+        "now_utc",
+        "src/clock.rs::method::SystemClock::now_utc",
+        "src/clock.rs",
+        NodeKind::Method,
+    );
+    method.parent_name = Some("src/clock.rs::impl::SystemClock".to_owned());
+    let caller = node(
+        0,
+        "now_utc",
+        "src/clock.rs::fn::now_utc",
+        "src/clock.rs",
+        NodeKind::Function,
+    );
+    let edges = vec![edge(
+        "src/clock.rs::fn::now_utc",
+        "SystemClock.now_utc()",
+        EdgeKind::Calls,
+        "src/clock.rs",
+    )];
+    seed_graph(&mut store, vec![method, caller], edges);
+
+    let engine = ReasoningEngine::new(&store);
+    let candidates = engine.detect_dead_code(&[], None, None, &[]).unwrap();
+    let candidate = candidates
+        .iter()
+        .find(|candidate| {
+            candidate.node.qualified_name == "src/clock.rs::method::SystemClock::now_utc"
+        })
+        .expect("receiver method candidate");
+
+    assert_eq!(
+        candidate.certainty,
+        ConfidenceTier::Medium,
+        "short-form call sites must downgrade the candidate"
+    );
+    assert!(
+        candidate
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("short `Type::method` form")),
+        "blocker must explain the unresolved call target: {:?}",
+        candidate.blockers
+    );
+}
+
+#[test]
+fn dead_code_downgrades_trait_method_declarations() {
+    let mut store = make_store();
+    let mut method = node(
+        0,
+        "now_utc",
+        "src/clock.rs::method::Clock::now_utc",
+        "src/clock.rs",
+        NodeKind::Method,
+    );
+    method.parent_name = Some("src/clock.rs::trait::Clock".to_owned());
+    seed_graph(&mut store, vec![method], vec![]);
+
+    let engine = ReasoningEngine::new(&store);
+    let candidates = engine.detect_dead_code(&[], None, None, &[]).unwrap();
+    let candidate = candidates
+        .iter()
+        .find(|candidate| candidate.node.qualified_name == "src/clock.rs::method::Clock::now_utc")
+        .expect("trait method candidate");
+
+    assert_eq!(candidate.certainty, ConfidenceTier::Medium);
+    assert!(
+        candidate
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("trait method declaration")),
+        "blocker must explain trait dispatch: {:?}",
+        candidate.blockers
     );
 }
 

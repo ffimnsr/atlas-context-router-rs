@@ -452,6 +452,11 @@ fn test_get_context_stats_empty() {
     assert_eq!(body["source_count"].as_u64().unwrap(), 0);
     assert_eq!(body["chunk_count"].as_u64().unwrap(), 0);
     assert_eq!(body["event_count"].as_u64().unwrap(), 0);
+    assert_eq!(body["tool"].as_str(), Some("get_context_stats"));
+    assert!(
+        body["warnings"].is_array(),
+        "stable-object envelope must expose a warnings array"
+    );
     // Bridge dir does not exist yet → count must be 0.
     assert_eq!(body["bridge_file_count"].as_u64().unwrap(), 0);
     assert!(body["bridge_dir_path"].is_string());

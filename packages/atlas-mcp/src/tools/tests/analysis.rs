@@ -944,6 +944,46 @@ fn infer_modules_applies_limit_to_modules_and_hides_owned_symbols_in_compact_mod
 }
 
 #[test]
+fn infer_modules_limit_selects_largest_modules() {
+    let fixture = setup_mcp_fixture();
+    let full = call(
+        "infer_modules",
+        Some(&serde_json::json!({ "output_format": "json" })),
+        "/repo",
+        &fixture.db_path,
+    )
+    .expect("infer_modules call");
+    let full_payload: serde_json::Value =
+        serde_json::from_str(&unwrap_tool_text(full)).expect("parse json");
+    let max_node_count = full_payload["modules"]
+        .as_array()
+        .expect("modules array")
+        .iter()
+        .filter_map(|module| module["node_count"].as_u64())
+        .max()
+        .expect("at least one module");
+
+    let limited = call(
+        "infer_modules",
+        Some(&serde_json::json!({ "limit": 1, "output_format": "json" })),
+        "/repo",
+        &fixture.db_path,
+    )
+    .expect("infer_modules call");
+    let limited_payload: serde_json::Value =
+        serde_json::from_str(&unwrap_tool_text(limited)).expect("parse json");
+    let modules = limited_payload["modules"]
+        .as_array()
+        .expect("modules array");
+    assert_eq!(modules.len(), 1);
+    assert_eq!(
+        modules[0]["node_count"].as_u64(),
+        Some(max_node_count),
+        "limit must keep the largest module, not the first module_id"
+    );
+}
+
+#[test]
 fn find_large_functions_compact_keeps_governing_threshold_at_candidate_level() {
     let fixture = setup_mcp_fixture();
     let resp = call(

@@ -347,6 +347,28 @@ fn compute_subject(repo_root: &str) -> OverviewSubject {
 }
 
 #[test]
+fn node_subject_stamps_file_and_package_subject_kinds() {
+    let file_node = node("src/a.rs", "src/a.rs", NodeKind::File, 1, 40);
+    assert_eq!(
+        util::subject_kind_for_node(&file_node),
+        OverviewSubjectKind::File,
+        "graph file nodes are file subjects, not generic symbols"
+    );
+
+    let package_node = node(
+        "package::cargo:packages/demo/Cargo.toml",
+        ".atlas/synthetic/owners/package/cargo/demo.atlas",
+        NodeKind::Package,
+        1,
+        1,
+    );
+    assert_eq!(
+        util::subject_kind_for_node(&package_node),
+        OverviewSubjectKind::Package
+    );
+}
+
+#[test]
 fn ingest_accepts_string_subject_references() {
     let mut fixture = setup();
     let rules = RedactionRules::default();

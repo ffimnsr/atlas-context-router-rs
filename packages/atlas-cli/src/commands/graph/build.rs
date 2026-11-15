@@ -113,7 +113,9 @@ pub fn run_build(cli: &Cli) -> Result<()> {
                 if cli.json {
                     eprintln!(
                         "Embedded {}/{} chunks ({} errors).",
-                        report.embedded_chunks, report.pending_chunks, report.failed_chunks
+                        report.embedded_chunks,
+                        report.pending_chunks_selected,
+                        report.failed_chunks
                     );
                 } else {
                     print_embed_report(&report);

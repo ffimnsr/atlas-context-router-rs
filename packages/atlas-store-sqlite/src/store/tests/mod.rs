@@ -17,6 +17,7 @@ mod build_state;
 mod chunk_embedding;
 mod concurrency;
 mod context;
+mod dead_code_probes;
 mod graph;
 mod helpers;
 mod history;

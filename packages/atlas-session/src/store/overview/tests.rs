@@ -266,6 +266,70 @@ fn overview_insert_supersedes_previous_active_record() {
 }
 
 #[test]
+fn resolve_overview_subject_prefers_file_subject_for_canonical_path() {
+    let (dir, mut store) = open_store();
+    let repo = repo_root(&dir);
+
+    // File subject plus a function record that lives in the same file: both
+    // carry the canonical path, so a path target used to be ambiguous.
+    store
+        .insert_overview_record(&new_record(
+            file_subject(&repo, "src/health.rs"),
+            "health module",
+        ))
+        .unwrap();
+    store
+        .insert_overview_record(&new_record(
+            function_subject(&repo, "src/health.rs::fn::classify", "src/health.rs"),
+            "classifier",
+        ))
+        .unwrap();
+
+    let resolved = store
+        .resolve_overview_subject(&repo, "src/health.rs")
+        .unwrap();
+    assert_eq!(resolved.subject_kind, OverviewSubjectKind::File);
+    assert_eq!(
+        resolved.canonical_file_path.as_deref(),
+        Some("src/health.rs")
+    );
+}
+
+#[test]
+fn resolve_overview_subject_prefers_legacy_file_node_kind() {
+    let (dir, mut store) = open_store();
+    let repo = repo_root(&dir);
+
+    // Records written before file subjects were stamped `file` store
+    // `subject_kind: symbol` with `node_kind: file`; they must still win over
+    // symbol records from the same path.
+    let mut legacy = new_record(file_subject(&repo, "src/health.rs"), "legacy file subject");
+    legacy.subject.kind = OverviewSubjectKind::Symbol;
+    legacy.subject.qualified_name = Some("src/health.rs".to_owned());
+    legacy.subject.node_kind = Some("file".to_owned());
+    legacy.subject.line_start = Some(1);
+    legacy.subject.line_end = Some(1);
+    store.insert_overview_record(&legacy).unwrap();
+    store
+        .insert_overview_record(&new_record(
+            function_subject(&repo, "src/health.rs::fn::classify", "src/health.rs"),
+            "classifier",
+        ))
+        .unwrap();
+
+    let resolved = store
+        .resolve_overview_subject(&repo, "src/health.rs")
+        .unwrap();
+    assert_eq!(resolved.qualified_name.as_deref(), Some("src/health.rs"));
+    assert_eq!(resolved.node_kind.as_deref(), Some("file"));
+    assert_eq!(
+        resolved.subject_kind,
+        OverviewSubjectKind::File,
+        "legacy file records are normalized to the file subject kind on read"
+    );
+}
+
+#[test]
 fn overview_search_ranks_exact_subject_match_first() {
     let (dir, mut store) = open_store();
     let repo = repo_root(&dir);

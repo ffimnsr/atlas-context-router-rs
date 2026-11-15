@@ -13,6 +13,28 @@ fn chunk_row(store: &Store, qn: &str) -> (i64, String, Option<Vec<u8>>) {
 }
 
 #[test]
+fn pending_embedding_chunk_count_ignores_selection_limits() {
+    let store = open_in_memory();
+    for index in 0..3 {
+        store
+            .upsert_chunk("repo_a", &format!("a.rs::fn::f{index}"), 0, "text")
+            .unwrap();
+    }
+
+    assert_eq!(store.pending_embedding_chunk_count().unwrap(), 3);
+    assert_eq!(store.chunks_missing_embeddings(1).unwrap().len(), 1);
+    assert_eq!(
+        store.pending_embedding_chunk_count().unwrap(),
+        3,
+        "selecting a batch must not change the reported backlog"
+    );
+
+    let (id, _, _) = store.chunks_missing_embeddings(1).unwrap().remove(0);
+    store.set_chunk_embedding(id, &[0.5]).unwrap();
+    assert_eq!(store.pending_embedding_chunk_count().unwrap(), 2);
+}
+
+#[test]
 fn chunk_replacement_preserves_embedding_when_text_unchanged() {
     let mut store = open_in_memory();
     let parsed = |name: &str| ParsedFile {

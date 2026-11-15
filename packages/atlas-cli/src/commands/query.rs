@@ -576,7 +576,7 @@ pub fn run_embed(cli: &Cli) -> Result<()> {
         },
     )?;
 
-    if report.pending_chunks == 0 {
+    if report.pending_chunks_selected == 0 {
         println!("All chunks already have embeddings.");
         return Ok(());
     }
@@ -587,8 +587,12 @@ pub fn run_embed(cli: &Cli) -> Result<()> {
 
     println!(
         "Embedded {}/{} chunks ({} errors).",
-        report.embedded_chunks, report.pending_chunks, report.failed_chunks
+        report.embedded_chunks, report.pending_chunks_selected, report.failed_chunks
     );
+    let remaining = report.pending_chunks.saturating_sub(report.embedded_chunks);
+    if remaining > 0 {
+        println!("{remaining} chunk(s) still pending; rerun `atlas embed` to continue.");
+    }
     Ok(())
 }
 

@@ -115,6 +115,69 @@ fn architecture_classifies_cross_module_cycles() {
 }
 
 #[test]
+fn architecture_findings_exclude_synthetic_owner_modules() {
+    let repo_root = make_repo_root();
+    let workspace_path = ".atlas/synthetic/owners/workspace/cargo/cargo.atlas";
+    let workspace_qname = "workspace::cargo::Cargo.toml";
+    let mut nodes = vec![node(
+        0,
+        "workspace",
+        workspace_qname,
+        workspace_path,
+        NodeKind::Package,
+    )];
+    let mut edges = Vec::new();
+    let mut package_paths = Vec::new();
+    for index in 0..20 {
+        let path = format!(".atlas/synthetic/owners/package/cargo/pkg{index}.atlas");
+        let qname = format!("package::cargo:packages/pkg{index}/Cargo.toml");
+        nodes.push(node(
+            0,
+            &format!("pkg{index}"),
+            &qname,
+            &path,
+            NodeKind::Package,
+        ));
+        edges.push(edge(
+            workspace_qname,
+            &qname,
+            EdgeKind::Contains,
+            workspace_path,
+        ));
+        package_paths.push(path);
+    }
+    let mut store = make_store();
+    seed_graph(&mut store, nodes, edges);
+    for (index, path) in package_paths.iter().enumerate() {
+        attach_owner(&mut store, path, &format!("packages/pkg{index}/Cargo.toml"));
+    }
+
+    let analysis = insights_engine(&store)
+        .analyze_architecture(&repo_root)
+        .unwrap();
+
+    assert!(
+        analysis.modules.iter().all(|module| module
+            .file_paths
+            .iter()
+            .all(|path| !path.starts_with(".atlas/synthetic/"))),
+        "synthetic owner modules must not be reported: {:?}",
+        analysis
+            .modules
+            .iter()
+            .map(|module| module.module_id.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        analysis.edges.iter().all(|edge| {
+            !edge.source_module.contains(".atlas/synthetic")
+                && !edge.target_module.contains(".atlas/synthetic")
+        }),
+        "module edges touching synthetic owners must be dropped"
+    );
+}
+
+#[test]
 fn architecture_valid_layer_rule_allows_dependency() {
     let repo_root = make_repo_root();
     write_repo_file(&repo_root, "src/api/mod.rs", "pub fn handler() {}\n");

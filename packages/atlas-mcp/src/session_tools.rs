@@ -26,6 +26,8 @@ mod saved_context;
 mod session;
 
 #[cfg(test)]
+mod feedback_tests;
+#[cfg(test)]
 mod memoir_tests;
 #[cfg(test)]
 mod memory_tests;

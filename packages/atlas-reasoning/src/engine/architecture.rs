@@ -94,8 +94,30 @@ impl<'s> InsightsEngine<'s> {
             &metrics.metrics.node_metrics,
             &layer_by_module,
         );
-        let findings =
-            build_architecture_findings(self, &modules, &edges, &metrics.metrics.file_metrics);
+        // Synthetic package/workspace owner nodes (`.atlas/synthetic/...`) are
+        // build metadata, not source modules. Left in place they dominate
+        // coupling findings because the workspace owner fans out to every
+        // member package, so drop the modules and their incident edges.
+        let synthetic_module_ids = modules
+            .iter()
+            .filter(|module| is_synthetic_owner_module(module))
+            .map(|module| module.module_id.clone())
+            .collect::<HashSet<_>>();
+        if !synthetic_module_ids.is_empty() {
+            modules.retain(|module| !synthetic_module_ids.contains(&module.module_id));
+            edges.retain(|edge| {
+                !synthetic_module_ids.contains(&edge.source_module)
+                    && !synthetic_module_ids.contains(&edge.target_module)
+            });
+        }
+        let file_metrics = metrics
+            .metrics
+            .file_metrics
+            .iter()
+            .filter(|metric| !is_synthetic_path(&metric.file_path))
+            .cloned()
+            .collect::<Vec<_>>();
+        let findings = build_architecture_findings(self, &modules, &edges, &file_metrics);
         // Count before `architecture_report` trims to `insights.max_findings`, so
         // cycle/layer totals stay accurate even when the emitted sample is
         // capped.
@@ -135,6 +157,18 @@ impl<'s> InsightsEngine<'s> {
             counts,
         })
     }
+}
+
+/// Build-metadata nodes for package owners and workspace roots live under this
+/// prefix.
+pub(super) const SYNTHETIC_GRAPH_PREFIX: &str = ".atlas/synthetic/";
+
+pub(super) fn is_synthetic_path(file_path: &str) -> bool {
+    file_path.starts_with(SYNTHETIC_GRAPH_PREFIX)
+}
+
+fn is_synthetic_owner_module(module: &ArchitectureModuleNode) -> bool {
+    !module.file_paths.is_empty() && module.file_paths.iter().all(|path| is_synthetic_path(path))
 }
 
 fn build_module_contents(node_metrics: &[NodeMetric]) -> BTreeMap<String, ModuleContents> {

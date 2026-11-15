@@ -6,6 +6,10 @@ use super::{
     helpers::{canonicalize_repo_path, parse_repo_provenance, row_to_node},
 };
 
+/// Batch size for `IN (...)` probes so large candidate sets stay under SQLite's
+/// bound-parameter limit.
+const EDGE_TARGET_BATCH: usize = 400;
+
 /// One semantic edge referencing a symbol defined in a specific file.
 ///
 /// Carries the evidence columns needed by consumers to distinguish strong
@@ -367,6 +371,99 @@ impl Store {
             .filter_map(|r| r.ok())
             .collect();
         Ok(rows)
+    }
+
+    /// Return the subset of `targets` that already have an inbound semantic edge.
+    ///
+    /// Rust call extraction records receiver method calls with a short
+    /// `Type::method` (or dotted `Type.method()`) target, so a full
+    /// `file::method::Type::method` node can look uncalled even when call sites
+    /// exist. Dead-code analysis uses this probe to downgrade those candidates
+    /// instead of reporting them as definite dead code.
+    pub fn inbound_semantic_edge_targets(
+        &self,
+        targets: &[&str],
+    ) -> Result<std::collections::HashSet<String>> {
+        self.inbound_edge_sources_or_targets(
+            targets,
+            "target_qualified",
+            "calls','references','imports','extends','implements",
+        )
+    }
+
+    /// Return the subset of method `qnames` whose parent `impl` block references
+    /// a trait node, i.e. methods that implement a trait.
+    ///
+    /// Trait implementations can be reached through trait dispatch, which the
+    /// parser does not resolve into inbound edges.
+    pub fn trait_impl_method_qnames(
+        &self,
+        qnames: &[&str],
+    ) -> Result<std::collections::HashSet<String>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut found = std::collections::HashSet::new();
+        for chunk in qnames.chunks(EDGE_TARGET_BATCH) {
+            if chunk.is_empty() {
+                continue;
+            }
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql = format!(
+                "SELECT DISTINCT m.qualified_name
+                 FROM   nodes m
+                 JOIN   nodes impl_node ON impl_node.qualified_name = m.parent_name
+                 WHERE  m.qualified_name IN ({placeholders})
+                   AND  (
+                           COALESCE(json_extract(COALESCE(impl_node.extra_json, 'null'), '$.trait_name'), '') <> ''
+                        OR EXISTS (
+                               SELECT 1 FROM edges e
+                               JOIN   nodes t ON t.qualified_name = e.target_qualified
+                                             AND t.kind = 'trait'
+                               WHERE  e.source_qualified = impl_node.qualified_name
+                                 AND  e.kind = 'references'
+                           )
+                       )"
+            );
+            let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
+                    row.get::<_, String>(0)
+                })
+                .map_err(db_err)?;
+            for row in rows {
+                found.insert(row.map_err(db_err)?);
+            }
+        }
+        Ok(found)
+    }
+
+    fn inbound_edge_sources_or_targets(
+        &self,
+        values: &[&str],
+        column: &str,
+        kinds: &str,
+    ) -> Result<std::collections::HashSet<String>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut found = std::collections::HashSet::new();
+        for chunk in values.chunks(EDGE_TARGET_BATCH) {
+            if chunk.is_empty() {
+                continue;
+            }
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql = format!(
+                "SELECT DISTINCT {column} FROM edges
+                 WHERE  kind IN ('{kinds}') AND {column} IN ({placeholders})"
+            );
+            let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
+                    row.get::<_, String>(0)
+                })
+                .map_err(db_err)?;
+            for row in rows {
+                found.insert(row.map_err(db_err)?);
+            }
+        }
+        Ok(found)
     }
 
     /// All edges targeting `qname` (inbound), any kind, paired with the source

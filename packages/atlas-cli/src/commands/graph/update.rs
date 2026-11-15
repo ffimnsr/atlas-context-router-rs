@@ -112,6 +112,7 @@ fn embed_after_update(repo_root: &str, db_path: &str) -> Result<atlas_engine::Em
         provider: String::new(),
         model: String::new(),
         pending_chunks: 0,
+        pending_chunks_selected: 0,
         embedded_chunks: 0,
         failed_chunks: 0,
         dimension: None,
@@ -134,7 +135,8 @@ fn embed_after_update(repo_root: &str, db_path: &str) -> Result<atlas_engine::Em
             combined.provider = report.provider.clone();
             combined.model = report.model.clone();
         }
-        combined.pending_chunks += report.pending_chunks;
+        combined.pending_chunks = report.pending_chunks;
+        combined.pending_chunks_selected += report.pending_chunks_selected;
         combined.embedded_chunks += report.embedded_chunks;
         combined.failed_chunks += report.failed_chunks;
         combined.model_pulled |= report.model_pulled;
@@ -145,7 +147,7 @@ fn embed_after_update(repo_root: &str, db_path: &str) -> Result<atlas_engine::Em
         // Stop when drained, when the batch was partial, or when a chunk failed
         // after the client's own retries so failures are not counted twice.
         let processed = report.embedded_chunks + report.failed_chunks;
-        if report.pending_chunks < atlas_engine::DEFAULT_EMBED_CHUNK_LIMIT
+        if report.pending_chunks_selected < atlas_engine::DEFAULT_EMBED_CHUNK_LIMIT
             || processed == 0
             || report.failed_chunks > 0
         {
@@ -188,13 +190,13 @@ pub(super) fn print_embed_report(report: &atlas_engine::EmbedChunkReport) {
     if report.model_pulled {
         println!("Downloaded embedding model {}.", report.model);
     }
-    if report.pending_chunks == 0 {
+    if report.pending_chunks_selected == 0 {
         println!("All chunks already have embeddings.");
         return;
     }
     println!(
         "Embedded {}/{} chunks ({} errors).",
-        report.embedded_chunks, report.pending_chunks, report.failed_chunks
+        report.embedded_chunks, report.pending_chunks_selected, report.failed_chunks
     );
 }
 
@@ -503,7 +505,9 @@ pub fn run_update(cli: &Cli) -> Result<()> {
                 if cli.json {
                     eprintln!(
                         "Embedded {}/{} chunks ({} errors).",
-                        report.embedded_chunks, report.pending_chunks, report.failed_chunks
+                        report.embedded_chunks,
+                        report.pending_chunks_selected,
+                        report.failed_chunks
                     );
                 } else {
                     print_embed_report(&report);

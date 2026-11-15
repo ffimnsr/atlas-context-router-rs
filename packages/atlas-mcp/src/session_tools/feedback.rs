@@ -64,10 +64,12 @@ pub fn tool_feedback_record(
         &serde_json::json!({
             "tool": "feedback_record",
             "repo_root": repo_root,
+            "stored": true,
             "record": record,
             "summary": {
                 "record_id": record.id,
                 "analysis_kind": record.analysis_kind,
+                "stored": true,
                 "is_false_positive_evidence": record.is_false_positive_evidence(),
             },
             "warnings": [],

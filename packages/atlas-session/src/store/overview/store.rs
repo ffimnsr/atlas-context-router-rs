@@ -261,6 +261,17 @@ fn matches_subject_kind(record: &OverviewRecord, kind: Option<OverviewSubjectKin
     kind.is_none_or(|kind| record.subject_kind == kind)
 }
 
+/// Normalize records whose graph subject is a file but whose stored kind is a
+/// generic symbol. Older ingests stamped `node_kind: file` without setting
+/// `subject_kind: file`, and readers must report the file subject as a file.
+fn normalize_file_subject_kind(record: &mut OverviewRecord) {
+    if record.node_kind.as_deref() == Some("file")
+        && record.subject_kind != OverviewSubjectKind::File
+    {
+        record.subject_kind = OverviewSubjectKind::File;
+    }
+}
+
 fn matches_freshness(record: &OverviewRecord, freshness: Option<OverviewFreshness>) -> bool {
     freshness.is_none_or(|freshness| record.freshness == freshness)
 }
@@ -444,8 +455,26 @@ impl SessionStore {
             0 => Err(AtlasError::Other(format!(
                 "overview subject '{target}' not found"
             ))),
-            1 => Ok(matches.remove(0)),
+            1 => {
+                let mut record = matches.remove(0);
+                normalize_file_subject_kind(&mut record);
+                Ok(record)
+            }
             _ => {
+                // A canonical file path matches the file subject and every
+                // record that merely lives in that file. Prefer the file
+                // subject so a path target stays unambiguous.
+                if let Some(canonical) = canonical_target.as_deref()
+                    && let Some(index) = matches.iter().position(|record| {
+                        record.canonical_file_path.as_deref() == Some(canonical)
+                            && (record.subject_kind == OverviewSubjectKind::File
+                                || record.node_kind.as_deref() == Some("file"))
+                    })
+                {
+                    let mut record = matches.remove(index);
+                    normalize_file_subject_kind(&mut record);
+                    return Ok(record);
+                }
                 let candidates = matches
                     .iter()
                     .map(|record| {

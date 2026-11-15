@@ -12,6 +12,7 @@ mod health_retrieval;
 mod inventory;
 mod manual;
 mod manual_bounds;
+mod manual_errors;
 mod metrics;
 mod postprocess;
 mod registry;

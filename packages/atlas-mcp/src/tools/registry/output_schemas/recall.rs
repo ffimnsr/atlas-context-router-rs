@@ -241,6 +241,7 @@ pub(crate) fn feedback_record_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({
             "repo_root": { "type": "string" },
+            "stored": { "type": "boolean" },
             "record": { "$ref": "#/$defs/feedback_record" },
             "summary": {
                 "type": "object",
@@ -248,9 +249,15 @@ pub(crate) fn feedback_record_output_schema() -> Value {
                 "properties": {
                     "record_id": { "type": "string" },
                     "analysis_kind": { "type": "string" },
+                    "stored": { "type": "boolean" },
                     "is_false_positive_evidence": { "type": "boolean" }
                 },
-                "required": ["record_id", "analysis_kind", "is_false_positive_evidence"]
+                "required": [
+                    "record_id",
+                    "analysis_kind",
+                    "stored",
+                    "is_false_positive_evidence"
+                ]
             },
             "warnings": { "type": "array", "items": { "type": "string" } },
             "atlas_provenance": { "type": "object" }
@@ -258,6 +265,7 @@ pub(crate) fn feedback_record_output_schema() -> Value {
         &[
             "tool",
             "repo_root",
+            "stored",
             "record",
             "summary",
             "warnings",
