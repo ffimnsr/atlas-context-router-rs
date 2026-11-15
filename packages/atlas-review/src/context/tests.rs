@@ -178,6 +178,7 @@ mod budget;
 mod content;
 mod escalation;
 mod evidence;
+mod priority;
 mod resolve;
 mod review;
 mod spans_tests;

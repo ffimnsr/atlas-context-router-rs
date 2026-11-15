@@ -53,6 +53,29 @@ const COMPRESSION_PROTECTED_TYPES: &[SessionEventType] =
 /// Priority of the deterministic SESSION_SUMMARY rollup event.
 const SUMMARY_PRIORITY: i32 = 85;
 
+/// Retention cap for per-call tool telemetry.
+///
+/// The MCP/hook layer records `CONTEXT_REQUEST` rows carrying `tool` and
+/// `status` for every invocation. Those rows are operational noise, not curated
+/// memory: they must not be re-summarized on every compaction, and a repeat
+/// compaction over an otherwise unchanged ledger must stay a no-op. Keep the
+/// newest rows and decay anything past the cap.
+pub(super) const MAX_TOOL_TELEMETRY_EVENTS: usize = 200;
+
+/// True for per-call tool telemetry rows (`CONTEXT_REQUEST` + `tool` + `status`).
+fn is_tool_invocation_telemetry(event: &SessionEventRow) -> bool {
+    if event.event_type != SessionEventType::ContextRequest {
+        return false;
+    }
+    serde_json::from_str::<Value>(&event.payload_json).is_ok_and(|payload| {
+        payload.get("tool").and_then(Value::as_str).is_some()
+            && payload
+                .get("status")
+                .and_then(Value::as_str)
+                .is_some_and(|status| matches!(status, "start" | "ok" | "error"))
+    })
+}
+
 // ── Public entry point ────────────────────────────────────────────────────────
 
 /// Compact and curate events for `session_id`.
@@ -63,8 +86,13 @@ pub(super) fn compact_session_events(
     store: &mut SessionStore,
     session_id: &SessionId,
 ) -> Result<CurationResult> {
-    let events = store.list_events(session_id)?;
-    let events_before = events.len();
+    let all_events = store.list_events(session_id)?;
+    let events_before = all_events.len();
+    // Tool telemetry is bounded separately so curation stays idempotent; it is
+    // not part of the curated ledger that decay/merge/promote rules operate on.
+    let (mut telemetry_events, events): (Vec<SessionEventRow>, Vec<SessionEventRow>) = all_events
+        .into_iter()
+        .partition(is_tool_invocation_telemetry);
 
     // Idempotency guard: when nothing has been recorded since the previous
     // compaction, curation cannot produce a different outcome. Without this, a
@@ -76,6 +104,7 @@ pub(super) fn compact_session_events(
             .as_deref()
             .filter(|last| !last.is_empty())
         && events.iter().all(|event| event.created_at.as_str() <= last)
+        && telemetry_events.len() <= MAX_TOOL_TELEMETRY_EVENTS
     {
         return Ok(CurationResult {
             events_before,
@@ -92,6 +121,18 @@ pub(super) fn compact_session_events(
     let mut decay_ids: Vec<i64> = Vec::new();
     let mut merge_ids: Vec<i64> = Vec::new();
     let mut dedup_ids: Vec<i64> = Vec::new();
+
+    // ── 0. Decay: bound per-call tool telemetry to MAX_TOOL_TELEMETRY_EVENTS ──
+    if telemetry_events.len() > MAX_TOOL_TELEMETRY_EVENTS {
+        telemetry_events.sort_unstable_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| b.id.cmp(&a.id))
+        });
+        for old in telemetry_events.into_iter().skip(MAX_TOOL_TELEMETRY_EVENTS) {
+            decay_ids.push(old.id);
+        }
+    }
 
     // ── 1. Decay: keep only MAX_FILE_READ_PER_PATH per file ──────────────────
     {

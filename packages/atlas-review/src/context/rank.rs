@@ -110,8 +110,10 @@ pub(super) fn trim_context(result: &mut ContextResult) {
             .partition(|n| n.selection_reason == SelectionReason::DirectTarget);
 
         let reserve_non_target = usize::from(
-            result.request.intent == ContextIntent::Review
-                && max_nodes > 1
+            matches!(
+                result.request.intent,
+                ContextIntent::Review | ContextIntent::File
+            ) && max_nodes > 1
                 && !rest.is_empty()
                 && targets.len() >= max_nodes,
         );
@@ -122,6 +124,21 @@ pub(super) fn trim_context(result: &mut ContextResult) {
         result.nodes.extend(rest.into_iter().take(budget));
     }
     let dropped_nodes = original_node_count.saturating_sub(result.nodes.len());
+
+    // Files are derived from the surviving nodes. Impact traversal can collect
+    // distant neighbours whose nodes are then trimmed; keeping their file
+    // entries reports files the caller never receives, which reads like
+    // unrelated context.
+    let surviving_paths: HashSet<&str> = result
+        .nodes
+        .iter()
+        .map(|node| node.node.file_path.as_str())
+        .collect();
+    if !surviving_paths.is_empty() {
+        result
+            .files
+            .retain(|file| surviving_paths.contains(file.path.as_str()));
+    }
 
     let remaining_qnames: HashSet<&str> = result
         .nodes

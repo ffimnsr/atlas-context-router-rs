@@ -419,48 +419,145 @@ Run context: full `AGENTS_MCP_TESTS.md` sweep with the graph healthy (962 files 
 
 ## Open Defects — MCP Tool Sweep (2026-11-14, run 3 @ `5663106e`)
 
-Run context: full `AGENTS_MCP_TESTS.md` sweep on `main` @ `5663106e`, clean working tree, graph healthy (972 files / 27210 nodes / 105689 edges), `doctor` 17/17, schemas graph 21/21, content 12/12, session 16/16, broker v1.7.8. ~230 assertions across Tools 1-78 and 81: 13 FAIL, 5 PARTIAL, 6 SKIP-destructive (Tools 57.1-57.3 `purge_saved_context`, 50.2 `mark_consumed=true`, 73.2 `apply=true`), Tools 79 `build_graph` and 80 `update_graph` not run. Clean-tree change tools (19-23) returned well-formed empty bundles; that is expected behavior, not a defect. Every item below was observed against live responses by sweep agents and still needs a focused repro before editing.
+Run context: full `AGENTS_MCP_TESTS.md` sweep on `main` @ `5663106e`, clean working tree, graph healthy (972 files / 27210 nodes / 105689 edges), `doctor` 17/17, schemas graph 21/21, content 12/12, session 16/16, broker v1.7.8. ~230 assertions across Tools 1-78 and 81: 13 FAIL, 5 PARTIAL, 6 SKIP-destructive (Tools 57.1-57.3 `purge_saved_context`, 50.2 `mark_consumed=true`, 73.2 `apply=true`), Tools 79 `build_graph` and 80 `update_graph` not run. Clean-tree change tools (19-23) returned well-formed empty bundles; that is expected behavior, not a defect. Every item below carries an exact `Repro:` argument set and `Observed:` field values captured on 2026-11-15; two earlier agent claims were withdrawn after parent repro (`traverse_graph` is budget eviction, not a tier filter; `read_file_excerpt` Tool 42.2 is correct). Remaining `Observed:` values come from the sweep run and should be re-checked with the listed repro.
 
-### Regressions against previously-fixed items
+### Regressions and re-verification — traversal, context, compaction, clusters
 
-- [ ] **fix(traverse_graph)**: traversal drops same-package call edges, so file counts under-report. Observed `from_qn=packages/atlas-core/src/health.rs::fn::classify_graph_store_error`, `max_depth=2` → `impacted_files=["packages/atlas-core/src/health.rs"]`, `impacted_file_count=1` at both `max_nodes=10` and `15`, while `symbol_neighbors` and `trace_calls` both see the `same_package` (confidence 0.65) edge `packages/atlas-core/src/readiness.rs::fn::derive_integrity_state -> classify_graph_store_error`. Probable recurrence of the run-2 `Store::traverse_from_qnames` tier filter item (see `get_impact_radius` fix above): the filter still discards `same_package` edges. Align traversal edge selection with `trace_calls`/`symbol_neighbors` and keep `same_package` confidence 0.65 edges. Regression: `traverse_graph_keeps_same_package_call_edges`.
-- [ ] **fix(get_context)**: bounded context under-fills the node budget and prefers callees over distance-1 callers. Observed Tool 18.1 (`target=classify_graph_store_error`, `token_budget=1000`, `max_nodes=5`) → `node_count=2` (target + one callee), `nodes_dropped=30`, caller `internal_error_code` absent despite headroom. Tool 18.2 (`target=packages/atlas-core/src/health.rs`) attached unrelated `packages/atlas-engine/src/lang_policy.rs` and `packages/atlas-session/src/overview/levels.rs` while missing the real caller `packages/atlas-core/src/readiness.rs`. This contradicts the earlier trim-priority fix (2026-11-13 item above) and is not the same as truncation. Rank `Caller`/`Callee` distance-1 units before `ImpactNeighbor`/`TestAdjacent`, and prefer same-package callers for file targets. Regressions: `get_context_includes_direct_callers_before_dropping`, `get_context_file_target_prefers_same_package_callers`.
-- [ ] **fix(compact_session)**: repeated compaction still reports `no_op:false`. Observed Tool 49.2: calls 2 and 3 removed 1 and 4 events; only an empty ledger yields `no_op:true` (Tool 49.3 passed on an isolated session). Needs repro on a quiescent ledger, since the sweep recorded `record_session_event` traffic between calls concurrently. If the ledger genuinely changed, the current `no_op` derivation is correct and the guide item is wrong; if not, the `last_compaction_at` short-circuit (run-2 fix) is not firing. `packages/atlas-session/src/store/curation.rs`.
-- [ ] **fix(concept_clusters)**: multi-seed runs now return zero clusters. Observed Tool 17.2 with seeds `packages/atlas-core/src/health.rs` + `packages/atlas-core/src/readiness.rs` → `clusters: []`, `seed_file_count: 2`. The run-2 fix that removed seed-only pseudo-clusters over-corrected: excluding seeds leaves no non-seed members. Either report intra-seed coupling or fall back to single-seed expansion when the non-seed set is empty. Regression: `cluster_by_shared_symbols_multi_seed_reports_coupling`.
-- [ ] **fix(find_complex_functions)**: requested `complexity_threshold` is not echoed and the governing metric is mislabeled. Observed Tool 35.1 (`complexity_threshold=15`, `limit=5`): every hit had cyclomatic >= 15, but payload reported `threshold_kind:"loc"`, `governing_threshold:80`, `details_omitted:true`. Tool 35.3 emits `threshold_kind:"cyclomatic_complexity"` while the guide asserts `cyclomatic`. Reproduces the run-2 regression class (default mode `large-or-complex` lets LOC/nesting gates dominate). `packages/atlas-reasoning/src/engine/large_functions.rs`.
-- [ ] **fix(find_similar_functions)**: no-candidate hint advertises the config floor instead of the requested floor. Observed Tool 36.3 (`min_score=0.6`): zero matches, `no_candidates_hint` cites `0.22`. Hint should render the effective requested threshold. Same file/flow as the run-2 threshold-hint fix.
+- [x] **fix(traverse_graph)**: cross-file `calls` edges are evicted when the node budget runs out, because same-file `contains`/`references` and transitive rows are emitted first. **Fixed:** the traversal CTE now carries an edge-kind priority (`calls` 0, `implements` 1, `references` 2, `imports` 3, `contains` 4) and orders by `(depth, priority, qname)`; impacted nodes are re-sorted into CTE order before the budget truncation (the `IN (...)` fetch previously returned storage order, so ordering was lost). New test `traverse_keeps_cross_file_calls_edge_under_small_node_budget` in `packages/atlas-store-sqlite/src/store/tests/traverse_priority.rs`.
+  - Repro: `traverse_graph {"from_qn":"packages/atlas-core/src/health.rs::fn::classify_graph_store_error","max_depth":2,"max_nodes":10}`
+  - Observed: `impacted_files=["packages/atlas-core/src/health.rs"]`, `summary.impacted_file_count=1`, `impacted_symbol_count=9`, `emitted_edge_count=19`, `budget_hit=true`, `truncated=true`, `truncation_reason="traversal capped by node or edge limits"`
+  - Control: same call with `max_nodes=30` → `impacted_files` gains `packages/atlas-core/src/readiness.rs`, `impacted_file_count=2`, `impacted_symbol_count=27`, `emitted_edge_count=55`, `budget_hit=false`
+  - Expected (guide 14.2): readiness.rs present and `impacted_file_count=2` at `max_nodes=10`
+  - Root cause: the inbound `calls` edge `readiness.rs::fn::derive_integrity_state -> health.rs::fn::classify_graph_store_error` ranks behind same-file `contains`/`references` and transitive rows. Reserve budget for cross-file inbound `calls` edges, or rank by edge kind before transitive rows (same class as the run-2 `impact_radius` seed-budget fix).
+  - Regression: `traverse_graph_keeps_cross_file_call_edges_at_small_node_budget`
+- [x] **fix(get_context)**: symbol target drops the direct caller while the node budget still has headroom, and the token budget is spent on linked decisions. **Fixed:** `Caller` now outranks `Callee` both in ranking (`caller_priority` 85 vs `callee_priority` 80) and in payload trim order (`node_keep_priority`: caller 6, callee 5), so a higher-scored public callee no longer evicts the dependent. Tests `payload_trim_keeps_caller_before_higher_scored_callee`.
+  - Repro: `get_context {"target":{"kind":"query","query":"classify_graph_store_error"},"token_budget":1000,"max_nodes":5}`
+  - Observed: `node_count=2` (`direct_target` + callee `is_schema_mismatch_error`), `nodes_dropped=30`, `budget_observed=32`, `payload_truncation.omitted_node_count=3`, `tokens_estimated=994` of `token_budget_applied=1000`, `linked_decisions` count 3; caller `internal_error_code` absent from `nodes`/`ranked_symbols`
+  - Expected: distance-1 caller `packages/atlas-core/src/health.rs::fn::internal_error_code` present (node cap 5, 2 used)
+  - Root cause: caller unit is ranked below the callee branch and never backfilled; the payload is also at 994/1000 tokens with three `linked_decisions`, so decisions compete with graph units despite the run-2 item claiming decisions are attached only after the budget is enforced.
+  - Regression: `get_context_symbol_target_includes_direct_caller`
+- [x] **fix(get_context)**: file target spends the whole node budget on same-file distance-0 symbols and lists unrelated impact-neighbor files. **Fixed:** `trim_context` reserves a neighbor slot for `ContextIntent::File` (not just Review), a file target now defaults to depth 1 when the caller passes no `max_depth`, and file entries collected from trimmed-away impact neighbors are pruned so `files` matches the delivered nodes. Verified with `atlas context --file packages/atlas-core/src/health.rs --max-nodes 10`: files are `health.rs` + `readiness.rs`, neighbor is `GraphReadiness::derive`. Test `file_target_reserves_neighbor_slot_and_stops_at_one_hop`.
+  - Repro: `get_context {"target":{"kind":"file","file":"packages/atlas-core/src/health.rs"},"max_nodes":10}`
+  - Observed: `context_files` = health.rs, kinds.rs, model/graph.rs, model/sufficiency.rs, readiness.rs, `packages/atlas-engine/src/lang_policy.rs`, `packages/atlas-session/src/store/overview/levels.rs`; all 10 `nodes` are `distance:0` health.rs symbols; `nodes_dropped=10`; `edges=17`, all health.rs-internal; `seed_budgets[file_symbols]` accepted 20 of 26 requested
+  - Expected: at least one cross-file caller node (`readiness.rs::fn::derive_integrity_state`) and no unrelated `lang_policy.rs` / `overview/levels.rs`
+  - Root cause: file seeding expands `file_symbols` first and consumes the node budget, while impact neighbours are emitted as file names only. Allocate a share for impact-neighbour symbols and filter neighbours by edge kind/package proximity.
+  - Regression: `get_context_file_target_includes_cross_file_caller`
+- [x] **fix(compact_session)** — verdict revised: idempotency holds on a quiescent ledger; the guide's immediate-repeat assertion is what fails. **Fixed (code):** per-call tool telemetry (`CONTEXT_REQUEST` rows carrying `tool` + `status`) is now partitioned out of the curated ledger, bounded by `MAX_TOOL_TELEMETRY_EVENTS = 200`, and excluded from summary generation. A repeat compaction over an otherwise unchanged ledger is now `no_op:true` even though the wrapper recorded `start`/`ok` for the previous call. Tests `compact_session_immediate_repeat_is_no_op_with_tool_telemetry`, `compact_session_bounds_tool_telemetry_retention` in `packages/atlas-session/src/store/tests/compaction/telemetry_retention.rs`. Guide 49.2 keeps its original assertion.
+  - Repro (serial, no other traffic): `compact_session {}` three times
+  - Observed: call 1 `135 → 54`, `removed_events=82`, `promoted_events=1`, `no_op=false`; call 2 `56 → 55`, `removed_events=2`, `no_op=false`; call 3 `55 → 55`, `removed_events=0`, `no_op=true`
+  - Cause: the ledger grew `54 → 56` between calls, i.e. compaction itself records curation/bookkeeping events that the next pass decays
+  - Expected (guide 49.2): second immediate call reports `no_op:true`
+  - Fix options: stop persisting compaction bookkeeping as decayable events, or relax guide 49.2 to require `no_op:true` only when no event is newer than `session_meta.last_compaction_at`
+  - Regression: `compact_session_immediate_repeat_is_no_op`
+- [x] **fix(concept_clusters)**: multi-seed runs return zero clusters because seed exclusion leaves no members and there is no fallback. **Fixed:** seed↔seed pairs with genuine shared symbols are collected separately, and when no non-seed cluster exists one concept reports the coupled seeds. No shared symbol still yields an empty list. Test updated in `packages/atlas-search/src/semantic.rs` (`cluster_by_shared_symbols_never_returns_seed_only_clusters`).
+  - Repro: `concept_clusters {"files":["packages/atlas-core/src/health.rs","packages/atlas-core/src/readiness.rs"],"limit":5}`
+  - Observed: `clusters:[]`, `seed_files` both present, `summary.seed_file_count=2`, `truncated:false`
+  - Counter-evidence: they are genuinely coupled — `cross_file_links health.rs` reports readiness.rs at coupling 4.0 through shared symbol `classify_graph_store_error`
+  - Expected (guide 17.2): non-empty clusters, or an explicit seed-pair coupling entry instead of an empty list
+  - Root cause: the run-2 seed-only-cluster fix removed seed members without adding a multi-seed fallback. Report intra-seed coupling when the non-seed set is empty.
+  - Regression: `cluster_by_shared_symbols_multi_seed_reports_coupling`
+- [x] **fix(find_similar_functions)**: no-candidate hint and `thresholds` report the config floor, not the requested floor. **Fixed:** the effective thresholds now set `low = min_score` (medium/high untouched), and matching, score bands, echoed `thresholds`, and the hint all use it. Test `similar_function_hint_reflects_requested_floor` in `packages/atlas-reasoning/src/engine/tests/similarity.rs`.
+  - Repro: `find_similar_functions {"symbol":"packages/atlas-core/src/health.rs::fn::classify_graph_store_error","min_score":0.6,"limit":5}`
+  - Observed: `matches:[]`, `findings:[]`, `no_candidates_hint="no candidate callables met the similarity floor (0.22); lower min_score or widen include_same_file"`, `thresholds={low:0.22, medium:0.55, high:0.72}`
+  - Expected: hint and `thresholds.low` reflect the effective requested floor 0.6
+  - Regression: `find_similar_functions_hint_uses_requested_floor`
 
-### New defects — retrieval, traversal, and context
+### New defects — retrieval, module inference, and analysis
 
-- [ ] **fix(embed_chunks)**: dry-run pending count is capped by the request limit, so backlog is unverifiable. Observed `dry_run=true` with `limit=5` → `pending_chunks=5`, `limit=10` → `10`, default → `1000`; provider reported `unconfigured`. Report the true backlog total separately from the capped count (e.g. `pending_chunks_total` + `pending_chunks_selected`) and include the provider URL/config state.
-- [ ] **fix(infer_modules)**: `limit` slices by `module_id`, not by symbol count, and truncation is silent. Observed Tool 38.2 (`limit=5`): returned `fuzz`, `adapters`, `agent-events`, `cli`, `contentstore` while `cargo:packages/atlas-mcp` (2893 nodes) was excluded; 25/30 modules unreachable with no `modules_truncated` or total field. Rank by `node_count` before limiting or expose the full count plus a truncation flag. Regression: `infer_modules_limits_by_node_count`.
-
-### New defects — analysis quality
-
-- [ ] **fix(analyze_dead_code)**: trait-impl and receiver method calls resolve as no inbound edges, producing `definite` false positives. Observed Tool 29.1: `packages/atlas-core/src/clock.rs::method::SystemClock::now_utc` reported `certainty:high`, `certainty_class:definite` although `SystemClock.now_utc()` is called at `clock.rs:38`; same class for `Clock::now_utc` (trait declaration) and `Budget*::default` impls. Resolve qualified/UFCS method calls and downgrade trait-impl candidates that have no call-graph resolution. Regression: `dead_code_ignores_called_trait_impl_methods`.
-- [ ] **fix(analyze_architecture)**: synthetic owner metadata dominates findings and inflates coupling. Observed Tool 31.1: `.atlas/synthetic/owners/workspace/cargo` (confidence 0.62, 1 node) ranks first with coupling 22 and sits upstream of all 22 package modules. Exclude `.atlas/synthetic/**` owner nodes from architecture findings, or report them in a separate synthetic bucket. Regression: `architecture_findings_exclude_synthetic_owners`.
+- [ ] **fix(embed_chunks)**: dry-run pending count is capped by the request limit, so the true backlog is unverifiable.
+  - Repro: `embed_chunks {"dry_run":true,"limit":5}` then `{"dry_run":true,"limit":10}`
+  - Observed: `pending_chunks=5` then `pending_chunks=10`; `provider="unconfigured"`, `model="all-minilm"`, `model_pulled=false`, `embedded_chunks=0`, `dimension=null`
+  - Expected: `pending_chunks` is the stable backlog total; report `min(total, limit)` separately (e.g. `pending_chunks_selected`)
+  - Repro note: with no `[search.embedding] url`, a true backlog cannot be cross-checked; compare against `get_context_stats.retrieval_index` (20 files indexed, 77 chunks written)
+  - Regression: `embed_chunks_dry_run_reports_total_backlog`
+- [ ] **fix(infer_modules)**: `limit` slices in module-id order, not by symbol count, so the largest module is excluded.
+  - Repro: `infer_modules {"limit":5}`
+  - Observed: returned `module_id`s in this order — `cargo:fuzz/Cargo.toml` (175 nodes), `cargo:packages/atlas-adapters/Cargo.toml` (225), `cargo:packages/atlas-agent-events/Cargo.toml` (324), `cargo:packages/atlas-cli/Cargo.toml` (1657), `cargo:packages/atlas-contentstore/Cargo.toml` (267); `module_count=30`, `modules_truncated=true`; `cargo:packages/atlas-mcp/Cargo.toml` (2893 nodes) never returned
+  - Expected: top 5 by `node_count`, or an explicit ordering field so callers can re-sort; `modules_truncated` already exists and works
+  - Root cause: page slice happens before count ranking. Regression: `infer_modules_limits_by_node_count`
+- [ ] **fix(analyze_dead_code)**: receiver method calls and trait impls resolve with no inbound edges, producing `definite` false positives.
+  - Repro: `analyze_dead_code {"subpath":"packages/atlas-core/src","limit":5}`
+  - Observed candidates (all `certainty:"high"`, `certainty_class:"definite"`, reasons `["no inbound call, reference, or import edges","method with zero callers"]`): `budget.rs::method::BudgetReport::default` L380, `budget.rs::method::BudgetPolicy::default` L461, `budget.rs::method::BudgetManager::default` L655, `clock.rs::method::Clock::now_utc` L8, `clock.rs::method::SystemClock::now_utc` L15; `summary.candidate_count=29`, `certainty_counts.high=28`
+  - Counter-evidence (verified in source): `packages/atlas-core/src/clock.rs:38` is `SystemClock.now_utc();` inside `pub fn now_utc()`, so a call site exists but no `calls` edge is recorded
+  - Expected: called receiver methods and trait/`Default` impls are not emitted as definite dead code; downgrade when the receiver type is known but the method edge is unresolved
+  - Regression: `dead_code_ignores_called_trait_impl_methods`
+- [ ] **fix(analyze_architecture)**: synthetic owner metadata ranks first and inflates module coupling.
+  - Repro: `analyze_architecture {"limit":5,"verbose":false}`
+  - Observed: first finding id `architecture:module:module:.atlas/synthetic/owners/workspace/cargo`, message `module module:.atlas/synthetic/owners/workspace/cargo coupling 22.00 exceeds threshold 15.00`, score 1022; the first five `module_edges` all have `source_module="module:.atlas/synthetic/owners/workspace/cargo"` pointing at cargo packages; `counts.high_coupling_module_count=1`, `module_count=30`, `modules_truncated=true`; remaining findings are file hotspots (`Cargo.toml` 174 nodes, `packages/atlas-mcp/Cargo.toml` 148)
+  - Expected: `.atlas/synthetic/**` owner nodes excluded from module coupling/findings, or reported in a separate synthetic bucket
+  - Regression: `architecture_findings_exclude_synthetic_owners`
 
 ### New defects — minor schema and contract inconsistencies
 
-- [ ] `feedback_record`: success returns no `stored` boolean (Tool 64.1 asserts it); the only success signal is `summary.record_id`. Add `stored:true` to the stable envelope or correct the guide.
-- [ ] `get_context_stats`: response omits the `tool` and `warnings` envelope keys that every sibling tool emits. Normalize the envelope.
-- [ ] `overview_show`: a file-level record reports `subject_kind:"symbol"` while `overview_export` reported `subject.kind:"file"` for the same subject. Reconcile subject-kind derivation.
-- [ ] `man`: unsupported-namespace error is plain text with a stray space before the semicolon (`... 'mcp' is supported ;`) and no `invalid_input` error code. Route through the shared input classifier.
-- [ ] `tool_search`: multi-token queries have no score floor, so generic tokens flood results. Observed Tool 75.2 (`dead code detection`): `analyze_dead_code` at 100 plus 8 unrelated tools at 10 (`build_graph`, `doctor`, `experience_inspect`, `memoir_create`, `query_graph`, `search_content`, `search_files`, `search_text_assets`). Apply a relative cut-off for multi-token queries.
-- [ ] `tool_list`: descriptors expose `result_contract:"stable-object"` but no `outputSchema`, even though `tool_help` documents `output_response` fields. Either advertise the output schema or state that `tool_help` is the schema surface.
+- [ ] `feedback_record`: success does not return the `stored` boolean asserted by Tool 64.1.
+  - Repro: `feedback_record {"tool":"analyze_safety","symbol":"packages/atlas-core/src/health.rs::fn::classify_graph_store_error","predicted":"safety score >= 0.5","actual":"safety score 0.39 (band risky)","correction":"recompute with fan_in 4, fan_out 3, cross_module 1"}` (appends one record to `session.db`)
+  - Observed: `record.id`, `record.predicted`/`record.actual`/`record.correction`, `summary.record_id`, `summary.is_false_positive_evidence=true`, `repo_root`; `analysis_kind` defaults to `""`; no `stored` key
+  - Expected: either add `stored:true` to the sweep envelope or change 64.1 to assert `summary.record_id`
+- [ ] `get_context_stats`: envelope omits `tool` and `warnings` keys that sibling tools emit.
+  - Repro: `get_context_stats {}`
+  - Observed keys: `agent_id`, `bridge_dir_path`, `bridge_file_count=0`, `chunk_count=59`, `content_db_path`, `event_count=131`, `retrieval_index`, `session_db_path`, `session_id`, `source_count=14` — no `tool`, no `warnings`
+  - Expected: same envelope contract as other stable-object tools
+- [ ] `overview_show`: a canonical file path is ambiguous and the file subject is typed `symbol`, so Tool 72.1 cannot pass.
+  - Repro: `overview_show {"target":"packages/atlas-core/src/health.rs"}`
+  - Observed: `overview subject 'packages/atlas-core/src/health.rs' is ambiguous; candidates: packages/atlas-core/src/health.rs::fn::classify_graph_store_error (function), packages/atlas-core/src/health.rs (symbol)`
+  - Expected (guide 72.1): the canonical file subject resolves and returns the file record; the file node should report `subject_kind:"file"` as `overview_export` does
+  - Fix: exact canonical-path match must precede qname/prefix matching, and file subjects must be stamped `file`
+- [ ] `man`: unsupported-namespace rejection is plain text with a stray space and no structured error code.
+  - Repro: `man {"namespace":"cli","tool_name":"query_graph"}`
+  - Observed: `unsupported manual namespace 'cli' ; only 'mcp' is supported Use namespace 'mcp' with an exact exported tool name, then retry.`
+  - Expected: `invalid_input` code plus clean punctuation, routed through the shared input classifier
+- [ ] `tool_search`: multi-token queries have no score floor, so generic tokens flood results.
+  - Repro: `tool_search {"query":"dead code detection","limit":10}`
+  - Observed: `returned_matches=9`, `total_matches=9`; top `analyze_dead_code` score 100, then eight tools at score 10 from the single token `code`/`detection`: `build_graph`, `doctor`, `experience_inspect`, `memoir_create`, `query_graph`, `search_content`, `search_files`, `search_text_assets`
+  - Expected: either a relative cut-off for multi-token queries or an explicit `minimum_score` input
+- [ ] `tool_list`: descriptors expose `result_contract:"stable-object"` but no `outputSchema`, although `tool_help` documents `output_response` fields.
+  - Repro: `tool_list {"category":"graph"}` (full inventory: omit `category`, or `{"include_schemas":true}` scoped by category to stay within budget)
+  - Observed: 81 tools total; each descriptor has `name`, `title`, `category`, `description`, `read_only`, `destructive`, `idempotent`, `state_changing`, `open_world`, `result_contract`; no `outputSchema` key
+  - Expected: either advertise output schemas or state that `tool_help` is the schema surface
 
 ### Doc drift — align `AGENTS_MCP_TESTS.md` with actual response shapes
 
-- [ ] Tool 25.3 passes `stage:"metrics"`, which is not a valid stage id (enum is `flows`, `communities`, `architecture_metrics`, `query_hints`, `large_function_summaries`); the tool correctly returns structured `unknown_stage`. Update 25.3 and its CLI parity command to `architecture_metrics`. Earlier item claimed Tool 25 was aligned, so this line was missed.
-- [ ] Tool 74.1 asserts exactly 80 tools; the registry exports 81, and the guide's own section title says 81. Change the assertion to the current count (or a `>= 80` floor plus a name-set check).
-- [ ] Tool 42.2 passes `selector.ranges` as raw `[start, end]` pairs; the input schema has no `ranges` key and requires `selector.line_ranges: [{start_line, end_line}]`. Update the argument block.
-- [ ] Tool 70.1/70.3 payloads omit `schema_version` and a description/non-empty detail array, so ingest is rejected; `input` is documented as an inline alias but only `path`/`analysis` work. Update the fixtures and the assertion on `ingested` (the tool returns record metadata, not an `ingested` boolean).
-- [ ] Tool 77.1 asserts `structuredContent.manual`; the payload is flat (`description`, `input_args`, `input_contract`, `output_response`, `usage`). Update the field paths.
-- [ ] Tool 5.2 asserts keyed `edges_by_kind.calls`; the payload and output schema emit `[kind, count]` pairs (Tool 5.1 already documents pairs). Update 5.2 to the pair shape.
-- [ ] Tool 9.1 asserts `summary.total_matches`; actual keys are `summary.match_count` and `summary.returned_count`. Also note `truncated:true` reflects remaining FTS candidates, not a clipped page.
-- [ ] Tools 33.1/33.2 assert `details.*` while passing `verbose:false`; compact policy sets `details_omitted:true` and keeps hub/bottleneck only in `ranking_reason` and the chain only in `id`/`message`. Either pass `verbose:true` or retarget the assertions.
-- [ ] Costly defaults worth documenting as bounded usage: `analyze_metrics` without `limit` emits ~40 KB; `postprocess_graph` dry-run inlines all 317 communities (~26k node names); `tool_help`/`man` payloads are 10-20 KB; `get_minimal_context` on a commit delta emits unbounded `relevant_edges`.
+- [ ] Tool 25.3 passes `stage:"metrics"`, which is not a valid stage id; the tool correctly fails structured.
+  - Repro: `postprocess_graph {"stage":"metrics","dry_run":true}`
+  - Observed: `summary.ok=false`, `summary.state="failed"`, `summary.error_code="unknown_stage"`, `summary.message="unknown postprocess stage 'metrics'"`, `summary.supported_stage_count=5`, `planned_stages=[]`, `scope.stage_filter="metrics"`
+  - Fix: update 25.3 and its CLI parity line to `architecture_metrics` (valid set: `flows`, `communities`, `architecture_metrics`, `query_hints`, `large_function_summaries`). Previous run marked Tool 25 aligned; this line was missed.
+- [ ] Tool 74.1 asserts exactly 80 tools; the registry exports 81 and the guide's section title says 81.
+  - Repro: `tool_list {}` and read `total_tools` (use `{"category":"graph"}` to keep the payload small; `{"include_schemas":true}` is large)
+  - Observed: `total_tools=81`; per-category probe returned `returned_tools=6` with `applied_category:"health"`
+  - Fix: assert the current count, or a `>= 80` floor plus a name-set check.
+- [ ] Tool 70.1/70.3 payloads are rejected.
+  - Repro: `overview_ingest {"analysis":{"subject":"packages/atlas-core/src/health.rs","summary":"Core error classification and graph health diagnostics module","confidence":0.95}}`
+  - Observed: `missing field `schema_version``; a description or non-empty detail array is also required; success returns record metadata rather than an `ingested` boolean
+  - Fix: update fixtures and assertions. Note 72.1 is still ambiguous for canonical file paths — see the `overview_show` defect.
+- [ ] Tool 77.1 asserts `structuredContent.manual`; the payload is flat.
+  - Repro: `man {"namespace":"mcp","tool_name":"query_graph"}` and `man {"namespace":"cli","tool_name":"query_graph"}`
+  - Observed: flat keys `description`, `input_args`, `input_contract`, `output_response`, `usage`, `payload_truncated`; bad namespace returns `unsupported manual namespace 'cli' ; only 'mcp' is supported Use namespace 'mcp' with an exact exported tool name, then retry.`
+  - Fix: update 77.1 field paths and 77.3 expected rejection text.
+- [ ] Tool 5.2 asserts keyed `edges_by_kind.calls`; the payload is a pair array.
+  - Repro: `debug_graph {"limit":5}`
+  - Observed: `edges_by_kind=[["calls",76604],["contains",26330],["references",2592],["imports",159],["implements",4]]`, `nodes_by_kind` pairs, `top_files` length 5, `orphan_node_count=5`
+  - Fix: update 5.2 to the pair shape, matching 5.1 and `registry/output_schemas/health.rs`.
+- [ ] Tool 9.1 asserts `summary.total_matches`; actual keys are `match_count`/`returned_count`.
+  - Repro: `query_graph {"text":"classify_graph_store_error","limit":5}`
+  - Observed: `summary.match_count=5`, `summary.returned_count=5`, `truncated=true`; `truncated` reflects remaining FTS candidates, not a clipped page
+  - Fix: assert `summary.match_count >= 1` and drop the `total_matches` path.
+- [ ] Tools 33.1/33.2 assert `details.*` while passing `verbose:false`; compact policy sets `details_omitted:true` and keeps hub/bottleneck in `ranking_reason` and the chain only in `id`/`message`.
+  - Repro: `analyze_patterns {"limit":5,"verbose":false}` then `{"limit":5,"verbose":true}`
+  - Fix: either pass `verbose:true` in those tests or retarget the assertions.
+- [ ] Tool 35.1 needs a semantics decision, not just a field rename.
+  - Repro: `find_complex_functions {"complexity_threshold":15,"limit":5}`
+  - Observed: every candidate carries `cyclomatic_complexity` 32-63, `complexity_threshold:15`, `complex_match:true`, and `loc` 535-654 with `threshold_kind:"loc"`, `governing_threshold:80`, `details_omitted:true`; `ranking_reason` reads `loc 654/80; cyclomatic 46/15; cognitive 137/20; ...`
+  - Fix: LOC genuinely has the largest excess, so the current rule is self-consistent while guide 35.1 expects `threshold_kind:"cyclomatic"` in `details`. Either expose `details` in compact mode or assert per-candidate `cyclomatic_complexity >= complexity_threshold`; also reconcile 35.3's `"cyclomatic_complexity"` with the guide's `"cyclomatic"`.
+- [x] Tool 42.2 is **verified correct** — `read_file_excerpt {"file":"packages/atlas-core/src/health.rs","selector":{"kind":"ranges","ranges":[[44,48],[68,72]]}}` returns two snippets (`lines.emitted=10`, `ranges.emitted=2`). Do not change this fixture; the earlier run-3 report of a schema mismatch was a harness error.
+- [ ] Clarify orphan-count scope: `db_check` reports `orphan_node_count=0` while `debug_graph` reports `orphan_node_count=5`.
+  - Repro: `db_check {"limit":10}` then `debug_graph {"limit":5}`
+  - Observed: `db_check.summary.orphan_node_count=0`, `debug_graph.summary.orphan_node_count=5`; the five are `kind:"file"`: `fuzz/fuzz_targets/parser_handlers.rs`, `fuzz/fuzz_targets/regex_sql_udf.rs`, `packages/atlas-cli/tests/cli_quality_gates.rs`, `packages/atlas-contextsave/src/lib.rs`, `packages/atlas-parser/tests/fixtures/javascript/bad_syntax.js`
+  - Fix: state the difference (structural query excludes file kind) instead of implying parity.
+- [ ] Costly defaults worth documenting as bounded usage.
+  - Repro: `analyze_metrics {}` (no `limit`); `postprocess_graph {"dry_run":true}`; `tool_help {"name":"query_graph"}`; `man {"namespace":"mcp","tool_name":"query_graph"}`
+  - Observed: `analyze_metrics` ~40 KB; community dry-run inlines all 317 communities (~26k node names); `tool_help`/`man` 10-20 KB each with `payload_truncated`
+  - Fix: document byte/token expectations and recommend bounded args.
 
 ### Test-run leftovers (cleanup pending)
 
-- [ ] remove sweep fixtures from run 3: saved artifacts `6569e5f087a400ecabb0631d8a586d40` and `2607fea7279953d892089ed6286e8ab6` plus inline `mcp-test: short_test_note` / `mcp-test: mcp_tool_benchmark`; memories `5ccfae557fcfc4d8f9e9b3729806d55d274d019092bf9f70edeac2a97c0c3d45`, `66f53788c0602f2530c37dae4d7da9be298bf029eb0384feeff5ac7353dea38d`, `5dde1dcd842c0dd4ea1a7ea3584718915b69ea7c35e1c395df9df255dfd59409`; memoir graphs `mcp-test-ArchitectureConcepts` (project) and `mcp-test-SessionInvestigation` (session); overview records `f18d2d45…` (health.rs), `ad243f03…` (classify_graph_store_error), `d945b532…` (packages/atlas-mcp); feedback records logged during the sweep (`8a063457…`, `b83430be…`, `7ce30e21…`, `05e3ee2c…`, `034a8ef2…`, `e655891b…`, `093410b7…`, `666742db…`, `0b12204b…`) are intentional defect evidence and must stay; session events `2624`, `2634`, `2647`, `2722`, `2725`, `2728`. `mcp-sweep-arch` memoir graph was already created and deleted during the run.
+- [ ] remove sweep fixtures from run 3: saved artifacts `6569e5f087a400ecabb0631d8a586d40` and `2607fea7279953d892089ed6286e8ab6` plus inline `mcp-test: short_test_note` / `mcp-test: mcp_tool_benchmark`; memories `5ccfae557fcfc4d8f9e9b3729806d55d274d019092bf9f70edeac2a97c0c3d45`, `66f53788c0602f2530c37dae4d7da9be298bf029eb0384feeff5ac7353dea38d`, `5dde1dcd842c0dd4ea1a7ea3584718915b69ea7c35e1c395df9df255dfd59409`; memoir graphs `mcp-test-ArchitectureConcepts` (project) and `mcp-test-SessionInvestigation` (session); overview records `f18d2d45…` (health.rs), `ad243f03…` (classify_graph_store_error), `d945b532…` (packages/atlas-mcp); feedback records logged during the sweep (`8a063457…`, `b83430be…`, `7ce30e21…`, `05e3ee2c…`, `034a8ef2…`, `e655891b…`, `093410b7…`, `666742db…`, `0b12204b…`) are intentional defect evidence and must stay; session events `2624`, `2634`, `2647`, `2722`, `2725`, `2728`. `mcp-sweep-arch` memoir graph was already created and deleted during the run. Repro side effect: three serial `compact_session` calls reduced the sweep session ledger `135 → 54 → 55 → 55` (final call `no_op:true`).

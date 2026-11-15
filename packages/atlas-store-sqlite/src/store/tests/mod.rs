@@ -29,6 +29,7 @@ mod recovery;
 mod search;
 mod taxonomy;
 mod trace;
+mod traverse_priority;
 mod vec_index;
 
 #[test]

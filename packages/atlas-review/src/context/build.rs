@@ -53,10 +53,13 @@ pub fn build_context(
             }
             // A file target is a seed for every symbol it contains; returning
             // only the first node dropped sibling definitions and all callers.
+            // Depth defaults to one hop so direct callers/callees are included
+            // without dragging in distant references from unrelated packages.
             let expanded = ContextRequest {
                 target: ContextTarget::ChangedSymbols {
                     qnames: nodes.into_iter().map(|node| node.qualified_name).collect(),
                 },
+                depth: request.depth.or(Some(1)),
                 ..request.clone()
             };
             let mut result = build_impact_context(store, &expanded, policy)?;

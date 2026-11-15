@@ -19,8 +19,15 @@ impl<'s> InsightsEngine<'s> {
             .map(|metric| (metric.node.qualified_name.clone(), metric.module_id.clone()))
             .collect::<HashMap<_, _>>();
         let fingerprints = callable_fingerprints(repo_root.as_ref(), &snapshot, &module_by_qname)?;
-        let thresholds = similarity_thresholds(self.config());
-        let min_score = request.min_score.unwrap_or(thresholds.low);
+        let mut thresholds = similarity_thresholds(self.config());
+        // A caller-supplied floor is the floor that is actually applied, so it
+        // must also drive score bands and the echoed/hinted thresholds. Only
+        // `low` moves; medium/high keep the configured values even when the
+        // requested floor is above `high`.
+        if let Some(requested) = request.min_score {
+            thresholds.low = requested;
+        }
+        let min_score = thresholds.low;
         let limit = request.limit.unwrap_or(self.config().max_findings);
 
         let Some(source) = resolve_callable_source(&request.symbol, &fingerprints) else {

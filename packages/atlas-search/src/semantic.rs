@@ -355,6 +355,10 @@ pub struct FileConcept {
 /// one of the same targets using [`Store::files_sharing_references_with`].
 /// Files appearing across multiple seeds are merged into one concept.
 ///
+/// Seeds stay out of normal clusters because they are the query inputs. When
+/// the seeds themselves are the only mutually related files, they are emitted
+/// as a single coupled concept so a genuine seed↔seed relation is not lost.
+///
 /// Returns up to `limit` [`FileConcept`]s ordered by density × size.
 pub fn cluster_by_shared_symbols(
     store: &Store,
@@ -365,6 +369,10 @@ pub fn cluster_by_shared_symbols(
 
     // Map: file_path → set of shared symbol qnames.
     let mut file_to_symbols: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+    // Map: ordered seed pair → shared symbol qnames. Kept separately so a
+    // multi-seed query whose only relation is seed↔seed still yields a concept.
+    let mut seed_pair_symbols: HashMap<(String, String), std::collections::HashSet<String>> =
+        HashMap::new();
     let mut total_targets_per_seed: HashMap<&str, usize> = HashMap::new();
 
     for &seed in seed_files {
@@ -381,8 +389,15 @@ pub fn cluster_by_shared_symbols(
             }
             // Seeds are the query, not cluster members. Returning a "cluster"
             // whose members are exactly the seed files is a pseudo-cluster and
-            // hides the real related-file groups.
+            // hides the real related-file groups. Coupled seeds are recorded
+            // separately and only surfaced when no non-seed group exists.
             if seed_files.contains(&co_file.as_str()) {
+                let pair = if seed < co_file.as_str() {
+                    (seed.to_owned(), co_file)
+                } else {
+                    (co_file, seed.to_owned())
+                };
+                seed_pair_symbols.entry(pair).or_default().insert(sym);
                 continue;
             }
             file_to_symbols.entry(co_file).or_default().insert(sym);
@@ -407,7 +422,27 @@ pub fn cluster_by_shared_symbols(
         })
         .collect();
 
-    // Seed↔seed coupling is not a cluster: seeds are the query inputs.
+    // Fallback: coupled seeds with a real shared symbol are one concept. Mere
+    // co-seeding without a shared symbol is not coupling, so nothing is emitted.
+    if concepts.is_empty() && !seed_pair_symbols.is_empty() {
+        let mut files: Vec<String> = Vec::with_capacity(seed_pair_symbols.len() * 2);
+        let mut shared_symbols: Vec<String> = Vec::new();
+        for ((left, right), symbols) in &seed_pair_symbols {
+            files.push(left.clone());
+            files.push(right.clone());
+            shared_symbols.extend(symbols.iter().cloned());
+        }
+        files.sort();
+        files.dedup();
+        shared_symbols.sort();
+        shared_symbols.dedup();
+        let density = shared_symbols.len() as f64 / total_targets as f64;
+        concepts.push(FileConcept {
+            files,
+            shared_symbols,
+            density,
+        });
+    }
 
     // Sort by density × shared count then truncate.
     concepts.sort_by(|a, b| {
@@ -735,11 +770,23 @@ mod tests {
         assert!(concepts.is_empty());
     }
 
-    #[test]
-    fn cluster_by_shared_symbols_never_returns_seed_only_clusters() {
+    /// Build an in-memory store where `src/lib.rs` owns one target node per
+    /// referenced symbol and each `(file, targets)` entry adds a caller in that
+    /// file referencing every target.
+    fn shared_reference_store(callers: &[(&str, &[&str])]) -> Store {
         let mut store = Store::open(":memory:").unwrap();
         store.migrate().unwrap();
-        let target = "src/lib.rs::fn::shared";
+
+        let mut targets: Vec<&str> = callers
+            .iter()
+            .flat_map(|(_, targets)| targets.iter().copied())
+            .collect();
+        targets.sort_unstable();
+        targets.dedup();
+        let nodes: Vec<Node> = targets
+            .iter()
+            .map(|target| test_node("src/lib.rs", target))
+            .collect();
         store
             .replace_file_graph_for_repo(
                 TEST_REPO_ID,
@@ -747,25 +794,66 @@ mod tests {
                 "hash-lib",
                 Some("rust"),
                 None,
-                &[test_node("src/lib.rs", target)],
+                &nodes,
                 &[],
             )
             .unwrap();
-        for file in ["src/a.rs", "src/b.rs", "src/c.rs"] {
+
+        for (index, (file, file_targets)) in callers.iter().enumerate() {
             let qn = format!("{file}::fn::caller");
+            let nodes = [test_node(file, &qn)];
+            let edges: Vec<_> = file_targets
+                .iter()
+                .map(|target| test_edge(file, &qn, target, "verified", "direct"))
+                .collect();
             store
                 .replace_file_graph_for_repo(
                     TEST_REPO_ID,
                     file,
-                    "hash",
+                    &format!("hash-{index}"),
                     Some("rust"),
                     None,
-                    &[test_node(file, &qn)],
-                    &[test_edge(file, &qn, target, "verified", "direct")],
+                    &nodes,
+                    &edges,
                 )
                 .unwrap();
         }
+        store
+    }
 
+    #[test]
+    fn cluster_by_shared_symbols_never_returns_seed_only_clusters() {
+        const SHARED: &str = "src/lib.rs::fn::shared";
+
+        // (a) Seeds that share no symbol are merely co-seeded; no cluster.
+        let store = shared_reference_store(&[
+            ("src/a.rs", &["src/lib.rs::fn::only_a"]),
+            ("src/b.rs", &["src/lib.rs::fn::only_b"]),
+        ]);
+        let concepts = cluster_by_shared_symbols(&store, &["src/a.rs", "src/b.rs"], 10).unwrap();
+        assert!(
+            concepts.is_empty(),
+            "co-seeded files without a shared symbol must not cluster: {concepts:?}"
+        );
+
+        // (b) Seeds that genuinely share a symbol are coupled and surface as
+        // exactly one concept holding only those seeds.
+        let store = shared_reference_store(&[("src/a.rs", &[SHARED]), ("src/b.rs", &[SHARED])]);
+        let concepts = cluster_by_shared_symbols(&store, &["src/b.rs", "src/a.rs"], 10).unwrap();
+        assert_eq!(concepts.len(), 1, "concepts={concepts:?}");
+        assert_eq!(
+            concepts[0].files,
+            vec!["src/a.rs".to_owned(), "src/b.rs".to_owned()]
+        );
+        assert_eq!(concepts[0].shared_symbols, vec![SHARED.to_owned()]);
+        assert!((concepts[0].density - 0.5).abs() < f64::EPSILON);
+
+        // (c) A real non-seed group still wins; seeds stay out of its members.
+        let store = shared_reference_store(&[
+            ("src/a.rs", &[SHARED]),
+            ("src/b.rs", &[SHARED]),
+            ("src/c.rs", &[SHARED]),
+        ]);
         let concepts = cluster_by_shared_symbols(&store, &["src/a.rs", "src/b.rs"], 10).unwrap();
         assert!(
             concepts.iter().all(|cluster| cluster

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use atlas_core::{
     AtlasError, BudgetManager, BudgetPolicy, ImpactResult, Node, RankingEvidence, Result,
     RetrievalMode, ScoredNode, SearchQuery,
@@ -384,16 +386,37 @@ impl Store {
         changed_nodes.truncate(seed_budget);
 
         // Recursive CTE: bidirectional traversal starting from seed QNs.
+        //
+        // The `prio` column keeps impact direction meaningful under a tight
+        // node budget: `calls`/`implements` edges outrank containment and
+        // reference noise, so a cross-file caller is not evicted by same-file
+        // rows that merely sort earlier by qualified name.
         let cte_sql = format!(
-            "WITH RECURSIVE impact(qn, depth) AS (
-               SELECT qualified_name, 0 FROM nodes WHERE qualified_name IN ({ph})
+            "WITH RECURSIVE impact(qn, depth, prio) AS (
+               SELECT qualified_name, 0, 0 FROM nodes WHERE qualified_name IN ({ph})
                UNION
-               SELECT e.source_qualified, i.depth + 1
+               SELECT e.source_qualified, i.depth + 1,
+                      CASE e.kind
+                        WHEN 'calls' THEN 0
+                        WHEN 'implements' THEN 1
+                        WHEN 'references' THEN 2
+                        WHEN 'imports' THEN 3
+                        WHEN 'contains' THEN 4
+                        ELSE 5
+                      END
                FROM   impact i
                JOIN   edges  e ON e.target_qualified = i.qn
                WHERE  i.depth < ?
                UNION
-               SELECT e.target_qualified, i.depth + 1
+               SELECT e.target_qualified, i.depth + 1,
+                      CASE e.kind
+                        WHEN 'calls' THEN 0
+                        WHEN 'implements' THEN 1
+                        WHEN 'references' THEN 2
+                        WHEN 'imports' THEN 3
+                        WHEN 'contains' THEN 4
+                        ELSE 5
+                      END
                FROM   impact i
                JOIN   edges  e ON e.source_qualified = i.qn
                WHERE  i.depth < ?
@@ -403,7 +426,7 @@ impl Store {
                  SELECT 1 FROM nodes n WHERE n.qualified_name = i.qn
              )
              GROUP BY i.qn
-             ORDER BY MIN(i.depth), i.qn
+             ORDER BY MIN(i.depth), MIN(i.prio), i.qn
              LIMIT ?"
         );
 
@@ -446,9 +469,18 @@ impl Store {
                 .map(|s| s as &dyn rusqlite::types::ToSql)
                 .collect();
             let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
-            stmt.query_map(p.as_slice(), row_to_node)
+            let mut by_qn: HashMap<String, Node> = stmt
+                .query_map(p.as_slice(), row_to_node)
                 .map_err(db_err)?
                 .filter_map(|r| r.ok())
+                .map(|node| (node.qualified_name.clone(), node))
+                .collect();
+            // `IN (...)` returns rows in storage order. Rebuild the vector in
+            // CTE priority order so the downstream budget truncation keeps the
+            // highest-value neighbours instead of an arbitrary slice.
+            impacted_qns
+                .iter()
+                .filter_map(|qn| by_qn.remove(*qn))
                 .collect()
         };
         let impacted_node_total = impacted_nodes.len();

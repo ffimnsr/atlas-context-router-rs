@@ -316,6 +316,102 @@ fn configurable_similarity_thresholds_drive_score_band() {
 }
 
 #[test]
+fn similar_function_hint_reflects_requested_floor() {
+    let repo_root = make_repo_root();
+    write_repo_file(
+        &repo_root,
+        "src/lib.rs",
+        "pub fn alpha(value: i32) -> i32 {\n    let next = value + 1;\n    next * 2\n}\n",
+    );
+
+    let mut alpha = node(
+        0,
+        "alpha",
+        "src/lib.rs::fn::alpha",
+        "src/lib.rs",
+        NodeKind::Function,
+    );
+    alpha.params = Some("(value: i32)".to_owned());
+    alpha.return_type = Some("i32".to_owned());
+    alpha.line_start = 1;
+    alpha.line_end = 4;
+
+    let mut store = make_store();
+    seed_graph(&mut store, vec![alpha], vec![]);
+    let engine = insights_engine(&store);
+    let config = atlas_engine::config::InsightsConfig::default();
+
+    let requested = engine
+        .find_similar_functions(
+            &repo_root,
+            SimilarFunctionRequest {
+                symbol: "src/lib.rs::fn::alpha".to_owned(),
+                limit: Some(5),
+                min_score: Some(0.6),
+                include_same_file: true,
+            },
+        )
+        .expect("similar function analysis");
+    let result = requested.report_result();
+    assert!(result.matches.is_empty(), "matches={:?}", result.matches);
+    assert_eq!(requested.thresholds.low, 0.6);
+    assert_eq!(result.thresholds.low, 0.6);
+    assert_eq!(result.thresholds.medium, config.similarity_medium_threshold);
+    assert_eq!(result.thresholds.high, config.similarity_high_threshold);
+    let hint = result
+        .no_candidates_hint
+        .expect("empty matches must explain why");
+    assert!(
+        hint.contains("(0.60)"),
+        "hint must echo the requested floor: {hint}"
+    );
+
+    // Omitting `min_score` keeps the configured floor.
+    let defaulted = engine
+        .find_similar_functions(
+            &repo_root,
+            SimilarFunctionRequest {
+                symbol: "src/lib.rs::fn::alpha".to_owned(),
+                limit: Some(5),
+                min_score: None,
+                include_same_file: true,
+            },
+        )
+        .expect("similar function analysis");
+    let result = defaulted.report_result();
+    assert_eq!(
+        result.thresholds.low, config.similarity_low_threshold,
+        "absent min_score must keep the config floor"
+    );
+    let hint = result
+        .no_candidates_hint
+        .expect("empty matches must explain why");
+    assert!(
+        hint.contains(&format!("({:.2})", config.similarity_low_threshold)),
+        "hint must echo the config floor: {hint}"
+    );
+
+    // A floor above `high` moves only `low`; medium/high keep config order.
+    let above_high = engine
+        .find_similar_functions(
+            &repo_root,
+            SimilarFunctionRequest {
+                symbol: "src/lib.rs::fn::alpha".to_owned(),
+                limit: Some(5),
+                min_score: Some(0.9),
+                include_same_file: true,
+            },
+        )
+        .expect("similar function analysis");
+    assert_eq!(above_high.thresholds.low, 0.9);
+    assert_eq!(
+        above_high.thresholds.medium,
+        config.similarity_medium_threshold
+    );
+    assert_eq!(above_high.thresholds.high, config.similarity_high_threshold);
+}
+
+#[test]
 fn similar_function_analysis_persists_fingerprint_cache() {
     let repo_root = make_repo_root();
     write_repo_file(

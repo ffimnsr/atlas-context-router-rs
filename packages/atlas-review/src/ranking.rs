@@ -28,7 +28,9 @@ impl Default for ContextRankingPrimitives {
     fn default() -> Self {
         Self {
             direct_target_priority: 100,
-            caller_priority: 80,
+            // A caller is impacted by the target; a callee is only a dependency.
+            // Keep the caller ahead when both sit at the same distance.
+            caller_priority: 85,
             callee_priority: 80,
             importer_priority: 60,
             importee_priority: 60,

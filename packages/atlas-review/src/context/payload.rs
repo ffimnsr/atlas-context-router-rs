@@ -873,5 +873,13 @@ fn node_keep_priority(node: &SelectedNode) -> u8 {
     if node.node.is_test {
         return 5;
     }
-    file_keep_priority(node.selection_reason)
+    match node.selection_reason {
+        // Impact direction matters under a tight payload budget: a caller is
+        // affected by the target, while a callee is merely a dependency. Keep
+        // the dependent longer than the dependency even when the callee has a
+        // higher base score (for example a public API helper).
+        SelectionReason::Caller => 6,
+        SelectionReason::Callee => 5,
+        reason => file_keep_priority(reason),
+    }
 }

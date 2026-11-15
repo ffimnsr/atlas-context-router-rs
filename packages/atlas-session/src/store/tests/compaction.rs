@@ -1,5 +1,7 @@
 use super::*;
 
+mod telemetry_retention;
+
 // ── Curation tests ──────────────────────────────────────────────────────────
 
 fn open_curation_store() -> (TempDir, SessionStore, SessionId) {
