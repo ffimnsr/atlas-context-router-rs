@@ -85,7 +85,8 @@ Agent-facing Atlas guidance has one home: `packages/atlas-cli/skill-data/`.
 - Guide content is embedded at build time and served by `atlas skills get core`; `atlas skills list` shows the inventory.
 - The managed Atlas MCP block in `AGENTS.md` is a stable pointer only. Never move workflow rules, tool maps, escalation order, or trust metadata back into it, and do not grow it per release.
 - `.agents/skills/atlas/SKILL.md` is a thin discovery stub written by `atlas install` from `packages/atlas-cli/skill-data/discovery/SKILL.md`. Keep it pointing at `atlas skills get core`; never copy guide content into it.
-- Update `packages/atlas-cli/skill-data/core/SKILL.md` when Atlas tool usage changes, and keep the assertions in `packages/atlas-cli/src/install/tests.rs` aligned with it.
+- Update `packages/atlas-cli/skill-data/core/SKILL.md` or `skill-data/core/references/*.md` when Atlas tool usage changes, and keep the assertions in `packages/atlas-cli/src/install/tests.rs` and `packages/atlas-cli/src/skills.rs` aligned with it.
+- The `cli` and `mcp-tools` references are generated at request time from the binary and MCP registry. Never add static content for them; add a test instead when the generated output must stay accurate.
 
 <!-- atlas MCP tools -->
 ## MCP Tools: atlas

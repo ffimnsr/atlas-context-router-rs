@@ -252,7 +252,15 @@ atlas skills get core   # Atlas-first workflow, tool map, escalation order, trus
 atlas skills list       # every guide this Atlas version serves
 ```
 
-Guide content lives in `packages/atlas-cli/skill-data/`. `atlas install` writes `.agents/skills/atlas/SKILL.md`, a thin discovery stub for skill-based harnesses that redirects agents to `atlas skills get core`. Existing stubs are left untouched unless you pass `--force`, so local edits survive reinstalls.
+Each guide ends with a reference table. Load one reference, or the whole set:
+
+```bash
+atlas skills get core --ref cli        # every subcommand and flag, generated from the binary
+atlas skills get core --ref mcp-tools  # full MCP tool inventory, generated from the server
+atlas skills get core --full            # guide plus every reference
+```
+
+Guide content lives in `packages/atlas-cli/skill-data/`. The `cli` and `mcp-tools` references are rendered at request time, so they never drift from the binary. `atlas install` writes `.agents/skills/atlas/SKILL.md`, a thin discovery stub for skill-based harnesses that redirects agents to `atlas skills get core`. Existing stubs are left untouched unless you pass `--force`, so local edits survive reinstalls.
 
 ### Register the MCP server with your coding tool
 

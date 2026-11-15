@@ -23,6 +23,11 @@ fn repo_with_git(dir: &Path) {
 /// Guide body served by `atlas skills get core`.
 const GUIDE: &str = CORE.content;
 
+/// One rendered reference served by `atlas skills get core --ref <name>`.
+fn guide_reference(name: &str) -> String {
+    crate::skills::render_reference(name).unwrap_or_else(|| panic!("missing reference {name}"))
+}
+
 #[test]
 fn inject_instructions_creates_agents_md() {
     let tmp = TempDir::new().unwrap();
@@ -104,15 +109,16 @@ fn core_skill_documents_split_graph_build_tools() {
 }
 
 #[test]
-fn core_skill_documents_session_memory_fallback() {
-    assert!(GUIDE.contains("Session memory fallback for hosts without hooks"));
-    assert!(GUIDE.contains("`record_session_event`"));
-    assert!(GUIDE.contains("`wake_up` when available"));
-    assert!(GUIDE.contains("`resume_session`"));
-    assert!(GUIDE.contains("`save_context_artifact`"));
-    assert!(GUIDE.contains("`compact_session`"));
-    assert!(GUIDE.contains("`search_decisions`"));
-    assert!(GUIDE.contains("`get_global_memory`"));
+fn continuity_reference_documents_session_memory_fallback() {
+    let guide = guide_reference("continuity");
+    assert!(guide.contains("Session memory fallback for hosts without hooks"));
+    assert!(guide.contains("`record_session_event`"));
+    assert!(guide.contains("`wake_up` when available"));
+    assert!(guide.contains("`resume_session`"));
+    assert!(guide.contains("`save_context_artifact`"));
+    assert!(guide.contains("`compact_session`"));
+    assert!(guide.contains("`search_decisions`"));
+    assert!(guide.contains("`get_global_memory`"));
     for event in [
         "user-prompt",
         "post-tool-use",
@@ -123,12 +129,12 @@ fn core_skill_documents_session_memory_fallback() {
         "session-end",
     ] {
         assert!(
-            GUIDE.contains(&format!("\"{event}\"")),
+            guide.contains(&format!("\"{event}\"")),
             "fallback protocol must document event {event}"
         );
     }
-    assert!(GUIDE.contains("Do NOT store"));
-    assert!(GUIDE.contains("Never write any Atlas database directly"));
+    assert!(guide.contains("Do NOT store"));
+    assert!(guide.contains("Never write any Atlas database directly"));
 }
 
 #[test]
@@ -483,8 +489,9 @@ fn generated_mcp_tools_markdown_matches_exported_registry() {
 }
 
 #[test]
-fn core_skill_references_only_supported_fallback_events() {
-    let events = extract_event_literals(GUIDE);
+fn continuity_reference_only_uses_supported_fallback_events() {
+    let guide = guide_reference("continuity");
+    let events = extract_event_literals(&guide);
     assert!(
         events.len() >= 7,
         "fallback protocol must reference its capture events: {events:?}"
