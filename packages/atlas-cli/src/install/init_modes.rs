@@ -12,6 +12,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::Serialize;
 
+use super::agent_skill::{SKILL_REL, SKILL_STUB, install_skill};
 use super::git_hooks::install_git_hooks;
 use super::hook_runner::{ATLAS_HOOK_RUNNER_REL, install_hook_runner};
 use super::instructions::{
@@ -132,6 +133,18 @@ pub fn plan_init_mode(repo_root: &Path, mode: InitMode) -> Vec<InitPlanEntry> {
             path: AGENTS_FILE.to_owned(),
             action: action.to_owned(),
         });
+
+        let path = repo_root.join(SKILL_REL);
+        let action = match fs::read_to_string(&path) {
+            Ok(existing) if existing == SKILL_STUB => "unchanged",
+            Ok(_) => "refresh",
+            Err(_) => "create",
+        };
+        entries.push(InitPlanEntry {
+            asset: "agent_skill".to_owned(),
+            path: SKILL_REL.to_owned(),
+            action: action.to_owned(),
+        });
     }
 
     entries
@@ -200,6 +213,24 @@ pub fn apply_init_mode(
         if updated.iter().any(|file| file == AGENTS_FILE) {
             set_action(&mut summary.files, AGENTS_FILE, "refresh");
         }
+
+        // Fresh and stale stubs are both agent-facing assets, so the CLI mode
+        // installs them alongside the managed AGENTS.md block.
+        let considered = plan
+            .iter()
+            .find(|entry| entry.asset == "agent_skill")
+            .map(|entry| entry.action.as_str())
+            .unwrap_or("create");
+        let applied = match considered {
+            "unchanged" => "unchanged",
+            "refresh" if !force => "skipped",
+            _ => {
+                install_skill(repo_root, false, force)
+                    .context("cannot install the Atlas discovery skill")?;
+                "create"
+            }
+        };
+        set_action(&mut summary.files, SKILL_REL, applied);
     }
 
     Ok(summary)
@@ -246,11 +277,12 @@ mod tests {
         );
 
         let cli = plan_init_mode(repo.path(), InitMode::Cli);
-        assert_eq!(cli.len(), 1);
+        assert_eq!(cli.len(), 2);
         assert_eq!(cli[0].path, AGENTS_FILE);
+        assert_eq!(cli[1].path, SKILL_REL);
 
         let all = plan_init_mode(repo.path(), InitMode::All);
-        assert_eq!(all.len(), 1 + GIT_HOOK_NAMES.len() + 1 + 1);
+        assert_eq!(all.len(), 1 + GIT_HOOK_NAMES.len() + 1 + 2);
     }
 
     #[test]
@@ -261,6 +293,7 @@ mod tests {
         assert!(summary.dry_run);
         assert!(!repo.path().join(MCP_ASSET_REL).exists());
         assert!(!repo.path().join(AGENTS_FILE).exists());
+        assert!(!repo.path().join(SKILL_REL).exists());
         assert!(!summary.touched().is_empty());
     }
 
@@ -327,6 +360,18 @@ mod tests {
                 .find(|entry| entry.asset == "instructions")
                 .map(|entry| entry.action.as_str()),
             Some("unchanged")
+        );
+        assert_eq!(
+            second
+                .files
+                .iter()
+                .find(|entry| entry.asset == "agent_skill")
+                .map(|entry| entry.action.as_str()),
+            Some("unchanged")
+        );
+        assert_eq!(
+            fs::read_to_string(repo.path().join(SKILL_REL)).expect("skill"),
+            SKILL_STUB
         );
     }
 }

@@ -1,0 +1,121 @@
+# Atlas core workflow
+
+Atlas is a code knowledge graph for this repository: a Rust CLI plus a stdio MCP server (`atlas serve`). This guide ships inside the installed binary, so it always matches your version. Re-read it after an upgrade with `atlas skills get core`; run `atlas skills list` to see every guide this version serves.
+
+## Atlas first
+
+Use Atlas before `grep`, file search, broad reads, or exploratory terminal commands for code questions. Atlas is cheaper, faster, and returns structure text search cannot: symbols, callers, callees, tests, dependents, impact radius, and review context.
+
+Priority rule: if instructions conflict, prefer Atlas for discovery and relationship lookup. Exceptions: read or edit exact files already identified, run validation commands (`cargo test --quiet`, clippy, format), or inspect non-code assets after Atlas points to them.
+
+Use default JSON output. Trust `structuredContent` as source of truth when present.
+
+## Atlas-first requirements
+
+- First code-exploration step: call `status` unless graph freshness is already known from current turn.
+- Symbol or usage question: start with `query_graph` or `resolve_symbol`.
+- Caller/callee/test question: use `symbol_neighbors` for one hop; use `trace_calls` for directional multi-hop chains or a path between two symbols.
+- Broader context needed: use `get_context` before `traverse_graph`.
+- Last resort for relationships: use `traverse_graph` with bounded `max_depth` and `max_nodes`.
+- File reads/edits are OK after Atlas identifies exact files, or when user already named exact files.
+- Content search tools (`search_files`, `search_content`, `search_templates`, `search_text_assets`) are companion tools for docs, config, SQL, templates, prompts, or exact non-code evidence. Do not use them first for symbol questions.
+
+## Minimal-first escalation order
+
+Review/change tasks:
+1. `detect_changes` when changed files are unknown.
+2. `get_minimal_context` for first bounded triage.
+3. `get_review_context` when changed-symbol, neighbor, or risk detail is needed.
+4. `explain_change` when deterministic risk/test-gap explanation is needed.
+5. `get_impact_radius` when explicit blast radius is needed.
+
+Symbol/usage tasks:
+1. `query_graph` or `resolve_symbol`.
+2. `symbol_neighbors` for direct callers, callees, and tests.
+3. `get_context` for bounded ranked context.
+4. `trace_calls` when you need a directional call chain or a path to a target.
+5. `traverse_graph` only when unfiltered multi-hop reachability is needed.
+
+Allowed reasons to escalate:
+- ambiguous symbol resolution
+- truncated result
+- missing caller/callee/test evidence
+- cross-file or cross-package risk
+- explicit user request for broader context
+- safety-critical uncertainty
+
+Anti-patterns:
+- starting with `grep`, file search, or broad reads for structural code questions
+- using `query_graph` as caller/callee search instead of following with relationship tools
+- using `traverse_graph` before symbol resolution
+- broad traversal without bounded `max_depth` and `max_nodes`
+- using full review context when minimal context is enough
+- skipping Atlas because a terminal command feels faster
+
+## Tool discovery
+
+Runtime docs are canonical for current arguments and output contracts. Do not treat this instruction block as exhaustive inventory.
+
+- `tool_list`: list visible Atlas MCP tools
+- `tool_search`: find tools by name or capability
+- `tool_help`: read exact runtime docs for one tool, including input contracts and minimal examples
+- `man`: legacy namespace-aware manual alias
+
+## Common tool map
+
+- symbol lookup: `query_graph`, `resolve_symbol`
+- relationships: `symbol_neighbors`, `trace_calls`, `traverse_graph`, `get_context`
+- review/change context: `detect_changes`, `get_minimal_context`, `get_review_context`
+- impact/risk: `get_impact_radius`, `explain_change`, `assess_risk`, `analyze_safety`
+- graph build: `build_graph` with `{}` for missing/corrupt graph DB or full reindex; `update_graph` with direct `change_source` for incremental refresh
+- repo health: `status`, `doctor`, `db_check`, `debug_graph`, `list_graph_stats`
+- companion non-code lookup: `search_files`, `search_content`, `read_file_excerpt`, `get_docs_section`, `read_file_around_match`, `search_templates`, `search_text_assets`
+- continuity: `wake_up`, `get_session_status`, `resume_session`, `search_saved_context`, `search_decisions`, `save_context_artifact`
+- shared memory: `memory_store`, `memory_recall`
+
+## Trust metadata
+
+- Every MCP tool response includes `atlas_provenance` with `repo_root`, `db_path`, `indexed_file_count`, and `last_indexed_at`.
+- Some graph-backed tools also include `atlas_freshness` when working-tree edits may make graph results stale.
+- If `atlas_provenance.repo_root` does not match current workspace, stop and verify session wiring.
+- If `atlas_provenance.db_path` points at unexpected database, stop and call `status` or `doctor` before trusting results.
+- If graph DB is missing, corrupt, or requires a full reindex, call `build_graph` with `{}`.
+- If `atlas_freshness.stale` is true after edits, call `update_graph` with `{ "change_source": { "kind": "working_tree" } }` before making claims about current code.
+- Treat missing optional `atlas_*` fields as "not applicable", not as tool failure.
+
+## Path identity invariant
+
+- Canonicalize repo paths before hashing, persistence, dedupe, cache keys, source IDs, chunk IDs, snapshot file references, or qualified-name prefixes.
+- Apply same rule to future sidecar/cache/index keys, including in-memory parser caches and retrieval sidecars keyed by repo files.
+- Use `atlas_repo::CanonicalRepoPath` or helper APIs built on it. Do not add local path-normalization helpers for path-derived identity.
+- If `doctor` or `db_check` reports `noncanonical_path_rows`, prefer rebuild from clean canonical inputs instead of in-place row rewrites.
+
+## Session memory fallback for hosts without hooks
+
+When your coding tool is wired to the generic `.atlas/hooks/atlas-hook` runner, Atlas captures session events automatically. When this client does not support Atlas hooks (or hook availability is unknown), use Atlas MCP tools as the fallback lifecycle protocol. Never write any Atlas database directly; only call Atlas MCP tools or CLI commands.
+
+### Recall before work
+
+- At session start, call `wake_up` when available; otherwise `resume_session` before substantive work.
+- Call `search_decisions` for prior conclusions and `search_saved_context` for prior artifacts relevant to the task.
+- Call `get_global_memory` when you need repo-level cross-session context.
+
+### Mandatory capture triggers
+
+Call `record_session_event` when any of these happens:
+
+1. User gives a substantial task → `record_session_event` with `event: "user-prompt"` and `payload.prompt`.
+2. A tool call creates, edits, deletes, renames, or generates files → `record_session_event` with `event: "post-tool-use"` and payload containing `tool_name` and `changed_files` (repo-relative paths).
+3. You know exact changed files but not the originating tool payload → `record_session_event` with `event: "file-changed"`.
+4. Error resolved → `record_session_event` with `event: "tool-failure"` (or `error`) AND save the fix via `save_context_artifact` with `source_type: "error_resolved"`.
+5. Architecture/design decision made → save via `save_context_artifact` with `source_type: "decision"`, linking symbols/files/source ids when possible.
+6. User preference discovered → save via `save_context_artifact` with `source_type: "preference"`.
+7. Major investigation, review, or handoff summary produced → save via `save_context_artifact` with `source_type: "review"` / `"investigation"` / `"handoff"`.
+8. Context compression is imminent or detected → call `compact_session` and `record_session_event` with `event: "pre-compact"` first.
+9. Major work completed before your final response → `record_session_event` with `event: "stop"` (or `event: "session-end"`) and save a concise handoff artifact.
+
+Do NOT store: trivial logs, raw secrets or credentials, duplicate facts, raw unbounded transcripts, or facts already present in repository instruction files. Prefer compact summaries and `source_id` references.
+
+## CLI fallback
+
+Every MCP tool has a CLI mirror, so the same workflow works when MCP is not wired up: `atlas status`, `atlas query <text>`, `atlas symbols`, `atlas trace`, `atlas context`, `atlas impact`, `atlas review-context`, `atlas build`, `atlas update`, `atlas serve`. Run `atlas --help` for the full list.

@@ -216,6 +216,7 @@ GitHub triage defaults also live in `.github/`:
 Atlas installs only tool-agnostic integration and leaves MCP registration to your editor. `atlas install` writes:
 
 - a managed `AGENTS.md` instruction block
+- an `.agents/skills/atlas/SKILL.md` discovery skill
 - git hooks for `pre-commit`, `post-commit`, `post-checkout`, `post-merge`, and `post-rewrite`
 - the generic `.atlas/hooks/atlas-hook` runner
 
@@ -241,6 +242,17 @@ atlas install --instructions-only
 ```
 
 Default instruction mode is `refresh`: Atlas replaces only its managed block when markers exist, or appends the block when `AGENTS.md` already contains user-managed text. Use `--instructions-mode replace-file` to overwrite the whole file with Atlas-managed content.
+
+### Agent skills
+
+The managed `AGENTS.md` block is a stable pointer, not the guide itself. Detailed agent guidance ships inside the installed binary, so it always matches your version and never rewrites `AGENTS.md`:
+
+```bash
+atlas skills get core   # Atlas-first workflow, tool map, escalation order, trust checks
+atlas skills list       # every guide this Atlas version serves
+```
+
+Guide content lives in `packages/atlas-cli/skill-data/`. `atlas install` writes `.agents/skills/atlas/SKILL.md`, a thin discovery stub for skill-based harnesses that redirects agents to `atlas skills get core`. Existing stubs are left untouched unless you pass `--force`, so local edits survive reinstalls.
 
 ### Register the MCP server with your coding tool
 
@@ -660,6 +672,7 @@ atlas --json install
 - `.atlas/config.toml`
 - `.atlas/worldtree.db`
 - `AGENTS.md` for the managed Atlas instruction block
+- `.agents/skills/atlas/SKILL.md` for the discovery skill stub
 - `.atlas/hooks/atlas-hook` for the generic hook runner
 - `.git/hooks/*` for installed git hooks
 

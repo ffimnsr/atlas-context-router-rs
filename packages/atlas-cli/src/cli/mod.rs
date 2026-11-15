@@ -6,6 +6,7 @@ mod experience;
 mod memoir;
 mod overview;
 mod session_args;
+mod skills;
 mod subcommands;
 mod uri;
 
@@ -19,6 +20,7 @@ pub use content::{
 pub use experience::ExperienceCommand;
 pub use memoir::MemoirCommand;
 pub use overview::OverviewCommand;
+pub use skills::SkillsCommand;
 pub use subcommands::{
     AnalyzeCommand, CommunitiesCommand, ConfigCommand, DocsCommand, FeedbackCommand, FlowsCommand,
     HistoryCommand, InitMode, InsightsCommand, InsightsLargeFunctionMode, InstallMode,
@@ -659,6 +661,12 @@ pub enum Command {
         /// Install mode: hook (git + agent hooks), cli (AGENTS.md instructions), or all (default).
         #[arg(long, default_value = "all", value_enum)]
         mode: InstallMode,
+    },
+
+    /// Read the agent skill guides served by this Atlas version.
+    Skills {
+        #[command(subcommand)]
+        subcommand: SkillsCommand,
     },
 
     /// Explain supported update path for the installed atlas binary.

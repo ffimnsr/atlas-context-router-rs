@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde::Serialize;
 
+mod agent_skill;
 mod git_hooks;
 mod hook_runner;
 mod init_modes;
@@ -12,6 +13,7 @@ mod validation;
 #[cfg(test)]
 mod tests;
 
+pub use agent_skill::install_skill;
 pub use git_hooks::install_git_hooks;
 pub use hook_runner::install_hook_runner;
 pub use init_modes::{apply_init_mode, plan_init_mode};
@@ -24,6 +26,7 @@ pub struct InstallSummary {
     pub hook_paths: Vec<PathBuf>,
     pub hook_runner_files: Vec<String>,
     pub instruction_files: Vec<String>,
+    pub skill_files: Vec<String>,
     pub validation_checks: Vec<InstallValidation>,
     pub validate_only: bool,
 }
@@ -71,6 +74,9 @@ pub fn run_install(repo_root: &Path, options: InstallOptions) -> Result<InstallS
             options.dry_run,
             options.instructions_mode,
         )?;
+        if let Some(path) = install_skill(repo_root, options.dry_run, options.force)? {
+            summary.skill_files.push(path);
+        }
     }
 
     if !options.dry_run || options.validate_only {

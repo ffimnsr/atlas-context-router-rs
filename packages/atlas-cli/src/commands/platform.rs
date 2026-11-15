@@ -563,6 +563,7 @@ pub fn run_install(cli: &Cli) -> Result<()> {
                 "hook_paths": summary.hook_paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
                 "hook_runner_files": summary.hook_runner_files,
                 "instruction_files": summary.instruction_files,
+                "skill_files": summary.skill_files,
                 "validation_checks": summary.validation_checks,
                 "mcp_setup": crate::install::GENERIC_MCP_SETUP,
             }),
@@ -579,6 +580,13 @@ pub fn run_install(cli: &Cli) -> Result<()> {
                 println!("  Instructions (dry-run): {f} (would update AGENTS.md)");
             } else {
                 println!("  Instructions updated  : {f}");
+            }
+        }
+        for f in &summary.skill_files {
+            if dry_run {
+                println!("  Agent skill (dry-run): {f}");
+            } else {
+                println!("  Agent skill installed : {f}");
             }
         }
         for check in &summary.validation_checks {

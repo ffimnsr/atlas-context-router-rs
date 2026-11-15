@@ -13,6 +13,7 @@ mod install;
 mod logging;
 mod mcp_instance;
 mod panic_hook;
+mod skills;
 
 use atlas_core::user_facing_error_message;
 use clap::Parser;
@@ -68,6 +69,7 @@ fn run_cli() -> anyhow::Result<()> {
         Command::ExplainQuery { .. } => commands::run_explain_query(&cli),
         Command::ExplainChange { .. } => commands::run_explain_change(&cli),
         Command::Install { .. } => commands::run_install(&cli),
+        Command::Skills { .. } => commands::run_skills(&cli),
         Command::Selfupdate => commands::run_selfupdate(&cli),
         Command::Completions { .. } => commands::run_completions(&cli),
         Command::Shell { .. } => commands::run_shell(&cli),
