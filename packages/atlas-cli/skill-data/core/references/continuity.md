@@ -34,7 +34,9 @@ Call `record_session_event` when any of these happens:
 6. User preference discovered → save via `save_context_artifact` with `source_type: "preference"`.
 7. Major investigation, review, or handoff summary produced → save via `save_context_artifact` with `source_type: "review"` / `"investigation"` / `"handoff"`.
 8. Context compression is imminent or detected → call `compact_session` and `record_session_event` with `event: "pre-compact"` first.
-9. Major work completed before your final response → `record_session_event` with `event: "stop"` (or `event: "session-end"`) and save a concise handoff artifact.
+9. Durable repo fact, constraint, preference, or gotcha that should outlive the session → `memory_store` with an explicit `scope` (`project` or `session`) and honest `importance`.
+10. Atlas analysis prediction wrong (dead code, removal, safety verdict) → `feedback_record` with `predicted`, `actual`, and `correction`.
+11. Major work completed before your final response → `record_session_event` with `event: "stop"` (or `event: "session-end"`) and save a concise handoff artifact.
 
 Do NOT store: trivial logs, raw secrets or credentials, duplicate facts, raw unbounded transcripts, or facts already present in repository instruction files. Prefer compact summaries and `source_id` references.
 

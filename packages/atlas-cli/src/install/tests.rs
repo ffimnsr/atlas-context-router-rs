@@ -98,6 +98,31 @@ fn core_skill_mentions_tool_discovery_helpers() {
 }
 
 #[test]
+fn core_skill_puts_continuity_before_graph_lookup() {
+    let continuity = GUIDE
+        .find("## Continuity first")
+        .expect("core guide needs a leading continuity section");
+    let atlas_first = GUIDE
+        .find("## Atlas first")
+        .expect("core guide keeps the Atlas-first section");
+    assert!(
+        continuity < atlas_first,
+        "continuity must be the first workflow, before graph lookup"
+    );
+    assert!(GUIDE.contains("`wake_up` once at the start of every session"));
+    assert!(GUIDE.contains("Record, save, and feed back in every session"));
+    for tool in [
+        "`record_session_event`",
+        "`save_context_artifact`",
+        "`memory_store`",
+        "`feedback_record`",
+        "`compact_session`",
+    ] {
+        assert!(GUIDE.contains(tool), "core guide must document {tool}");
+    }
+}
+
+#[test]
 fn core_skill_documents_split_graph_build_tools() {
     assert!(GUIDE.contains("`build_graph` with `{}`"));
     assert!(GUIDE.contains("`update_graph` with direct `change_source`"));

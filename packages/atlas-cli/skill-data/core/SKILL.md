@@ -2,6 +2,35 @@
 
 Atlas is a code knowledge graph for this repository: a Rust CLI plus a stdio MCP server (`atlas serve`). This guide ships inside the installed binary, so it always matches your version. Re-read it after an upgrade with `atlas skills get core`; run `atlas skills list` to see every guide this version serves.
 
+Work order is fixed: continuity first, then graph lookup, then local reads. Continuity is not optional background context; it is the first call of every session.
+
+## Continuity first: wake up every session
+
+Call `wake_up` once at the start of every session, before any code question and before the first graph call. It returns a bounded recall pack and records the session-start event through the shared event service, so it also serves as the session-start capture.
+
+- Pass `{ "topic": "<task>" }` when the first user message already names the task; the topic focuses decision and memory recall.
+- Read `current_focus`, `recent_decisions`, `critical_memories`, `recent_feedback`, `active_memoir_concepts`, `changed_files`, `recent_runtime_failures`, and `graph_readiness` before asking the user to repeat context.
+- Reuse `wake_up`'s `graph_readiness` when present instead of spending a separate call on `status`.
+- Call `wake_up` once per session, not once per message; it writes session state, so never call it speculatively.
+- When hooks are wired, the `.atlas/hooks/atlas-hook` SessionStart hook records the event and stores wake metadata, but it does not inject the pack body; still call `wake_up` to read it.
+- If `wake_up` is unavailable, fall back in this order: `resume_session`, `search_decisions`, `search_saved_context`, `get_global_memory`.
+- Before your final response on substantive work, close the loop with `record_session_event` `stop` or `session-end` and a handoff artifact. Hosts without hooks must follow the full fallback protocol.
+
+Continuity layers are supporting state, not the code graph: session ledger, saved artifacts, durable memory, memoir graphs, overview memory, and history snapshots. Never write any Atlas database directly; only call Atlas MCP tools or CLI commands.
+
+## Record, save, and feed back in every session
+
+Continuity is not only a session-start read. Keep writing durable state while you work; a session that calls `wake_up` and records nothing leaves the next session with an empty pack.
+
+- `record_session_event` on meaningful transitions: `user-prompt` with `payload.prompt`, `post-tool-use` with `changed_files`, `file-changed` when you know the files but not the originating tool payload, `tool-failure` when an error is resolved, and `stop` or `session-end` before the final response.
+- `save_context_artifact` for anything a future session would want verbatim: `decision`, `review`, `investigation`, `handoff`, `error_resolved`, or `preference`. Reference `source_id` and symbols instead of pasting raw transcripts.
+- `memory_store` for durable repo notes that outlive one session: decisions, constraints, preferences, and gotchas. Choose `scope` deliberately (`project` for repo facts, `session` for scratch) and `importance` honestly; `memory_recall` reads them back.
+- `feedback_record` when an Atlas analysis prediction was wrong: pass `predicted`, `actual`, and `correction` so later analyses carry the correction. Use it for wrong dead-code, removal, or safety verdicts, not for user preference notes.
+- `compact_session` before context compression is imminent or detected, and when a long session needs curating.
+- Never store secrets, credentials, trivial logs, duplicate facts, or raw unbounded transcripts.
+
+Load `atlas skills get core --ref continuity` for the exact triggers, artifact types, memory and memoir layers, history snapshots, and CLI mirrors.
+
 ## Atlas first
 
 Use Atlas before `grep`, file search, broad reads, or exploratory terminal commands for code questions. Atlas is cheaper, faster, and returns structure text search cannot: symbols, callers, callees, tests, dependents, impact radius, and review context.
@@ -12,7 +41,7 @@ Use default JSON output. Trust `structuredContent` as source of truth when prese
 
 ## Atlas-first requirements
 
-- First code-exploration step: call `status` unless graph freshness is already known from current turn.
+- First code-exploration step: call `status` unless graph freshness is already known from the current turn, including from the `wake_up` pack's `graph_readiness`.
 - Symbol or usage question: start with `query_graph` or `resolve_symbol`.
 - Caller/callee/test question: use `symbol_neighbors` for one hop; use `trace_calls` for directional multi-hop chains or a path between two symbols.
 - Broader context needed: use `get_context` before `traverse_graph`.
@@ -21,6 +50,10 @@ Use default JSON output. Trust `structuredContent` as source of truth when prese
 - Content search tools (`search_files`, `search_content`, `search_templates`, `search_text_assets`) are companion tools for docs, config, SQL, templates, prompts, or exact non-code evidence. Do not use them first for symbol questions.
 
 ## Minimal-first escalation order
+
+Every task starts and ends the same way:
+0. `wake_up` once at session start.
+1. Record substantive work as it happens (`record_session_event`, `save_context_artifact`, `memory_store`, `feedback_record`) and close with `stop`.
 
 Review/change tasks:
 1. `detect_changes` when changed files are unknown.
@@ -46,6 +79,8 @@ Allowed reasons to escalate:
 
 Anti-patterns:
 - starting with `grep`, file search, or broad reads for structural code questions
+- skipping `wake_up` because the task looks small or self-contained
+- finishing a substantive session without recording events, artifacts, or durable notes
 - using `query_graph` as caller/callee search instead of following with relationship tools
 - using `traverse_graph` before symbol resolution
 - broad traversal without bounded `max_depth` and `max_nodes`
@@ -63,6 +98,9 @@ Runtime docs are canonical for current arguments and output contracts. Do not tr
 
 ## Common tool map
 
+- continuity: `wake_up`, `get_session_status`, `resume_session`, `save_context_artifact`, `record_session_event`, `compact_session`, `search_saved_context`, `search_decisions`
+- shared memory and notes: `memory_store`, `memory_recall`
+- analysis feedback: `feedback_record`
 - symbol lookup: `query_graph`, `resolve_symbol`
 - relationships: `symbol_neighbors`, `trace_calls`, `traverse_graph`, `get_context`
 - review/change context: `detect_changes`, `get_minimal_context`, `get_review_context`
@@ -70,8 +108,6 @@ Runtime docs are canonical for current arguments and output contracts. Do not tr
 - graph build: `build_graph` with `{}` for missing/corrupt graph DB or full reindex; `update_graph` with direct `change_source` for incremental refresh
 - repo health: `status`, `doctor`, `db_check`, `debug_graph`, `list_graph_stats`
 - companion non-code lookup: `search_files`, `search_content`, `read_file_excerpt`, `get_docs_section`, `read_file_around_match`, `search_templates`, `search_text_assets`
-- continuity: `wake_up`, `get_session_status`, `resume_session`, `search_saved_context`, `search_decisions`, `save_context_artifact`
-- shared memory: `memory_store`, `memory_recall`
 
 ## Trust metadata
 
@@ -90,19 +126,16 @@ Runtime docs are canonical for current arguments and output contracts. Do not tr
 - Use `atlas_repo::CanonicalRepoPath` or helper APIs built on it. Do not add local path-normalization helpers for path-derived identity.
 - If `doctor` or `db_check` reports `noncanonical_path_rows`, prefer rebuild from clean canonical inputs instead of in-place row rewrites.
 
-## Session continuity
-
-Sessions, saved context, memories, memoir graphs, overview memory, and history snapshots are supporting layers, not the code graph. Hooks in `.atlas/hooks/atlas-hook` capture session events automatically; hosts without hooks must use the MCP fallback protocol in `atlas skills get core --ref continuity`, which also lists the CLI mirrors. Never write any Atlas database directly.
-
 ## CLI fallback
 
-Every MCP tool has a CLI mirror, so the same workflow works when MCP is not wired up: `atlas status`, `atlas query <text>`, `atlas symbols`, `atlas trace`, `atlas context`, `atlas impact`, `atlas review-context`, `atlas build`, `atlas update`, `atlas serve`. Run `atlas --help` for the full list.
+Every MCP tool has a CLI mirror, so the same workflow works when MCP is not wired up: `atlas wake-up`, `atlas session`, `atlas memory`, `atlas feedback`, `atlas status`, `atlas query <text>`, `atlas symbols`, `atlas trace`, `atlas context`, `atlas impact`, `atlas review-context`, `atlas build`, `atlas update`, `atlas serve`. Run `atlas --help` for the full list.
 
 ## Load more when you need it
 
-This guide covers the loop, the tool map, escalation, and trust checks. Load one reference with `--ref`:
+This guide covers the session start, the loop, the tool map, escalation, and trust checks. Load one reference with `--ref`:
 
 ```bash
+atlas skills get core --ref continuity
 atlas skills get core --ref cli
 atlas skills get core --ref mcp-tools
 ```
@@ -111,8 +144,8 @@ atlas skills get core --ref mcp-tools
 
 | Load | When you need |
 | --- | --- |
+| `continuity` | Session event protocol, saved artifacts, decisions, memories, memoir, overview, history, atlas:// URIs |
 | `cli` | Any subcommand, argument, or flag not shown here; full CLI surface generated from the installed binary |
 | `mcp-tools` | Full MCP tool inventory with input contracts, generated from the server |
 | `workflows` | Review a change-set, inspect a symbol, removal and rename safety, repo-wide analysis reports |
-| `continuity` | Session event protocol, saved artifacts, decisions, memories, memoir, overview, history, atlas:// URIs |
 | `setup` | Install and init modes, skill commands, build/update, MCP server setup, health and config commands |

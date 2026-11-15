@@ -397,6 +397,31 @@ mod tests {
     }
 
     #[test]
+    fn core_guide_prioritizes_continuity() {
+        let content = CORE.content;
+        let continuity = content
+            .find("## Continuity first")
+            .expect("core guide needs a leading continuity section");
+        let atlas_first = content
+            .find("## Atlas first")
+            .expect("core guide keeps the Atlas-first section");
+        assert!(
+            continuity < atlas_first,
+            "continuity must come before Atlas-first graph lookup"
+        );
+        assert!(content.contains("`wake_up` once at the start of every session"));
+        for tool in [
+            "`record_session_event`",
+            "`save_context_artifact`",
+            "`memory_store`",
+            "`feedback_record`",
+            "`compact_session`",
+        ] {
+            assert!(content.contains(tool), "core guide must mention {tool}");
+        }
+    }
+
+    #[test]
     fn skill_names_are_unique() {
         let mut seen = BTreeSet::new();
         for skill in all() {
