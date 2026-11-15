@@ -1,6 +1,6 @@
 [package]
 name = "atlas-metrics"
-version = "1.7.9"
+version = "1.7.10"
 license.workspace = true
 rust-version.workspace = true
 edition = "2024"

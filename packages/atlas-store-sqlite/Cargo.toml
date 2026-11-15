@@ -1,6 +1,6 @@
 [package]
 name = "atlas-store-sqlite"
-version = "1.7.9"
+version = "1.7.10"
 license.workspace = true
 rust-version.workspace = true
 edition = "2024"
@@ -10,7 +10,7 @@ publish = false
 [dependencies]
 atlas-core.workspace = true
 atlas-db-utils.workspace = true
-atlas-repo = { path = "../atlas-repo", version = "1.7.9" }
+atlas-repo = { path = "../atlas-repo", version = "1.7.10" }
 anyhow.workspace = true
 camino.workspace = true
 rusqlite.workspace = true
