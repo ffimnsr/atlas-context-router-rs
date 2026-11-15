@@ -1,6 +1,6 @@
 [package]
 name = "atlas-adapters"
-version = "1.7.10"
+version = "1.7.11"
 license.workspace = true
 rust-version.workspace = true
 edition = "2024"
@@ -9,10 +9,10 @@ publish = false
 
 [dependencies]
 atlas-core.workspace = true
-atlas-contentstore = { path = "../atlas-contentstore" , version = "1.7.10"}
-atlas-session = { path = "../atlas-session" , version = "1.7.10"}
-atlas-contextsave = { path = "../atlas-contextsave" , version = "1.7.10"}
-atlas-repo = { path = "../atlas-repo" , version = "1.7.10"}
+atlas-contentstore = { path = "../atlas-contentstore" , version = "1.7.11"}
+atlas-session = { path = "../atlas-session" , version = "1.7.11"}
+atlas-contextsave = { path = "../atlas-contextsave" , version = "1.7.11"}
+atlas-repo = { path = "../atlas-repo" , version = "1.7.11"}
 camino.workspace = true
 anyhow.workspace = true
 regex.workspace = true

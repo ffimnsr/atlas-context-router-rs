@@ -1,6 +1,6 @@
 [package]
 name = "atlas-core"
-version = "1.7.10"
+version = "1.7.11"
 license.workspace = true
 rust-version.workspace = true
 edition = "2024"
