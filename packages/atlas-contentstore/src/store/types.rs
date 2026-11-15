@@ -77,7 +77,7 @@ pub struct SearchFilters {
     /// Canonical prefixes excluded from the result set.
     pub exclude_prefixes: Vec<String>,
     /// Maximum results. `0` means the default; the value is capped at
-    /// [`DEFAULT_SEARCH_LIMIT_CAP`].
+    /// `DEFAULT_SEARCH_LIMIT_CAP`.
     pub limit: usize,
 }
 
@@ -213,7 +213,7 @@ pub struct SourceRow {
     ///
     /// Chunk contents are retrieval-shaped (trimmed, paragraph-split, or
     /// re-serialized JSON), so they cannot reproduce the original bytes. This
-    /// field keeps the exact payload for [`ContentStore::get_source`] consumers
+    /// field keeps the exact payload for `ContentStore::get_source` consumers
     /// such as `read_saved_context`. Legacy rows have `None`.
     pub raw_content: Option<String>,
     pub created_at: String,

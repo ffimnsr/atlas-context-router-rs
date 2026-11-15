@@ -91,10 +91,42 @@
       },
       "selection_reason": "caller",
       "distance": 1,
-      "relevance_score": 88.0
+      "relevance_score": 93.0
     }
   ],
   "edges": [
+    {
+      "edge": {
+        "id": 0,
+        "kind": "calls",
+        "source_qn": "src/main.rs::fn::main",
+        "target_qn": "src/lib.rs::fn::helper",
+        "file_path": "src/main.rs",
+        "line": 4,
+        "confidence": 0.6499999761581421,
+        "confidence_tier": "same_package",
+        "extra_json": {
+          "callee_text": "helper",
+          "callee_name": "helper",
+          "receiver_text": null,
+          "reachability": "unknown"
+        },
+        "repo_provenance": {
+          "repo_id": "<repo_id>",
+          "repo_fingerprint": "<repo_fingerprint>",
+          "repo_root": "<repo_root>"
+        }
+      },
+      "selection_reason": "caller",
+      "depth": 1,
+      "relevance_score": 91.5,
+      "context_ranking_evidence": {
+        "base_score": 91.5,
+        "final_score": 91.5,
+        "source_kind": "graph_edge",
+        "caller_neighbor": true
+      }
+    },
     {
       "edge": {
         "id": 0,
@@ -124,38 +156,6 @@
         "final_score": 88.0,
         "source_kind": "graph_edge",
         "callee_neighbor": true
-      }
-    },
-    {
-      "edge": {
-        "id": 0,
-        "kind": "calls",
-        "source_qn": "src/main.rs::fn::main",
-        "target_qn": "src/lib.rs::fn::helper",
-        "file_path": "src/main.rs",
-        "line": 4,
-        "confidence": 0.6499999761581421,
-        "confidence_tier": "same_package",
-        "extra_json": {
-          "callee_text": "helper",
-          "callee_name": "helper",
-          "receiver_text": null,
-          "reachability": "unknown"
-        },
-        "repo_provenance": {
-          "repo_id": "<repo_id>",
-          "repo_fingerprint": "<repo_fingerprint>",
-          "repo_root": "<repo_root>"
-        }
-      },
-      "selection_reason": "caller",
-      "depth": 1,
-      "relevance_score": 86.5,
-      "context_ranking_evidence": {
-        "base_score": 86.5,
-        "final_score": 86.5,
-        "source_kind": "graph_edge",
-        "caller_neighbor": true
       }
     }
   ],
@@ -206,7 +206,7 @@
         "qualified_name": "src/main.rs::fn::main",
         "kind": "function",
         "file_path": "src/main.rs",
-        "relevance_score": 88.0,
+        "relevance_score": 93.0,
         "selection_reason": "caller"
       }
     ],
@@ -234,20 +234,20 @@
         ]
       },
       {
-        "summary": "src/lib.rs::fn::helper -> src/lib.rs::method::Greeter::greet_twice",
+        "summary": "src/main.rs::fn::main -> src/lib.rs::fn::helper",
         "steps": [
-          "src/lib.rs::fn::helper",
-          "src/lib.rs::method::Greeter::greet_twice"
+          "src/main.rs::fn::main",
+          "src/lib.rs::fn::helper"
         ],
         "edge_kinds": [
           "calls"
         ]
       },
       {
-        "summary": "src/main.rs::fn::main -> src/lib.rs::fn::helper",
+        "summary": "src/lib.rs::fn::helper -> src/lib.rs::method::Greeter::greet_twice",
         "steps": [
-          "src/main.rs::fn::main",
-          "src/lib.rs::fn::helper"
+          "src/lib.rs::fn::helper",
+          "src/lib.rs::method::Greeter::greet_twice"
         ],
         "edge_kinds": [
           "calls"
