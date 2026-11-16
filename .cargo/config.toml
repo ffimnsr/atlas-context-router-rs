@@ -5,3 +5,11 @@
 # exercises the real parser instead of aborting on stack exhaustion.
 [env]
 RUST_MIN_STACK = "8388608"
+
+# sqlite-vec 0.1.9 unconditionally typedefs BSD `u_int*_t` names on every
+# non-Windows target, and musl does not define them, so the vendored C fails to
+# compile for x86_64-unknown-linux-musl. Map the missing names onto their
+# <stdint.h> equivalents. cc-rs only reads the `CFLAGS_<target>` variable that
+# matches the current compilation target, so this entry is inert for glibc and
+# macOS builds.
+CFLAGS_x86_64_unknown_linux_musl = "-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int64_t=uint64_t"

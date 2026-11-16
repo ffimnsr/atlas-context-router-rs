@@ -73,6 +73,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # SQLite
 rusqlite = { version = "0.32", features = ["bundled-full"] }
+# 0.1.9 ships C that typedefs BSD `u_int*_t` names; `.cargo/config.toml` adds
+# the missing -Du_int*_t defines for musl builds.
 sqlite-vec = "0.1.9"
 atlas-db-utils = { path = "packages/atlas-db-utils", version = "1.0.0" }
 

@@ -74,6 +74,39 @@ Before creating new code:
 - Favor the cleanest correct implementation over carrying old branches forward.
 - If existing code is already present but the design is suboptimal, prefer a focused overhaul that improves correctness, clarity, or maintainability.
 
+## Issue Tracking
+- Before starting work, check ISSUES.md for a matching item.
+- If the requested work is already complete, mark the corresponding checklist item as done.
+- If you finish work that matches an open checklist item, tick it before you wrap up.
+
+## Change Hygiene
+- Document non-obvious decisions in concise comments near the code.
+- Keep diffs focused; avoid unrelated refactors.
+- Add or update tests for new behavior and bug fixes.
+- Confirm local build/test success before finalizing changes when possible.
+
+## Flaky Test Prevention
+- Rust tests run in parallel by default. Treat globals as shared process state: cwd, env vars, fixed filesystem paths, sockets, ports, `OnceLock`/`Lazy`, static mutexes, and Tokio runtimes can race across tests.
+- Prefer per-test owned state: `tempfile::TempDir`, unique temp paths with pid plus monotonic counter, fresh config structs, local registries, and explicit dependency injection.
+- Never use shell-level test retries to hide flakes. Fix root cause or quarantine outside code if CI supports quarantine.
+- Avoid fixed sleep/retry loops. Use bounded wait helpers that pump relevant event queues, assert exact observable conditions, and panic with useful state (`path`, last text/error, status, pending state).
+- Avoid real-clock assertions when possible. For Tokio timer behavior, use paused/virtual time (`#[tokio::test(start_paused = true)]`, `tokio::time::advance`) instead of wall-clock sleeps.
+- Every spawned async/background task in tests must have explicit shutdown: hold `JoinHandle`, signal cancellation, then await completion before test exits.
+- Tests that mutate cwd or environment must hold existing cwd/env lock guards and restore state with RAII guards so panic cannot leak process state.
+- Do not let `OnceLock`, `Lazy`, or cached config read mutable env/test state unless test order cannot affect result. Prefer building fresh values per test.
+- Use `serial_test` only when shared process-global mutation is unavoidable and cannot be refactored to per-test state. For async tests, use async-aware serial attributes in correct macro order per crate docs.
+- Temp files/sockets must not depend on timestamp alone; include pid and monotonic counter or use `tempfile` APIs.
+- Before increasing timeouts, identify whether failure is scheduling, leaked state, fixed resource collision, un-awaited task, or real bug. Longer timeout alone is last resort, not fix.
+
+## Commit Message Policy
+- DON'T commit automatically, user would commit manually. Generate only commit header and or body after feature/fix/update.
+- Use conventional commit format for subject line (e.g., `feat: ...`, `fix: ...`, `chore: ...`).
+- Create a relevant to the change subject line
+- In commit body, start each bullet with lowercase (e.g. `add`, `fix`, not `Add`, `Fix`).
+- Include brief body summarizing all relevant additions/changes in commit.
+- Add sign-off line in commit message (`Signed-off-by: Edward Fitz Abucay <29743013+ffimnsr@users.noreply.github.com>`).
+- DON'T ever skip git hooks or use `--no-verify`, if there's problem fix it then stage and re-commit.
+
 ## Atlas Focus Rule
 - Keep Atlas centered on core path: repo scan → parse → persist graph → incremental update → search/traverse → review context.
 - Treat context memory and session continuity as supporting features.

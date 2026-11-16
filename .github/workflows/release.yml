@@ -241,14 +241,32 @@ jobs:
     name: Publish release
     needs: build
     runs-on: ubuntu-latest
-    if: github.ref_type == 'tag'
+    # Publish whatever targets built successfully. Without `always()` a single
+    # failed matrix leg (e.g. musl) skips publishing entirely and discards the
+    # archives that did build (e.g. macOS). The guard below still refuses to
+    # publish an empty release when no leg produced an archive.
+    if: always() && github.ref_type == 'tag'
 
     steps:
       - name: Download all release artifacts
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           pattern: release-*
           merge-multiple: true
+
+      - name: Require at least one release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          archives=(atlas-*.tar.gz)
+          if (( ${#archives[@]} == 0 )); then
+            echo "::error::No release archives were produced; refusing to publish an empty release."
+            exit 1
+          fi
+          printf 'Publishing %d archive(s): %s\n' "${#archives[@]}" "${archives[*]}"
 
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
