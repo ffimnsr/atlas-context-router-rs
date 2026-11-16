@@ -58,10 +58,10 @@ fn inject_instructions_appends_to_existing() {
 }
 
 #[test]
-fn instructions_section_embeds_generic_mcp_setup() {
+fn instructions_section_excludes_generic_mcp_setup() {
     assert!(
-        INSTRUCTIONS_SECTION.contains(GENERIC_MCP_SETUP),
-        "managed AGENTS.md block must embed the generic MCP setup guidance"
+        !INSTRUCTIONS_SECTION.contains(GENERIC_MCP_SETUP),
+        "managed AGENTS.md block must not embed the generic MCP setup guidance"
     );
     assert!(GENERIC_MCP_SETUP.contains("command: atlas"));
     assert!(GENERIC_MCP_SETUP.contains("\"mcpServers\""));
@@ -72,6 +72,8 @@ fn instructions_section_embeds_generic_mcp_setup() {
 fn instructions_section_stays_a_stable_pointer() {
     assert!(INSTRUCTIONS_SECTION.contains("atlas skills get core"));
     assert!(INSTRUCTIONS_SECTION.contains("atlas skills list"));
+    assert!(INSTRUCTIONS_SECTION.contains("MANDATORY"));
+    assert!(INSTRUCTIONS_SECTION.contains("STRICT RULE"));
     assert!(
         INSTRUCTIONS_SECTION.lines().count() < 40,
         "managed AGENTS.md block must stay a small pointer, not a growing guide"
@@ -80,6 +82,7 @@ fn instructions_section_stays_a_stable_pointer() {
         "Minimal-first escalation order",
         "`tool_list`",
         "Session memory fallback for hosts without hooks",
+        "### Add Atlas as an MCP server",
     ] {
         assert!(
             !INSTRUCTIONS_SECTION.contains(moved),

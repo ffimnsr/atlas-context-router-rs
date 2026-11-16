@@ -122,30 +122,11 @@ Agent-facing Atlas guidance has one home: `packages/atlas-cli/skill-data/`.
 - The `cli` and `mcp-tools` references are generated at request time from the binary and MCP registry. Never add static content for them; add a test instead when the generated output must stay accurate.
 
 <!-- atlas MCP tools -->
-## MCP Tools: atlas
+## MCP Tools: atlas (MANDATORY)
 
-**Atlas first.** This repository has a code knowledge graph. For code exploration, use Atlas MCP tools before `grep`, file search, broad reads, or exploratory terminal commands. Atlas returns structure text search cannot: symbols, callers, callees, tests, dependents, impact radius, and review context.
+**STRICT RULE — ATLAS FIRST:** This repository is indexed by the Atlas code knowledge graph. You **MUST** use Atlas MCP tools (or the `atlas` CLI) **BEFORE** using `grep`, `rg`, `find`, file search, globbing, broad file reads, or exploratory shell commands. Bypassing Atlas for code discovery or structural questions is strictly prohibited.
 
-Before the first Atlas tool call, run `atlas skills get core` and follow it. That guide is served by the installed Atlas binary, so it always matches your version: Atlas-first workflow, tool map, escalation order, trust-metadata checks, and path invariants. Run `atlas skills list` to see every guide this version serves.
-
-Use default JSON output. Trust `structuredContent` as source of truth when present.
-
-### Add Atlas as an MCP server
-
-Atlas is a stdio MCP server. Register it with whatever MCP-capable coding tool
-you use — Atlas does not write per-tool configuration files.
-
-  command: atlas
-  args:    ["serve"]   # add ["--repo", "<absolute-repo-path>", "serve"] to pin a repository
-
-Most MCP clients accept a JSON entry shaped like:
-
-  {
-    "mcpServers": {
-      "atlas": { "type": "stdio", "command": "atlas", "args": ["serve"] }
-    }
-  }
-
-Place that entry in your tool's MCP configuration and restart the tool. Consult
-the tool's documentation for the exact config file location and key name.
+1. **Load the workflow first (REQUIRED):** Before your first Atlas call or any code exploration, run `atlas skills get core` and strictly follow its rules (run `atlas skills list` to see all version-matched guides).
+2. **Query the graph first (REQUIRED):** Use Atlas to resolve symbols, callers, callees, tests, dependents, impact radius, and review context. Only read or search exact files **after** Atlas identifies them, or when the user explicitly names the target file path.
+3. **Output contract:** Use default JSON output and trust `structuredContent` as the source of truth when present.
 <!-- /atlas MCP tools -->
