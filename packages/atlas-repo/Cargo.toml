@@ -1,6 +1,6 @@
 [package]
 name = "atlas-repo"
-version = "1.7.11"
+version = "1.7.12"
 license.workspace = true
 rust-version.workspace = true
 edition = "2024"
