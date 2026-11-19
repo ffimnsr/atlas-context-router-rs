@@ -15,6 +15,7 @@
 !MCP_TOOLS.md
 !AGENTS.md
 !AGENTS_MCP_TESTS.md
+!docs/PLAN-*.md
 
 # Agent skill guides ship inside the binary and the repo skill catalog
 !packages/atlas-cli/skill-data/**/*.md
@@ -46,8 +47,18 @@ coverage/
 # Ignore logs
 *.log
 
-# Atlas specific ignores
-.atlas/
+# Atlas local state stays untracked except durable markdown continuity records
+.atlas/*
+!.atlas/memories/
+!.atlas/decisions/
+!.atlas/feedback/
+!.atlas/memoir/
+!.atlas/overview/
+!.atlas/memories/**/*.md
+!.atlas/decisions/**/*.md
+!.atlas/feedback/**/*.md
+!.atlas/memoir/**/*.md
+!.atlas/overview/**/*.md
 
 
 .patches
