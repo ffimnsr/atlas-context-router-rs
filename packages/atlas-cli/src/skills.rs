@@ -257,29 +257,65 @@ mod tests {
 
     /// MCP tools the static references document.
     const DOCUMENTED_TOOLS: &[&str] = &[
+        "analyze_architecture",
+        "analyze_dead_code",
+        "analyze_dependency",
+        "analyze_metrics",
+        "analyze_patterns",
+        "analyze_remove",
         "analyze_safety",
         "assess_risk",
+        "batch_query_graph",
+        "broker_status",
         "build_graph",
         "compact_session",
+        "concept_clusters",
+        "cross_file_links",
+        "cross_session_search",
         "db_check",
         "debug_graph",
         "detect_changes",
         "doctor",
+        "embed_chunks",
         "explain_change",
+        "explain_query",
+        "feedback_record",
+        "find_complex_functions",
+        "find_duplicates",
+        "find_large_functions",
+        "find_similar_functions",
         "get_context",
+        "get_context_stats",
         "get_docs_section",
         "get_global_memory",
         "get_impact_radius",
+        "get_metrics",
         "get_minimal_context",
         "get_review_context",
         "get_session_status",
+        "infer_modules",
+        "label_components",
         "list_graph_stats",
+        "list_symbols",
+        "memoir_add_concept",
+        "memoir_create",
+        "memoir_inspect",
+        "memoir_link",
         "memory_recall",
         "memory_store",
+        "overview_export",
+        "overview_ingest",
+        "overview_refresh_plan",
+        "overview_search",
+        "overview_show",
+        "postprocess_graph",
+        "purge_saved_context",
         "query_graph",
         "read_file_around_match",
         "read_file_excerpt",
+        "read_saved_context",
         "record_session_event",
+        "repo_registry",
         "resolve_symbol",
         "resume_session",
         "save_context_artifact",
@@ -419,6 +455,53 @@ mod tests {
         ] {
             assert!(content.contains(tool), "core guide must mention {tool}");
         }
+    }
+
+    #[test]
+    fn core_guide_documents_workflow_patterns() {
+        let content = CORE.content;
+        for heading in ["## Workflow patterns", "## Plan and handoff"] {
+            assert!(
+                content.contains(heading),
+                "core guide must expose the {heading} section"
+            );
+        }
+        for tool in [
+            "`batch_query_graph`",
+            "`concept_clusters`",
+            "`cross_file_links`",
+            "`cross_session_search`",
+            "`analyze_architecture`",
+            "`find_duplicates`",
+            "`read_saved_context`",
+        ] {
+            assert!(
+                content.contains(tool),
+                "workflow patterns must suggest {tool}"
+            );
+        }
+        assert!(content.contains("source_type: \"plan\""));
+        assert!(content.contains("512 B"));
+        assert!(content.contains("gitignored"));
+    }
+
+    #[test]
+    fn continuity_reference_documents_plan_capture() {
+        let content = render_reference("continuity").expect("continuity reference");
+        assert!(content.contains("source_type: \"plan\""));
+        assert!(content.contains("`memory_store`"));
+        assert!(content.contains("`read_saved_context`"));
+        assert!(content.contains("plan pointers"));
+    }
+
+    #[test]
+    fn workflows_reference_documents_area_mapping() {
+        let content = render_reference("workflows").expect("workflows reference");
+        assert!(content.contains("## Plan and persist multi-step work"));
+        assert!(content.contains("## Map an unfamiliar area"));
+        assert!(content.contains("`analyze_architecture`"));
+        assert!(content.contains("`concept_clusters`"));
+        assert!(content.contains("`cross_file_links`"));
     }
 
     #[test]

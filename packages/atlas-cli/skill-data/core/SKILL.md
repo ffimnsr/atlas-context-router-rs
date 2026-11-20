@@ -25,6 +25,7 @@ Continuity is not only a session-start read. Keep writing durable state while yo
 - `record_session_event` on meaningful transitions: `user-prompt` with `payload.prompt`, `post-tool-use` with `changed_files`, `file-changed` when you know the files but not the originating tool payload, `tool-failure` when an error is resolved, and `stop` or `session-end` before the final response.
 - `save_context_artifact` for anything a future session would want verbatim: `decision`, `review`, `investigation`, `handoff`, `error_resolved`, or `preference`. Reference `source_id` and symbols instead of pasting raw transcripts.
 - `memory_store` for durable repo notes that outlive one session: decisions, constraints, preferences, and gotchas. Choose `scope` deliberately (`project` for repo facts, `session` for scratch) and `importance` honestly; `memory_recall` reads them back.
+- Multi-step plan: save the full plan with `save_context_artifact` (`source_type: "plan"`) and a durable pointer with `memory_store` (`scope: "project"`, artifact `source_id`). Artifacts at or below 512 B return inline and are not persisted, so put short plans in `memory_store` only.
 - `feedback_record` when an Atlas analysis prediction was wrong: pass `predicted`, `actual`, and `correction` so later analyses carry the correction. Use it for wrong dead-code, removal, or safety verdicts, not for user preference notes.
 - `compact_session` before context compression is imminent or detected, and when a long session needs curating.
 - Never store secrets, credentials, trivial logs, duplicate facts, or raw unbounded transcripts.
@@ -86,6 +87,41 @@ Anti-patterns:
 - broad traversal without bounded `max_depth` and `max_nodes`
 - using full review context when minimal context is enough
 - skipping Atlas because a terminal command feels faster
+
+## Workflow patterns
+
+Use the shortest chain that answers the question, then stop. Load `--ref workflows` for expanded recipes.
+
+| Task | Chain |
+| --- | --- |
+| Multi-step plan | `wake_up` with topic → recon (`query_graph`, `get_context`) → `save_context_artifact` full plan → `memory_store` project pointer → `record_session_event` `stop` |
+| Unfamiliar area | `query_graph` or `resolve_symbol` → `get_context` → `cross_file_links` or `concept_clusters` → `symbol_neighbors` |
+| Change review | `detect_changes` → `get_minimal_context` → `get_review_context` → `explain_change` → `get_impact_radius` |
+| Refactor or remove safely | `assess_risk` + `analyze_safety` → `analyze_dependency` or `analyze_remove` → `symbol_neighbors` tests → dry-run refactor → tests |
+| Duplicate or complex code | `find_duplicates` or `find_similar_functions` → `find_complex_functions` or `find_large_functions` → `analyze_metrics` |
+| Architecture map | `analyze_architecture` → `infer_modules` → `label_components` → `analyze_patterns` |
+| Unused code | `analyze_dead_code` → `analyze_dependency` or `analyze_remove` → `feedback_record` when the verdict is wrong |
+| Non-code evidence | `search_files` or `search_content` → `read_file_excerpt`, `get_docs_section`, or `read_file_around_match` → `search_templates` or `search_text_assets` |
+| Durable decision, preference, or gotcha | `memory_store` (`scope: "project"`) → `memory_recall` or `search_decisions` later; `feedback_record` for wrong Atlas analysis |
+| Concept or design map | `memoir_create` → `memoir_add_concept` → `memoir_link` → `memoir_inspect` |
+| Code-area overview | `overview_search` or `overview_show` → `overview_export` → `overview_ingest`; `overview_refresh_plan` after changes |
+| Prior-session recall | `cross_session_search` or `search_saved_context` → `read_saved_context`; `get_global_memory` for repo-wide patterns |
+| Stale or unhealthy graph | `status`, `doctor`, or `db_check` → `update_graph` working tree → `build_graph`; `postprocess_graph` for derived analytics; `embed_chunks` only when embeddings are configured |
+| MCP or multi-repo diagnostics | `broker_status` or `get_metrics` for broker liveness and counters; `repo_registry` for repo trust; `list_graph_stats` or `debug_graph` for graph shape |
+| Long session or storage pressure | `get_context_stats` → `compact_session` → `purge_saved_context` for old or session-scoped artifacts |
+
+Use `batch_query_graph` for several symbol lookups in one call, `list_symbols` for deterministic paginated inventory, and `explain_query` when `query_graph` returns empty or noisy matches.
+
+## Plan and handoff
+
+- Start from `wake_up` with the task topic; read `recent_decisions`, `critical_memories`, `changed_files`, and `graph_readiness` before replanning.
+- Recon before writing steps: `query_graph` or `resolve_symbol`, `get_context`, and `cross_file_links` or `concept_clusters` for area boundaries.
+- Persist the full plan with `save_context_artifact` (`source_type: "plan"`, `content_type: "text/markdown"`).
+- Persist a durable pointer with `memory_store`: `scope: "project"`, task `topic`, the artifact `source_id`, and honest `importance`.
+- Artifacts live under `.atlas/artifacts/` and are gitignored; project memories live under `.atlas/memories/` and are committed. Use artifacts for verbatim plan bodies, memories for the cross-session pointer and summary.
+- Without an explicit `session_id`, artifacts attach to the derived MCP session. Recall them from another session with `cross_session_search` or through the memory pointer.
+- After the plan changes, update the memory pointer. Before closing, `record_session_event` `stop` (or `session-end`) and `compact_session` when the session is long.
+- Next session: `wake_up` → `memory_recall` → `read_saved_context` with the stored `source_id`.
 
 ## Tool discovery
 

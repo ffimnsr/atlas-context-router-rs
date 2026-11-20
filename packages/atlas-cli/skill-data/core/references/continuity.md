@@ -1,6 +1,6 @@
 # Session, memory, and history state
 
-Atlas keeps session continuity in per-repo SQLite stores under `.atlas/`. Never write any Atlas database directly; only call Atlas MCP tools or CLI commands.
+Atlas keeps continuity truth as Markdown files under `.atlas/` with derived SQLite indexes. Never write any Atlas database directly; only call Atlas MCP tools or CLI commands.
 
 ## Session memory fallback for hosts without hooks
 
@@ -10,6 +10,7 @@ When your coding tool is wired to the generic `.atlas/hooks/atlas-hook` runner, 
 
 - At session start, call `wake_up` when available; otherwise `resume_session` before substantive work.
 - Call `search_decisions` for prior conclusions and `search_saved_context` for prior artifacts relevant to the task.
+- Call `memory_recall` for durable project notes and plan pointers, then `read_saved_context` with the stored `source_id` when the full body is needed.
 - Call `get_global_memory` when you need repo-level cross-session context.
 
 CLI mirrors:
@@ -37,6 +38,7 @@ Call `record_session_event` when any of these happens:
 9. Durable repo fact, constraint, preference, or gotcha that should outlive the session → `memory_store` with an explicit `scope` (`project` or `session`) and honest `importance`.
 10. Atlas analysis prediction wrong (dead code, removal, safety verdict) → `feedback_record` with `predicted`, `actual`, and `correction`.
 11. Major work completed before your final response → `record_session_event` with `event: "stop"` (or `event: "session-end"`) and save a concise handoff artifact.
+12. Multi-step plan created or revised → save the full plan via `save_context_artifact` with `source_type: "plan"` and a durable pointer via `memory_store` with `scope: "project"` and the artifact `source_id`; recall it next session with `memory_recall` then `read_saved_context`.
 
 Do NOT store: trivial logs, raw secrets or credentials, duplicate facts, raw unbounded transcripts, or facts already present in repository instruction files. Prefer compact summaries and `source_id` references.
 
@@ -57,7 +59,8 @@ Run `atlas session <command> --help` for flags; the skill `cli` reference has ev
 | Layer | Use it for | Commands |
 | --- | --- | --- |
 | Session | Event ledger, resume snapshot, saved artifacts for one session | `atlas session` |
-| Memory | Durable repo facts: decisions, preferences, gotchas | `atlas memory`, `atlas feedback` |
+| Artifact | Full plan bodies, reviews, investigations, error fixes, and handoffs | `atlas session save-artifact` |
+| Memory | Durable repo facts: decisions, preferences, gotchas, and plan pointers | `atlas memory`, `atlas feedback` |
 | Memoir | Concept graphs with typed relations, separate from the code graph | `atlas memoir` |
 | Overview | Evidence-linked code overview memory and external analysis handoff | `atlas overview` |
 | History | Graph snapshots per git commit and churn trends | `atlas history` |

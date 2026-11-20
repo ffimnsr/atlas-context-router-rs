@@ -126,6 +126,33 @@ fn core_skill_puts_continuity_before_graph_lookup() {
 }
 
 #[test]
+fn core_skill_documents_workflow_patterns() {
+    for heading in ["## Workflow patterns", "## Plan and handoff"] {
+        assert!(
+            GUIDE.contains(heading),
+            "core guide must expose the {heading} section"
+        );
+    }
+    for tool in [
+        "`batch_query_graph`",
+        "`concept_clusters`",
+        "`cross_file_links`",
+        "`cross_session_search`",
+        "`analyze_architecture`",
+        "`find_duplicates`",
+        "`read_saved_context`",
+    ] {
+        assert!(
+            GUIDE.contains(tool),
+            "workflow patterns must suggest {tool}"
+        );
+    }
+    assert!(GUIDE.contains("source_type: \"plan\""));
+    assert!(GUIDE.contains("512 B"));
+    assert!(GUIDE.contains("gitignored"));
+}
+
+#[test]
 fn core_skill_documents_split_graph_build_tools() {
     assert!(GUIDE.contains("`build_graph` with `{}`"));
     assert!(GUIDE.contains("`update_graph` with direct `change_source`"));
@@ -144,6 +171,8 @@ fn continuity_reference_documents_session_memory_fallback() {
     assert!(guide.contains("`wake_up` when available"));
     assert!(guide.contains("`resume_session`"));
     assert!(guide.contains("`save_context_artifact`"));
+    assert!(guide.contains("source_type: \"plan\""));
+    assert!(guide.contains("`read_saved_context`"));
     assert!(guide.contains("`compact_session`"));
     assert!(guide.contains("`search_decisions`"));
     assert!(guide.contains("`get_global_memory`"));
