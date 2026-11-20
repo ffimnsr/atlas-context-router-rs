@@ -93,6 +93,67 @@ fn store_feedback_roundtrips_all_fields() {
 }
 
 #[test]
+fn feedback_update_and_delete_keep_fts_in_sync() {
+    let (_dir, mut store) = open_store(16, 1024);
+    let record = store
+        .store_feedback(&feedback_input(
+            "fts-sync",
+            "helper is dead",
+            "helper is used",
+            "dead_code",
+            None,
+            None,
+            "keep the helper",
+        ))
+        .unwrap();
+
+    // Regression for migration 020: the markdown import upsert refreshes
+    // existing rows with a plain UPDATE. With a contentful fts5 table the
+    // 'delete'-command triggers raised a generic SQL logic error here.
+    store
+        .conn
+        .execute(
+            "UPDATE feedback_records SET correction = 'updated correction wording' WHERE id = ?1",
+            rusqlite::params![record.id],
+        )
+        .unwrap();
+
+    let updated = store
+        .search_feedback("/repo", "updated correction", &Default::default(), 10)
+        .unwrap();
+    assert!(
+        updated.iter().any(|hit| hit.feedback.id == record.id),
+        "FTS must match the updated correction text"
+    );
+
+    store
+        .conn
+        .execute(
+            "DELETE FROM feedback_records WHERE id = ?1",
+            rusqlite::params![record.id],
+        )
+        .unwrap();
+
+    let after_delete = store
+        .search_feedback("/repo", "updated correction", &Default::default(), 10)
+        .unwrap();
+    assert!(
+        after_delete.iter().all(|hit| hit.feedback.id != record.id),
+        "FTS must stop matching after the row is deleted"
+    );
+
+    // External-content index must agree with the content table after the
+    // trigger-driven delete and re-insert cycle.
+    store
+        .conn
+        .execute(
+            "INSERT INTO feedback_records_fts(feedback_records_fts) VALUES('integrity-check')",
+            [],
+        )
+        .unwrap();
+}
+
+#[test]
 fn search_feedback_finds_by_text_symbol_and_file() {
     let (_dir, mut store) = open_store(16, 1024);
     store

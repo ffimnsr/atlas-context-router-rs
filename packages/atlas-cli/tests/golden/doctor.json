@@ -217,8 +217,8 @@
       "check": "schema_version",
       "status": "pass",
       "ok": true,
-      "message": "graph=21/21 content=12/12 session=19/19",
-      "detail": "graph=21/21 content=12/12 session=19/19",
+      "message": "graph=21/21 content=12/12 session=20/20",
+      "detail": "graph=21/21 content=12/12 session=20/20",
       "issue_code": null,
       "details": {
         "label": "schema_version",

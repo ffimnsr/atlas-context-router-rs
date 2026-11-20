@@ -98,9 +98,14 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "019_memory_index_file_identity",
         up_sql: include_str!("migrations/019_memory_index_file_identity.sql"),
     },
+    Migration {
+        version: 20,
+        name: "020_feedback_fts_external_content",
+        up_sql: include_str!("migrations/020_feedback_fts_external_content.sql"),
+    },
 ];
 
-pub const LATEST_VERSION: i32 = 19;
+pub const LATEST_VERSION: i32 = 20;
 
 pub const MIGRATION_SET: MigrationSet = MigrationSet {
     db_kind: "session",
