@@ -512,6 +512,25 @@ mod tests {
         assert!(content.contains("`analyze_architecture`"));
         assert!(content.contains("`concept_clusters`"));
         assert!(content.contains("`cross_file_links`"));
+        assert!(
+            content.contains("Persist interpretive findings"),
+            "area mapping must direct agents to persist interpretive findings"
+        );
+        assert!(content.contains("Keep callers, callees, and other structural facts in the graph"));
+    }
+
+    #[test]
+    fn unfamiliar_area_pattern_tells_agents_to_persist_findings() {
+        let content = CORE.content;
+        assert!(content.contains("**Unfamiliar area.**"));
+        assert!(
+            content.contains("Persist what you learn before leaving the area"),
+            "unfamiliar-area pattern must direct agents to persist interpretive findings"
+        );
+        assert!(content.contains(
+            "purpose and behavior notes through `overview_export` and `overview_ingest`"
+        ));
+        assert!(content.contains("gotchas with `memory_store`"));
     }
 
     #[test]

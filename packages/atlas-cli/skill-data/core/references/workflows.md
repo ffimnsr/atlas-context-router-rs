@@ -26,6 +26,7 @@ atlas memory recall "refactor-plan"
 3. `concept_clusters` with seed files to group co-dependent files.
 4. `cross_file_links` on one file to rank the files that reference its symbols.
 5. `query_graph` or `resolve_symbol` and `get_context` once the boundary files are known.
+6. Persist interpretive findings before moving on: what the area is for and how its key functions work goes through `overview_export` then `overview_ingest`, durable gotchas go to `memory_store`, and design conclusions go to a memoir graph. Keep callers, callees, and other structural facts in the graph; it re-derives them.
 
 ```bash
 atlas insights architecture
