@@ -6,6 +6,8 @@
 //!
 //! | Tool                      | Description                                              |
 //! |---------------------------|----------------------------------------------------------|
+//! | `list_communities`        | Persisted Louvain communities with member counts         |
+//! | `list_flows`              | User-curated named flows with ordered members            |
 //! | `list_graph_stats`        | Node/edge counts and language breakdown                  |
 //! | `repo_registry`           | Registered repo inventory and federation scope summary   |
 //! | `tool_list`               | Compact runtime inventory of visible exported MCP tools  |

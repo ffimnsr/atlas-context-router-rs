@@ -363,6 +363,26 @@ pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
             ),
             ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
         ])),
+        "list_communities" => Some(typed_schema_with_descriptions::<ListCommunitiesArgsSchema>(
+            &[
+                (
+                    "properties/include_nodes",
+                    "Include member qualified names per community, capped at 100 with nodes_truncated (default false).",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "list_flows" => Some(typed_schema_with_descriptions::<ListFlowsArgsSchema>(&[
+            (
+                "properties/name",
+                "Return the single flow with this name, including ordered members. Mutually exclusive with node_qn.",
+            ),
+            (
+                "properties/node_qn",
+                "Return only flows containing this fully-qualified symbol. Mutually exclusive with name.",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
         _ => None,
     }
 }

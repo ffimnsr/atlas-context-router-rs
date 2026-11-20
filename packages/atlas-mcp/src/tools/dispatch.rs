@@ -51,6 +51,7 @@ use super::shared::{
     resolve_repo_scope_selection,
 };
 use super::symbols::tool_list_symbols;
+use super::taxonomy::{tool_list_communities, tool_list_flows};
 use super::trace::tool_trace_calls;
 
 fn response_file_list(response: &serde_json::Value, pointer: &str) -> Vec<String> {
@@ -424,6 +425,8 @@ fn call_with_worker_threads_inner(
 /// these names. A drift test enforces both directions.
 pub(crate) const KNOWN_TOOL_NAMES: &[&str] = &[
     "list_graph_stats",
+    "list_communities",
+    "list_flows",
     "repo_registry",
     "tool_list",
     "tool_search",
@@ -626,6 +629,8 @@ fn call_inner(
 
     let dispatch_result = match name {
         "list_graph_stats" => tool_list_graph_stats(db_path, output_format),
+        "list_communities" => tool_list_communities(args, db_path, output_format),
+        "list_flows" => tool_list_flows(args, db_path, output_format),
         "repo_registry" => tool_repo_registry(repo_root, output_format),
         "tool_list" => tool_tool_list(args, output_format),
         "tool_search" => tool_tool_search(args, output_format),
@@ -794,7 +799,9 @@ fn tool_graph_requirement(name: &str) -> Option<GraphToolRequirement> {
         | "list_symbols" => Some(GraphToolRequirement::SymbolLookup),
         // Traversal: blocked on Partial, Corrupt, Missing.
         "symbol_neighbors" | "traverse_graph" | "trace_calls" | "cross_file_links"
-        | "concept_clusters" | "list_graph_stats" => Some(GraphToolRequirement::Traversal),
+        | "concept_clusters" | "list_graph_stats" | "list_communities" | "list_flows" => {
+            Some(GraphToolRequirement::Traversal)
+        }
         // Analysis: blocked on Partial, Corrupt, Missing.
         "get_context"
         | "get_impact_radius"

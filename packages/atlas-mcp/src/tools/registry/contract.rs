@@ -41,6 +41,8 @@ impl ToolResultContract {
 pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
     match name {
         "list_graph_stats"
+        | "list_communities"
+        | "list_flows"
         | "repo_registry"
         | "tool_list"
         | "tool_search"

@@ -278,6 +278,23 @@ pub(crate) struct ListSymbolsArgsSchema {
 #[allow(dead_code)]
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct ListCommunitiesArgsSchema {
+    include_nodes: Option<bool>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ListFlowsArgsSchema {
+    name: Option<String>,
+    node_qn: Option<String>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct BatchQueryGraphItemArgsSchema {
     /// Symbol name or identifier to search (e.g. 'BalancesTab'). Required unless 'regex' is set.
     text: Option<String>,

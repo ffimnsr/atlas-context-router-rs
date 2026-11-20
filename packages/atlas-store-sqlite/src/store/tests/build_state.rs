@@ -143,6 +143,55 @@ fn get_build_status_returns_none_when_no_row() {
 }
 
 #[test]
+fn last_built_at_ms_tracks_finish_and_stays_null_before_it() {
+    let store = open_in_memory();
+    assert_eq!(store.last_built_at_ms("/repo").unwrap(), None);
+
+    // `begin_build` writes no `last_built_at`, so an interrupted build reports
+    // no timestamp until `finish_build` lands.
+    store.begin_build_for_repo("repo_test", "/repo").unwrap();
+    assert_eq!(store.last_built_at_ms("/repo").unwrap(), None);
+
+    let before_ms = now_epoch_ms();
+    store
+        .finish_build_for_repo(
+            "repo_test",
+            "/repo",
+            BuildFinishStats {
+                state: GraphBuildState::Built,
+                files_discovered: 1,
+                files_processed: 1,
+                files_accepted: 1,
+                files_skipped_by_byte_budget: 0,
+                files_failed: 0,
+                bytes_accepted: 10,
+                bytes_skipped: 0,
+                nodes_written: 1,
+                edges_written: 0,
+                budget_stop_reason: None,
+            },
+        )
+        .unwrap();
+    let after_ms = now_epoch_ms();
+
+    let built_ms = store.last_built_at_ms("/repo").unwrap().expect("timestamp");
+    // `datetime('now')` truncates to whole seconds, so allow 2s lower-bound
+    // slack for truncation and 1s upper-bound slack for clock skew.
+    assert!(
+        built_ms + 2000 >= before_ms && built_ms <= after_ms + 1000,
+        "last_built_at_ms {built_ms} outside [{before_ms}, {after_ms}] window"
+    );
+    assert_eq!(store.last_built_at_ms("/nonexistent").unwrap(), None);
+}
+
+fn now_epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or_default()
+}
+
+#[test]
 fn list_build_statuses_returns_all_repos() {
     let store = open_in_memory();
     store.begin_build_for_repo("repo_test", "/repo/a").unwrap();

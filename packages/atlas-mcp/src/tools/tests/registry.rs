@@ -47,6 +47,8 @@ const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "get_session_status",
     "infer_modules",
     "label_components",
+    "list_communities",
+    "list_flows",
     "list_graph_stats",
     "list_symbols",
     "man",
@@ -535,8 +537,8 @@ fn tool_list_matches_registry_snapshot() {
 fn exported_tools_match_dispatch_and_inventory_count() {
     assert_eq!(
         TOOL_REGISTRY_SNAPSHOT.len(),
-        82,
-        "documented inventory must contain exactly 82 tools"
+        84,
+        "documented inventory must contain exactly 84 tools"
     );
 
     let exported = tool_descriptors()
@@ -548,7 +550,7 @@ fn exported_tools_match_dispatch_and_inventory_count() {
         .map(|name| (*name).to_owned())
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(exported.len(), 82, "live tools/list must export 82 tools");
+    assert_eq!(exported.len(), 84, "live tools/list must export 84 tools");
     assert_eq!(
         exported, dispatch,
         "tools/list registry and dispatch known-name set drifted"

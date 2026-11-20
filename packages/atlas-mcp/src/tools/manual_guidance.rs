@@ -28,6 +28,14 @@ pub(crate) fn tool_usage_guidance(tool_name: &str) -> Vec<String> {
             "Use for deterministic, unranked symbol enumeration with kind, language, subpath, and repo filters; ordering is stable file path, line, qualified name.",
             "`query_graph` ranks by relevance; `list_symbols` pages through every match. Use next_offset for large inventories.",
         ],
+        "list_communities" => vec![
+            "Use to inspect persisted Louvain communities: structural symbol clusters written by postprocess_graph stage communities and consumed as fallback module buckets by infer_modules and label_components.",
+            "Communities are derived data and go stale after builds; when status reports communities_refreshed_after_last_build=false, run postprocess_graph with stage communities before trusting community-derived buckets.",
+        ],
+        "list_flows" => vec![
+            "Use to read user-curated named symbol sequences (flows) managed via the atlas flows CLI; each member carries position and role.",
+            "Filter with name for one flow or node_qn for every flow containing a symbol; the two filters are mutually exclusive. Flows survive rebuilds but need member updates after refactors.",
+        ],
         "symbol_neighbors" | "traverse_graph" | "concept_clusters" => vec![
             "Use after resolving exact symbols or files to inspect direct relationships and bounded dependency paths.",
             "Keep depth and limits small first; escalate only when direct callers/callees are insufficient.",
@@ -152,6 +160,14 @@ pub(crate) fn few_shot_prompts(tool_name: &str, description: &str) -> Vec<String
             "User asks: 'Enumerate every struct under src/auth.' Call `list_symbols` with `{ \"subpath\": \"src/auth\", \"kind\": \"struct\" }` and page with next_offset.".to_owned(),
             "User asks for a complete, unranked function inventory. Call `list_symbols` with `{ \"kind\": \"function\" }` instead of `query_graph` relevance ranking.".to_owned(),
         ],
+        "list_communities" => vec![
+            "User asks: 'What structural clusters exist in this repo?' Call `list_communities` with `{}` first; set `{ \"include_nodes\": true }` only when member names are needed.".to_owned(),
+            "Before trusting `infer_modules` community fallback buckets after a large refactor, call `status` and check communities_refreshed_after_last_build; when false, run `postprocess_graph` with `{ \"stage\": \"communities\" }` first.".to_owned(),
+        ],
+        "list_flows" => vec![
+            "User asks: 'Which flows cover the checkout path?' Call `list_flows` with `{ \"name\": \"checkout\" }` and read ordered members from structuredContent.".to_owned(),
+            "User asks: 'Is this symbol part of any documented flow?' Call `list_flows` with `{ \"node_qn\": \"src/pay.rs::fn::charge\" }` to list every flow containing the symbol.".to_owned(),
+        ],
         "tool_search" => vec![
             "User asks: 'Which tool finds docs?' Call `tool_search` with `{ \"query\": \"docs\" }`, then call `tool_help` for selected exact tool.".to_owned(),
             "User mistypes tool name. Call `tool_search` with typo text and use ranked suggestions instead of guessing.".to_owned(),
@@ -213,6 +229,14 @@ pub(crate) fn special_target_tool_examples(tool_name: &str) -> Option<Vec<String
             json!({ "name": "list_symbols", "arguments": { "kind": "function", "limit": 50 } }),
             json!({ "name": "list_symbols", "arguments": { "subpath": "src/auth", "offset": 50, "limit": 50 } }),
         ],
+        "list_communities" => vec![
+            json!({ "name": "list_communities", "arguments": {} }),
+            json!({ "name": "list_communities", "arguments": { "include_nodes": true } }),
+        ],
+        "list_flows" => vec![
+            json!({ "name": "list_flows", "arguments": { "name": "checkout" } }),
+            json!({ "name": "list_flows", "arguments": { "node_qn": "src/pay.rs::fn::charge" } }),
+        ],
         _ => return None,
     };
     Some(
@@ -242,6 +266,8 @@ mod tests {
             "embed_chunks",
             "explain_query",
             "list_symbols",
+            "list_communities",
+            "list_flows",
         ] {
             let guidance = tool_usage_guidance(name);
             assert!(
@@ -300,11 +326,28 @@ mod tests {
                 .any(|example| example.contains(r#""subpath":"src/auth""#))
         );
 
+        let communities =
+            special_target_tool_examples("list_communities").expect("list_communities examples");
+        assert!(
+            communities
+                .iter()
+                .any(|example| example.contains(r#""include_nodes":true"#))
+        );
+
+        let flows = special_target_tool_examples("list_flows").expect("list_flows examples");
+        assert!(
+            flows
+                .iter()
+                .any(|example| example.contains(r#""node_qn":"src/pay.rs::fn::charge""#))
+        );
+
         for name in [
             "trace_calls",
             "embed_chunks",
             "explain_query",
             "list_symbols",
+            "list_communities",
+            "list_flows",
         ] {
             let examples =
                 special_target_tool_examples(name).unwrap_or_else(|| panic!("{name} examples"));

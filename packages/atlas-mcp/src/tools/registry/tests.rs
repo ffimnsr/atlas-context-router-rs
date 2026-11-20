@@ -424,6 +424,7 @@ fn typed_graph_schemas_preserve_required_fields_and_descriptions() {
             "cross_file_links" => ["file"].into_iter().map(ToOwned::to_owned).collect(),
             "concept_clusters" => ["files"].into_iter().map(ToOwned::to_owned).collect(),
             "list_symbols" => BTreeSet::new(),
+            "list_communities" | "list_flows" => BTreeSet::new(),
             _ => unreachable!("unexpected graph schema tool"),
         };
         assert_eq!(

@@ -207,6 +207,27 @@ impl Store {
         Ok(())
     }
 
+    /// Return the epoch-ms timestamp of the last finished build for a repo,
+    /// or `None` when no build row exists or `last_built_at` is still NULL.
+    ///
+    /// `last_built_at` is stored as a SQLite `datetime('now')` UTC string, so
+    /// the conversion happens in SQL via `strftime('%s', ...)` to keep the
+    /// Rust side free of a date-format parser. Used by the `status` tool to
+    /// flag derived analytics (communities) that predate the latest build.
+    pub fn last_built_at_ms(&self, repo_root: &str) -> Result<Option<i64>> {
+        use rusqlite::OptionalExtension;
+        self.conn
+            .query_row(
+                "SELECT CAST(strftime('%s', last_built_at) AS INTEGER) * 1000
+                 FROM graph_build_state WHERE repo_root = ?1",
+                params![repo_root],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .optional()
+            .map(|value| value.flatten())
+            .map_err(|e| AtlasError::Db(e.to_string()))
+    }
+
     /// Return the last indexed git ref for a repo, or `None` when the repo
     /// has never recorded one (fresh DB or pre-migration 017 database).
     pub fn last_indexed_ref(&self, repo_root: &str) -> Result<Option<String>> {

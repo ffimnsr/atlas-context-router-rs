@@ -137,6 +137,8 @@ pub(crate) const TYPED_GRAPH_SCHEMA_TOOLS: &[&str] = &[
     "concept_clusters",
     "explain_query",
     "list_symbols",
+    "list_communities",
+    "list_flows",
 ];
 
 #[cfg(test)]

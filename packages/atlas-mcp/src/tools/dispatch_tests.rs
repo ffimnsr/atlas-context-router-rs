@@ -449,6 +449,8 @@ fn schema_test_args(
         "explain_query" => json!({"text": "greet", "output_format": "json"}),
         "resolve_symbol" => json!({"name": "greet", "output_format": "json"}),
         "list_symbols" => json!({"kind": "function", "limit": 10, "output_format": "json"}),
+        "list_communities" => json!({"output_format": "json"}),
+        "list_flows" => json!({"output_format": "json"}),
         "analyze_safety" => {
             json!({"symbol": "src/service.rs::fn::compute", "output_format": "json"})
         }

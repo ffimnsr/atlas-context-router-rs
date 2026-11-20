@@ -296,6 +296,8 @@ mod tests {
         "get_session_status",
         "infer_modules",
         "label_components",
+        "list_communities",
+        "list_flows",
         "list_graph_stats",
         "list_symbols",
         "man",

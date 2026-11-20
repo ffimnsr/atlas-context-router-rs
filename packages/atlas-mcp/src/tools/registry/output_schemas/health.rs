@@ -469,6 +469,38 @@ pub(crate) fn status_output_schema() -> Value {
                 "required": ["path", "exists", "open_ok", "open_error", "query_error", "build_status"]
             },
             "indexed_file_count": { "type": "integer" },
+            "postprocess": {
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "properties": {
+                    "state": { "type": "string" },
+                    "mode": { "type": "string" },
+                    "stage_filter": { "type": ["string", "null"] },
+                    "changed_file_count": { "type": "integer" },
+                    "started_at_ms": { "type": ["integer", "null"] },
+                    "finished_at_ms": { "type": ["integer", "null"] },
+                    "last_error_code": { "type": ["string", "null"] },
+                    "last_error": { "type": ["string", "null"] },
+                    "stages": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "stage": { "type": "string" },
+                                "status": { "type": "string" },
+                                "mode": { "type": "string" },
+                                "affected_file_count": { "type": "integer" },
+                                "item_count": { "type": "integer" }
+                            },
+                            "required": ["stage", "status", "mode", "affected_file_count", "item_count"]
+                        }
+                    },
+                    "finished_after_last_build": { "type": ["boolean", "null"] },
+                    "communities_refreshed_after_last_build": { "type": ["boolean", "null"] }
+                },
+                "required": ["state", "mode", "stage_filter", "changed_file_count", "started_at_ms", "finished_at_ms", "last_error_code", "last_error", "stages", "finished_after_last_build", "communities_refreshed_after_last_build"]
+            },
             "node_count": { "type": "integer" },
             "edge_count": { "type": "integer" },
             "last_indexed_at": { "type": ["string", "null"] },
@@ -507,6 +539,7 @@ pub(crate) fn status_output_schema() -> Value {
             "edge_count",
             "last_indexed_at",
             "failure_category",
+            "postprocess",
             "atlas_provenance",
         ],
         None,

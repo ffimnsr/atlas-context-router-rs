@@ -13,6 +13,7 @@ mod relationships;
 mod review;
 mod saved_context;
 mod session;
+mod taxonomy;
 
 pub(super) use analysis::*;
 pub(super) use content::*;
@@ -26,3 +27,4 @@ pub(super) use relationships::*;
 pub(super) use review::*;
 pub(super) use saved_context::*;
 pub(super) use session::*;
+pub(super) use taxonomy::*;

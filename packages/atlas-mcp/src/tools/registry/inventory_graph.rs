@@ -217,5 +217,30 @@ pub(super) fn tools() -> Vec<Value> {
                     "required": []
                 }
         }),
+        json!({
+                "name": "list_communities",
+                "description": "List persisted Louvain communities detected by postprocess_graph (stage communities) or atlas communities detect, with member counts. Communities are derived data consumed as a fallback module bucket by infer_modules and label_components; they go stale after builds or large refactors until postprocess_graph reruns. status reports communities_refreshed_after_last_build for the same check. Set include_nodes=true to also emit member qualified names, capped at 100 per community with a nodes_truncated flag.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "include_nodes": { "type": "boolean", "description": "Include member qualified names per community, capped at 100 with nodes_truncated (default false)." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+        }),
+        json!({
+                "name": "list_flows",
+                "description": "List user-curated named flows: ordered symbol sequences managed via the atlas flows CLI. Each flow carries ordered members (node_qn, position, role), capped at 100 per flow with a members_truncated flag. Filter with name to return one flow, or node_qn to return every flow containing that symbol; name and node_qn are mutually exclusive. Flows are curated by humans, not derived from the graph, so they survive rebuilds but need member updates after refactors.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name":    { "type": "string",  "description": "Return the single flow with this name, including ordered members. Mutually exclusive with node_qn." },
+                        "node_qn": { "type": "string",  "description": "Return only flows containing this fully-qualified symbol. Mutually exclusive with name." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+        }),
     ]
 }

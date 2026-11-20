@@ -23,6 +23,7 @@ mod parity_args;
 mod readiness;
 mod registry;
 mod symbols;
+mod taxonomy;
 mod trace;
 
 pub(super) struct McpFixture {

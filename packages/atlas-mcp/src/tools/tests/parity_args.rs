@@ -216,6 +216,8 @@ pub(super) fn parity_args(
             "exclude_subpaths": ["src/generated"],
             "output_format": "json"
         }),
+        "list_communities" => json!({ "output_format": "json" }),
+        "list_flows" => json!({ "output_format": "json" }),
         "analyze_safety" => {
             json!({ "symbol": "src/service.rs::fn::compute", "output_format": "json" })
         }

@@ -238,20 +238,32 @@ Reports are deterministic and never call a model. They accept `--allow-stale` an
 
 ## Historical and derived graph surfaces
 
-Some graph capabilities are CLI-only. Use them after the core graph workflow identifies the area, not as the first call, and run `atlas <group> <command> --help` for required flags.
+Historical and multi-repo surfaces are CLI-only. Use them after the core graph workflow identifies the area, not as the first call, and run `atlas <group> <command> --help` for required flags.
 
 - `atlas history status` reports snapshot coverage; `atlas history build` and `atlas history update` populate bounded commit ranges, while `diff`, `symbol`, `file`, and `churn` answer regression and churn questions. Use history for trends across commits, not for current-state facts; refresh or rebuild the current graph first.
-- `atlas flows list` and `atlas flows trace` manage named ordered node sequences for recurring architecture paths. Create a flow only when the path repeats across sessions, and update its members after refactors so the sequence does not drift.
-- `atlas communities detect` runs deterministic Louvain clustering; `list`, `nodes`, and `for-node` inspect the result. Use communities to discover boundaries and coupling, not as authoritative architecture, and refresh after large restructuring.
 - `atlas repo list` and `atlas repo sync` manage the multi-repo registry. Inspect `repo_registry` before trusting cross-repo answers, and sync refs and trust state after adding or moving a repo.
 
 ```bash
 atlas history status
 atlas history churn
-atlas flows list
-atlas communities detect
 atlas repo list
 atlas repo sync
+```
+
+## Communities and flows
+
+Communities and flows are named graph groupings with different truth sources. Both are readable from MCP and the CLI, so they join the normal workflow instead of being CLI-only side features.
+
+- **Communities (derived).** Louvain clusters written by `postprocess_graph` with `{ "stage": "communities" }` or `atlas communities detect`. Read them with `list_communities` (set `include_nodes` for member names, capped at 100 with a `nodes_truncated` flag) or `atlas communities list`. They are consumed as fallback module buckets by `infer_modules` and `label_components`, so stale communities degrade those guesses silently.
+- **Communities freshness rule.** After `build_graph` or `update_graph`, check the `status` payload: `postprocess.communities_refreshed_after_last_build` is `true` (fresh), `false` (stale — run `postprocess_graph` with `{ "stage": "communities" }` before trusting community-derived buckets), or `null` (the latest postprocess run skipped the communities stage; rerun it before relying on clusters). Treat a `false` value as a blocking precondition for `infer_modules` and `label_components` conclusions, not a warning to ignore.
+- **Flows (curated).** Named ordered symbol sequences humans create via `atlas flows create` / `add-member`. Read them with `list_flows` (filter by `name` for one flow with ordered members, or `node_qn` for every flow containing a symbol; members are capped at 100 with `members_truncated`) or `atlas flows list` / `members <name>`. Flows survive rebuilds but are not graph-derived: after refactors, update their members with `atlas flows add-member` / `remove-member` so the sequence does not drift, and never invent a flow the user did not curate.
+- When the user asks for architecture boundaries, prefer live analysis (`analyze_architecture`, `concept_clusters`) first; use communities and flows as named cross-references, not as authoritative architecture.
+
+```bash
+atlas flows list
+atlas flows members checkout
+atlas communities detect
+atlas communities list
 ```
 
 ## Keep the graph fresh

@@ -8,6 +8,7 @@ mod graph;
 mod graph_debug;
 mod graph_stats;
 pub mod health;
+mod health_postprocess;
 mod health_retrieval;
 mod inventory;
 mod manual;
@@ -20,6 +21,7 @@ mod registry;
 mod resolve;
 pub(crate) mod shared;
 mod symbols;
+mod taxonomy;
 mod trace;
 mod traversal_wire;
 

@@ -773,6 +773,8 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 
 | Tool | Description |
 |------|-------------|
+| `list_communities` | Persisted Louvain communities with member counts; optional capped node list |
+| `list_flows` | User-curated named flows with ordered members; filter by name or node_qn |
 | `list_graph_stats` | Node/edge counts and language breakdown |
 | `tool_list` | Compact runtime inventory of visible exported MCP tools |
 | `tool_search` | Search visible exported MCP tools by name/title/description with explicit score factors and typo-tolerant fuzzy name matching |

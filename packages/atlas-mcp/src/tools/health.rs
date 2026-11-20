@@ -188,6 +188,11 @@ pub(super) fn tool_status(
     let ok = category == "none" && graph_built;
     let execution_state = readiness.execution_state;
 
+    let (postprocess_block, postprocess_warnings) = match store.as_ref() {
+        Some(store) => super::health_postprocess::status_postprocess_block(store, repo_root),
+        None => (serde_json::Value::Null, Vec::new()),
+    };
+
     let mut warnings = Vec::new();
     if stale_index {
         warnings.push(format!(
@@ -204,6 +209,7 @@ pub(super) fn tool_status(
     if let Some(error) = retrieval_index.last_error.clone() {
         warnings.push(format!("retrieval index unavailable: {error}"));
     }
+    warnings.extend(postprocess_warnings);
 
     let build_status_value = build_status.as_ref().map(|bs| {
         json!({
@@ -238,6 +244,7 @@ pub(super) fn tool_status(
     };
 
     let payload = json!({
+        "postprocess": postprocess_block,
         "node_count": node_count,
         "edge_count": edge_count,
         "last_indexed_at": last_indexed_at,
