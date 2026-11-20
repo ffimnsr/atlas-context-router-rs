@@ -298,11 +298,13 @@ mod tests {
         "label_components",
         "list_graph_stats",
         "list_symbols",
+        // Memoir concept graph links.
         "memoir_add_concept",
         "memoir_create",
         "memoir_delete",
         "memoir_inspect",
         "memoir_link",
+        // Durable memory rows and memory-map links.
         "memory_link",
         "memory_ops",
         "memory_recall",
@@ -644,6 +646,14 @@ mod tests {
         }
         assert!(content.contains("## `atlas skills get`"));
         assert!(content.contains("## `atlas skills list`"));
+    }
+
+    #[test]
+    fn documented_tools_are_unique() {
+        let mut seen = BTreeSet::new();
+        for tool in DOCUMENTED_TOOLS {
+            assert!(seen.insert(*tool), "duplicate documented tool: {tool}");
+        }
     }
 
     #[test]
