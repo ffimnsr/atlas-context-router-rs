@@ -483,14 +483,9 @@ fn memory_list_filters_and_sorts_by_updated_at_desc() {
     );
 
     // Backdate rows so updated_at ordering is observable.
-    let session_db = repo.path().join(".atlas").join("session.db");
-    let conn = Connection::open(&session_db).expect("open session db");
-    conn.execute(
-        "UPDATE memories SET updated_at = '2026-01-01T00:00:00Z' WHERE id = ?1",
-        [&memory_id(&critical)],
-    )
-    .expect("backdate critical");
-    drop(conn);
+    rewrite_memory(repo.path(), &memory_id(&critical), |record| {
+        record.updated_at = "2026-01-01T00:00:00Z".to_owned();
+    });
 
     let all = read_json_data_output(
         "memory.list",
@@ -592,12 +587,23 @@ fn memory_delete_requires_exact_id_and_respects_dry_run() {
 
 /// Backdates a stored memory row so decay math sees it as old.
 fn backdate_memory(repo: &Path, id: &str, updated_at: &str) {
-    let conn = Connection::open(repo.join(".atlas").join("session.db")).expect("open db");
-    conn.execute(
-        "UPDATE memories SET updated_at = ?1 WHERE id = ?2",
-        rusqlite::params![updated_at, id],
-    )
-    .expect("backdate memory");
+    rewrite_memory(repo, id, |record| {
+        record.updated_at = updated_at.to_owned();
+    });
+}
+
+/// Rewrites one markdown memory record through the truth store.
+fn rewrite_memory(repo: &Path, id: &str, apply: impl FnOnce(&mut atlas_session::MemoryRecord)) {
+    let session_db = repo.join(".atlas").join("session.db");
+    let mut store = atlas_session::SessionStore::open(session_db.to_str().expect("db path"))
+        .expect("open session store");
+    let repo_root = repo.to_string_lossy().into_owned();
+    let mut record = store
+        .get_memory(&repo_root, id)
+        .expect("read memory")
+        .expect("memory exists");
+    apply(&mut record);
+    store.rewrite_memory(&record).expect("rewrite memory");
 }
 
 #[test]
@@ -994,15 +1000,34 @@ fn memory_consolidate_dry_run_then_apply_supersedes_duplicates() {
     assert_eq!(applied["group_count"], json!(1));
     assert_eq!(applied["kept_count"], json!(1));
 
-    let (superseded_by, link_count): (Option<String>, i64) = conn
-        .query_row(
-            "SELECT superseded_by, (SELECT COUNT(*) FROM memory_supersessions) FROM memories WHERE id = ?1",
-            [&merged_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .expect("superseded row");
-    assert_eq!(superseded_by.as_deref(), Some(consolidated_id.as_str()));
-    assert_eq!(link_count, 1);
+    let merged = {
+        let session_db = repo.path().join(".atlas").join("session.db");
+        let store = atlas_session::SessionStore::open(session_db.to_str().expect("db path"))
+            .expect("open session store");
+        let repo_root = repo.path().to_string_lossy().into_owned();
+        store
+            .get_memory(&repo_root, &merged_id)
+            .expect("read merged")
+            .expect("merged memory exists")
+    };
+    assert_eq!(merged.superseded_by.as_deref(), Some(consolidated_id.as_str()));
+    let consolidated = {
+        let session_db = repo.path().join(".atlas").join("session.db");
+        let store = atlas_session::SessionStore::open(session_db.to_str().expect("db path"))
+            .expect("open session store");
+        let repo_root = repo.path().to_string_lossy().into_owned();
+        store
+            .get_memory(&repo_root, &consolidated_id)
+            .expect("read consolidated")
+            .expect("consolidated memory exists")
+    };
+    assert!(
+        consolidated
+            .links
+            .iter()
+            .any(|link| link.id == merged_id && link.relation == "supersedes"),
+        "consolidated record must link the merged memory"
+    );
 
     // Default list hides the superseded row; the consolidated row remains.
     let listed = read_json_data_output(
@@ -1012,7 +1037,7 @@ fn memory_consolidate_dry_run_then_apply_supersedes_duplicates() {
             &["--json", "memory", "list", "--topic", "deploy"],
         ),
     );
-    assert_eq!(listed["count"], json!(2));
+    assert_eq!(listed["count"], json!(1));
     assert!(
         !listed["memories"]
             .as_array()
@@ -1020,6 +1045,14 @@ fn memory_consolidate_dry_run_then_apply_supersedes_duplicates() {
             .iter()
             .any(|memory| memory["id"] == json!(merged_id)),
         "superseded rows must be hidden from default listing"
+    );
+    assert!(
+        listed["memories"]
+            .as_array()
+            .expect("memories")
+            .iter()
+            .any(|memory| memory["id"] == json!(consolidated_id)),
+        "the consolidated memory stays active"
     );
     assert!(
         listed["memories"]
@@ -1087,4 +1120,86 @@ fn memory_store_applies_eua_patch_text() {
     assert!(!error.status.success());
     let stderr = String::from_utf8(error.stderr).expect("stderr utf-8");
     assert!(stderr.contains("patch-text"), "got: {stderr}");
+}
+
+#[test]
+fn memory_link_and_tag_filters_work_end_to_end() {
+    let repo = setup_fixture_repo();
+    let source = store_memory(
+        repo.path(),
+        &[
+            "storage uses markdown",
+            "--topic",
+            "storage",
+            "--tag",
+            "architecture",
+        ],
+    );
+    let target = store_memory(
+        repo.path(),
+        &[
+            "sqlite is derived",
+            "--topic",
+            "storage",
+            "--tag",
+            "sqlite",
+        ],
+    );
+    let source_id = memory_id(&source);
+    let target_id = memory_id(&target);
+
+    let linked = read_json_data_output(
+        "memory.link",
+        run_atlas(
+            repo.path(),
+            &[
+                "--json",
+                "memory",
+                "link",
+                &source_id,
+                &target_id,
+                "--relation",
+                "refines",
+            ],
+        ),
+    );
+    assert_eq!(linked["relation"], json!("refines"));
+    assert!(linked["links"]
+        .as_array()
+        .expect("links")
+        .iter()
+        .any(|link| link["id"] == json!(target_id)));
+
+    let tagged = read_json_data_output(
+        "memory.recall",
+        run_atlas(
+            repo.path(),
+            &[
+                "--json",
+                "memory",
+                "recall",
+                "storage",
+                "--tag",
+                "architecture",
+            ],
+        ),
+    );
+    assert_eq!(tagged["count"], json!(1));
+    assert_eq!(tagged["results"][0]["memory"]["id"], json!(source_id));
+
+    let none = read_json_data_output(
+        "memory.recall",
+        run_atlas(
+            repo.path(),
+            &[
+                "--json",
+                "memory",
+                "recall",
+                "storage",
+                "--tag",
+                "missing",
+            ],
+        ),
+    );
+    assert_eq!(none["count"], json!(0));
 }

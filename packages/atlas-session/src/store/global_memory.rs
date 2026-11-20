@@ -348,6 +348,7 @@ pub(super) fn find_relevant_sessions(
 /// reflects all events that have ever been seen for the session, even if those
 /// events are later evicted.
 pub(super) fn update_global_memory_from_events(
+    markdown: &atlas_store_markdown::MarkdownStore,
     conn: &Connection,
     repo_root: &str,
     events: &[SessionEventRow],
@@ -395,7 +396,7 @@ pub(super) fn update_global_memory_from_events(
 
     // VM1: route failing command events through the typed memory operator
     // pipeline so topic entities keep deterministic counts and signatures.
-    record_failure_events(conn, repo_root, events, now)?;
+    record_failure_events(markdown, conn, repo_root, events, now)?;
 
     Ok(())
 }

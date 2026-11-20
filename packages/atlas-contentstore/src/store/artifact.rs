@@ -477,6 +477,8 @@ impl ContentStore {
             debug!("content store size limit enforcement failed (best-effort): {e}");
         }
 
+        super::markdown::write_artifact(&self.markdown, &meta, raw_text, content_type, &now)?;
+
         Ok(())
     }
 
@@ -636,16 +638,30 @@ impl ContentStore {
         self.conn
             .execute("DELETE FROM sources WHERE id = ?1", params![source_id])
             .map_err(|e| AtlasError::Db(e.to_string()))?;
+        super::markdown::delete_artifact(&self.markdown, source_id)?;
         Ok(())
     }
 
     /// Cleanup sources older than `keep_days` days.
     pub fn cleanup(&mut self, keep_days: u32) -> Result<usize> {
         let cutoff = format_days_ago(keep_days);
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM sources WHERE created_at < ?1")
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        let expired = stmt
+            .query_map(params![cutoff], |row| row.get::<_, String>(0))
+            .map_err(|e| AtlasError::Db(e.to_string()))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        drop(stmt);
         let count = self
             .conn
             .execute("DELETE FROM sources WHERE created_at < ?1", params![cutoff])
             .map_err(|e| AtlasError::Db(e.to_string()))?;
+        for source_id in expired {
+            super::markdown::delete_artifact(&self.markdown, &source_id)?;
+        }
         Ok(count)
     }
 
@@ -748,6 +764,26 @@ impl ContentStore {
             .execute_batch(&trigram_cleanup)
             .map_err(|e| AtlasError::Db(e.to_string()))?;
 
+        let ids = if let Some(agent_id) = agent_id {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id FROM sources WHERE session_id = ?1 AND agent_id = ?2")
+                .map_err(|e| AtlasError::Db(e.to_string()))?;
+            stmt.query_map(params![session_id, agent_id], |row| row.get::<_, String>(0))
+                .map_err(|e| AtlasError::Db(e.to_string()))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| AtlasError::Db(e.to_string()))?
+        } else {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id FROM sources WHERE session_id = ?1")
+                .map_err(|e| AtlasError::Db(e.to_string()))?;
+            stmt.query_map(params![session_id], |row| row.get::<_, String>(0))
+                .map_err(|e| AtlasError::Db(e.to_string()))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| AtlasError::Db(e.to_string()))?
+        };
+
         let count = if let Some(agent_id) = agent_id {
             self.conn
                 .execute(
@@ -763,6 +799,9 @@ impl ContentStore {
                 )
                 .map_err(|e| AtlasError::Db(e.to_string()))?
         };
+        for source_id in ids {
+            super::markdown::delete_artifact(&self.markdown, &source_id)?;
+        }
         Ok(count)
     }
 }

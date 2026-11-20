@@ -24,6 +24,8 @@ fn seed(store: &mut SessionStore, body: &str, topic: &str, importance: MemoryImp
             body: body.to_owned(),
             importance,
             source_id: None,
+            tags: Vec::new(),
+            links: Vec::new(),
             metadata: serde_json::json!({}),
         })
         .expect("store memory");

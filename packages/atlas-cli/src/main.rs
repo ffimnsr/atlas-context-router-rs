@@ -41,7 +41,7 @@ fn run_cli() -> anyhow::Result<()> {
 
     match &cli.command {
         Command::Init { .. } => commands::run_init(&cli),
-        Command::Migrate => commands::run_migrate(&cli),
+        Command::Migrate { .. } => commands::run_migrate(&cli),
         Command::Repo { .. } => commands::run_repo(&cli),
         Command::Build { .. } => commands::run_build(&cli),
         Command::Update { .. } => commands::run_update(&cli),
@@ -90,6 +90,7 @@ fn run_cli() -> anyhow::Result<()> {
         Command::Feedback { .. } => commands::run_feedback(&cli),
         Command::WakeUp { .. } => commands::run_wake_up(&cli),
         Command::Hook { .. } => commands::run_hook(&cli),
+        Command::Index { .. } => commands::run_index(&cli),
         Command::History { .. } => commands::run_history(&cli),
         Command::Version => commands::run_version(&cli),
         Command::EmbeddingConfig => commands::run_embedding_config(&cli),

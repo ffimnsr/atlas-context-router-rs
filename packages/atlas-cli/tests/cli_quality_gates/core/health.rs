@@ -322,8 +322,8 @@ fn db_check_reports_missing_memories_table_as_schema_mismatch() {
 
     let session_db = repo.path().join(".atlas").join("session.db");
     let conn = Connection::open(&session_db).expect("open session db");
-    conn.execute_batch("DROP TABLE memories;")
-        .expect("drop memories table");
+    conn.execute_batch("DROP TABLE memory_index;")
+        .expect("drop memory index table");
     drop(conn);
 
     let result = read_json_data_output("db_check", run_atlas(repo.path(), &["--json", "db-check"]));
@@ -333,7 +333,7 @@ fn db_check_reports_missing_memories_table_as_schema_mismatch() {
 
     let memory_schema = &result["session_db"]["memory_schema"];
     assert_eq!(memory_schema["ok"], json!(false));
-    assert_eq!(memory_schema["issues"], json!(["missing table: memories"]));
+    assert_eq!(memory_schema["issues"], json!(["missing table: memory_index"]));
 }
 
 #[test]
@@ -430,8 +430,8 @@ fn db_check_reports_missing_memory_indexes() {
     let session_db = repo.path().join(".atlas").join("session.db");
     let conn = Connection::open(&session_db).expect("open session db");
     conn.execute_batch(
-        "DROP INDEX idx_memories_repo_topic;
-         DROP INDEX idx_memories_repo_importance;",
+        "DROP INDEX idx_memory_index_repo_topic;
+         DROP INDEX idx_memory_index_repo_importance;",
     )
     .expect("drop memory indexes");
     drop(conn);
@@ -442,8 +442,8 @@ fn db_check_reports_missing_memory_indexes() {
     assert_eq!(
         memory_schema["issues"],
         json!([
-            "missing index: idx_memories_repo_topic",
-            "missing index: idx_memories_repo_importance",
+            "missing index: idx_memory_index_repo_topic",
+            "missing index: idx_memory_index_repo_importance",
         ])
     );
 }

@@ -940,6 +940,8 @@ pub(crate) struct MemoryStoreArgsSchema {
     scope: Option<MemoryScopeSchema>,
     frontend: Option<String>,
     source_id: Option<String>,
+    tags: Option<Vec<String>>,
+    links: Option<Vec<MemoryLinkSchema>>,
     patch_id: Option<String>,
     patch_file: Option<String>,
     patch_text: Option<String>,
@@ -954,8 +956,29 @@ pub(crate) struct MemoryRecallArgsSchema {
     topic: Option<String>,
     importance: Option<MemoryImportanceSchema>,
     scope: Option<MemoryScopeSchema>,
+    tags: Option<Vec<String>>,
     shared: Option<bool>,
     limit: Option<u64>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MemoryLinkSchema {
+    /// Target memory id.
+    id: String,
+    /// Relation from the memoir vocabulary plus `supersedes`.
+    relation: String,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MemoryLinkArgsSchema {
+    memory_id: String,
+    target_id: String,
+    relation: Option<String>,
     output_format: Option<String>,
 }
 

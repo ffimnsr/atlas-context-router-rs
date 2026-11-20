@@ -22,6 +22,20 @@ Atlas scans repository code, builds graph structure, stores it in SQLite, and se
 | Search and impact | symbol lookup, call/risk traversal, review context |
 | Agent tooling | MCP broker/daemon server, install helpers, repo hooks, editor integration |
 
+## Storage model
+
+Code graph facts stay in `.atlas/worldtree.db`. Durable continuity records are
+Markdown truth files under `.atlas/`:
+
+- committed: `memories/`, `decisions/`, `feedback/`, `memoir/`, `overview/`;
+- local-only: `sessions/`, `tasks/`, `experience/`, `artifacts/`.
+
+`session.db` and `context.db` are derived, rebuildable indexes. Recall and
+decay keep access bookkeeping in a derived index and never rewrite memory
+files. `atlas migrate markdown` exports legacy rows with round-trip
+verification, and `atlas index rebuild` regenerates artifact chunk indexes from
+`.atlas/artifacts/**`.
+
 Supported languages in current build:
 
 - Rust
@@ -823,6 +837,7 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `cross_session_search` | CM11: search saved context across all sessions for this repo |
 | `get_global_memory` | CM11: frequent symbols/files/workflows and related past sessions |
 | `memory_store` | ICM-A/VM2: store a memory record or apply an EUA search/replace patch |
+| `memory_link` | M1: add a directed memory-map link between two memories |
 | `memory_ops` | VM1: show the bounded typed-operator history for one memory row |
 | `memory_recall` | ICM-A/VM3: two-path recall with visibility rules, score breakdown, and retrieval hints |
 | `experience_inspect` | VR4: inspect query-conditioned experience edges for one atlas:// URI |

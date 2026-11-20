@@ -20,6 +20,8 @@
         "decay_score": 0.0,
         "source_id": "artifact-1",
         "metadata": {},
+        "tags": [],
+        "links": [],
         "superseded_by": null
       },
       "relevance_score": 2,

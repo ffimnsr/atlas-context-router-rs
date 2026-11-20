@@ -1,10 +1,12 @@
 //! ICM-E1 / VM3 — deterministic cross-session recall ranking.
 //!
-//! Recall is lexical-first and token aware: `memories_fts` finds candidates
-//! whose query tokens appear anywhere in topic, title, or body (multi-word
-//! queries no longer require adjacency). Exact topic matches keep a dedicated
-//! top tier, then origin evidence, freshness, and business importance combine
-//! into a clamped `0..=1` composite score.
+//! Recall is lexical-first and token aware: the derived `memory_index_fts`
+//! finds candidates whose query tokens appear anywhere in topic, title, or
+//! body. Markdown files are the source of truth; ranking reads only derived
+//! index columns (L0 frontmatter data), and bodies are loaded for returned hits
+//! only. Exact topic matches keep a dedicated top tier, then origin evidence,
+//! freshness, and business importance combine into a clamped `0..=1` composite
+//! score.
 //!
 //! VM3.2 adds a second path: a bounded auxiliary recall over memoir concepts
 //! that fills the 25% quota. Each path ranks independently; raw scores are
@@ -14,12 +16,14 @@ use rusqlite::Connection;
 use time::OffsetDateTime;
 
 use atlas_core::{AtlasError, Clock, Result, SystemClock};
+use atlas_store_markdown::MarkdownStore;
 
-use super::memory::{age_days, append_filter_clauses, row_to_memory};
+use super::markdown_memory;
+use super::memory::{age_days, append_filter_clauses};
 use super::memory_recall_aux::auxiliary_recall;
 use super::types::{
-    MemoryImportance, MemoryListFilter, MemoryRecallPolicy, MemoryRecallRanking, MemoryScope,
-    MemorySearchHit, MemoryViewer,
+    MemoryImportance, MemoryListFilter, MemoryRecallPolicy, MemoryRecallRanking, MemoryRecord,
+    MemoryScope, MemorySearchHit, MemoryViewer,
 };
 
 /// Maximum origin contribution (0..=ORIGIN_MAX) so lexical evidence survives
@@ -37,10 +41,9 @@ const BM25_ORIGIN_WEIGHT: f64 = 0.05;
 const BODY_ORIGIN_FLOOR: f64 = 0.0;
 
 /// Lexical cross-session recall with deterministic composite ranking.
-///
-/// Defaults to [`MemoryRecallPolicy::default`]; call
-/// [`recall_memories_with_policy`] to apply `[memory.recall]` config.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn recall_memories(
+    store: &MarkdownStore,
     conn: &Connection,
     repo_root: &str,
     query: &str,
@@ -50,6 +53,7 @@ pub(super) fn recall_memories(
     limit: usize,
 ) -> Result<Vec<MemorySearchHit>> {
     recall_memories_with_policy(
+        store,
         conn,
         repo_root,
         query,
@@ -64,6 +68,7 @@ pub(super) fn recall_memories(
 /// Two-path quota recall: primary lexical path plus the auxiliary memoir path.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn recall_memories_with_policy(
+    store: &MarkdownStore,
     conn: &Connection,
     repo_root: &str,
     query: &str,
@@ -77,8 +82,10 @@ pub(super) fn recall_memories_with_policy(
     if limit == 0 {
         return Ok(Vec::new());
     }
+    ensure_index(store, conn, repo_root)?;
 
     let mut primary = primary_recall(
+        store,
         conn,
         repo_root,
         query,
@@ -116,12 +123,59 @@ pub(super) fn recall_memories_with_policy(
         }
     }
 
+    hydrate_hits(store, conn, repo_root, &mut primary)?;
+
+    // Access bookkeeping lives in the derived index; a read-only database
+    // degrades to a warning and never fails the recall.
+    let ids = primary
+        .iter()
+        .map(|hit| hit.memory.id.clone())
+        .collect::<Vec<_>>();
+    if let Err(error) =
+        markdown_memory::record_recall_access(conn, repo_root, &ids, &strftime_now())
+    {
+        tracing::warn!(%error, "memory recall access bookkeeping skipped");
+    }
+
     Ok(primary)
 }
 
-/// Primary lexical path: FTS5 candidates ranked by tier + composite score.
+fn strftime_now() -> String {
+    atlas_core::format_rfc3339(
+        SystemClock
+            .now_utc()
+            .replace_nanosecond(0)
+            .expect("0 nanoseconds is always valid"),
+    )
+}
+
+/// Rebuild the derived index when markdown records exist but the index is empty
+/// (e.g. `session.db` was deleted). Reads only; truth files are untouched.
+fn ensure_index(store: &MarkdownStore, conn: &Connection, repo_root: &str) -> Result<()> {
+    let indexed: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM memory_index WHERE repo_root = ?1",
+            [repo_root],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if indexed > 0 {
+        return Ok(());
+    }
+    let on_disk = store
+        .list_markdown(std::path::Path::new(markdown_memory::MEMORIES_DIR))
+        .map_err(|error| AtlasError::Other(format!("markdown store error: {error}")))?;
+    if !on_disk.is_empty() {
+        markdown_memory::rebuild_index(store, conn, repo_root)?;
+    }
+    Ok(())
+}
+
+/// Primary lexical path: derived FTS candidates ranked by tier + composite
+/// score. Bodies are hydrated after ranking.
 #[allow(clippy::too_many_arguments)]
 fn primary_recall(
+    store: &MarkdownStore,
     conn: &Connection,
     repo_root: &str,
     query: &str,
@@ -161,7 +215,32 @@ fn primary_recall(
     }
 
     rank_hits(&mut hits, limit, SystemClock.now_utc(), policy);
+    hydrate_hits(store, conn, repo_root, &mut hits)?;
     Ok(hits)
+}
+
+fn hydrate_hits(
+    store: &MarkdownStore,
+    conn: &Connection,
+    repo_root: &str,
+    hits: &mut Vec<MemorySearchHit>,
+) -> Result<()> {
+    if hits.is_empty() {
+        return Ok(());
+    }
+    let ids = hits
+        .iter()
+        .map(|hit| hit.memory.id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    let records = markdown_memory::load_records(store, conn, repo_root, &ids)?;
+    hits.retain_mut(|hit| match records.get(&hit.memory.id) {
+        Some(record) => {
+            hit.memory = record.clone();
+            true
+        }
+        None => false,
+    });
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -177,17 +256,17 @@ fn run_primary_query(
 ) -> Result<Vec<MemorySearchHit>> {
     let fts_query = quote_fts_expression(fts_operator_expr);
     let mut sql = String::from(
-        "SELECT m.id, m.repo_root, m.session_id, m.frontend, m.scope, m.topic, m.title, m.body,
-                m.importance, m.created_at, m.updated_at, m.last_accessed_at, m.decay_score,
-                m.source_id, m.metadata_json, m.superseded_by,
+        "SELECT m.id, m.repo_root, m.session_id, m.frontend, m.scope, m.topic, m.title,
+                m.importance, m.created_at, m.updated_at, m.source_id, m.metadata_json,
+                m.superseded_by,
                 CASE WHEN m.topic = ?2 COLLATE NOCASE THEN 0
                      WHEN instr(lower(m.topic), lower(?2)) > 0
                        OR instr(lower(m.title), lower(?2)) > 0 THEN 1
                      ELSE 2 END AS match_tier,
-                bm25(memories_fts) AS bm25
-         FROM memories_fts
-         JOIN memories m ON m.rowid = memories_fts.rowid
-         WHERE memories_fts MATCH ?3
+                bm25(memory_index_fts) AS bm25
+         FROM memory_index_fts
+         JOIN memory_index m ON m.rowid = memory_index_fts.rowid
+         WHERE memory_index_fts MATCH ?3
            AND m.repo_root = ?1
            AND m.superseded_by IS NULL",
     );
@@ -201,7 +280,6 @@ fn run_primary_query(
         " CASE m.scope WHEN 'global' THEN 0 WHEN 'project' THEN 1",
         " WHEN 'frontend' THEN 2 ELSE 3 END ASC,",
         " CASE WHEN m.source_id IS NULL OR trim(m.source_id) = '' THEN 1 ELSE 0 END ASC,",
-        " CASE WHEN m.superseded_by IS NULL THEN 0 ELSE 1 END ASC,",
         " m.updated_at DESC, m.created_at DESC",
         " LIMIT ?",
     ));
@@ -213,10 +291,32 @@ fn run_primary_query(
     let param_refs = params.iter().map(String::as_str).collect::<Vec<_>>();
     let hits = stmt
         .query_map(rusqlite::params_from_iter(param_refs), |row| {
-            let relevance_score: i32 = row.get(16)?;
-            let bm25_score: f64 = row.get(17)?;
+            let relevance_score: i32 = row.get(13)?;
+            let bm25_score: f64 = row.get(14)?;
+            let scope: String = row.get(4)?;
+            let importance: String = row.get(7)?;
+            let created_at: String = row.get(8)?;
             Ok(MemorySearchHit {
-                memory: row_to_memory(row)?,
+                memory: MemoryRecord {
+                    id: row.get(0)?,
+                    repo_root: row.get(1)?,
+                    session_id: row.get(2)?,
+                    frontend: row.get(3)?,
+                    scope: scope.parse().map_err(to_from_sql_error)?,
+                    topic: row.get(5)?,
+                    title: row.get(6)?,
+                    body: String::new(),
+                    importance: importance.parse().map_err(to_from_sql_error)?,
+                    created_at: created_at.clone(),
+                    updated_at: row.get(9)?,
+                    last_accessed_at: created_at,
+                    decay_score: 0.0,
+                    source_id: row.get(10)?,
+                    metadata: serde_json::from_str(&row.get::<_, String>(11)?).unwrap_or_default(),
+                    tags: Vec::new(),
+                    links: Vec::new(),
+                    superseded_by: row.get(12)?,
+                },
                 relevance_score,
                 bm25_score,
                 recall_score: 0.0,
@@ -241,6 +341,10 @@ fn run_primary_query(
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| AtlasError::Db(e.to_string()))?;
     Ok(hits)
+}
+
+fn to_from_sql_error(error: AtlasError) -> rusqlite::Error {
+    super::util::to_from_sql_error(error)
 }
 
 /// Split a query into lowercase alphanumeric tokens for FTS and memoir
@@ -287,9 +391,6 @@ pub(super) fn candidate_limit(limit: usize) -> usize {
 }
 
 /// Append the scope-visibility predicate for `viewer` (ICM-A3).
-///
-/// Callers must alias `memories` as `m` and push the two visibility params in
-/// the same order as the placeholders when `shared_only` is false.
 pub(super) fn append_visibility_clause(
     sql: &mut String,
     params: &mut Vec<String>,
@@ -317,9 +418,6 @@ fn primary_quota_limit(limit: usize, ratio: f64) -> usize {
 }
 
 /// Score and sort recall hits, then keep the requested limit.
-///
-/// Tier order stays primary so an exact topic match can never be buried by the
-/// freshness or business weights.
 pub(super) fn rank_hits(
     hits: &mut Vec<MemorySearchHit>,
     limit: usize,

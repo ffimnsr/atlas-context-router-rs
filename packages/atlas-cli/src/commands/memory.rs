@@ -44,6 +44,7 @@ pub fn run_memory(cli: &Cli) -> Result<()> {
             scope,
             frontend,
             source_id,
+            tags,
             patch_id,
             patch_file,
             patch_text,
@@ -93,6 +94,8 @@ pub fn run_memory(cli: &Cli) -> Result<()> {
                 body: text.clone(),
                 importance,
                 source_id: source_id.clone(),
+                tags: tags.clone(),
+                links: Vec::new(),
                 metadata: serde_json::json!({}),
             };
             input.validate()?;
@@ -114,6 +117,7 @@ pub fn run_memory(cli: &Cli) -> Result<()> {
             topic,
             importance,
             scope,
+            tags,
             shared,
             limit,
             hybrid,
@@ -122,6 +126,7 @@ pub fn run_memory(cli: &Cli) -> Result<()> {
                 topic: topic.clone(),
                 importance: parse_optional_importance(importance.as_deref())?,
                 scope: parse_optional_scope(scope.as_deref())?,
+                tags: tags.clone(),
                 ..Default::default()
             };
             let viewer = MemoryViewer {
@@ -193,6 +198,27 @@ pub fn run_memory(cli: &Cli) -> Result<()> {
                     println!("   {}", body_preview(&memory.body));
                     println!("   id: {} · path: {}", memory.id, hit.ranking.recall_path);
                 }
+            }
+        }
+
+        MemoryCommand::Link {
+            memory_id,
+            target_id,
+            relation,
+        } => {
+            let record = store.link_memories(&repo, memory_id, target_id, relation)?;
+            if cli.json {
+                print_json(
+                    "memory.link",
+                    serde_json::json!({
+                        "memory_id": memory_id,
+                        "target_id": target_id,
+                        "relation": relation,
+                        "links": record.links,
+                    }),
+                )?;
+            } else {
+                println!("Linked {memory_id} -> {target_id} ({relation})");
             }
         }
 

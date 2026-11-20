@@ -90,6 +90,7 @@ pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
         | "concept_clusters"
         | "memory_store"
         | "memory_ops"
+        | "memory_link"
         | "memory_recall"
         | "experience_inspect"
         | "feedback_record"

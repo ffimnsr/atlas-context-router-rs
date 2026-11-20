@@ -55,6 +55,7 @@ const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "memoir_delete",
     "memoir_inspect",
     "memoir_link",
+    "memory_link",
     "memory_ops",
     "memory_recall",
     "memory_store",
@@ -534,8 +535,8 @@ fn tool_list_matches_registry_snapshot() {
 fn exported_tools_match_dispatch_and_inventory_count() {
     assert_eq!(
         TOOL_REGISTRY_SNAPSHOT.len(),
-        81,
-        "documented inventory must contain exactly 81 tools"
+        82,
+        "documented inventory must contain exactly 82 tools"
     );
 
     let exported = tool_descriptors()
@@ -547,7 +548,7 @@ fn exported_tools_match_dispatch_and_inventory_count() {
         .map(|name| (*name).to_owned())
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(exported.len(), 81, "live tools/list must export 81 tools");
+    assert_eq!(exported.len(), 82, "live tools/list must export 82 tools");
     assert_eq!(
         exported, dispatch,
         "tools/list registry and dispatch known-name set drifted"
@@ -690,6 +691,30 @@ fn tool_list_includes_analysis_and_insight_tools() {
 fn every_listed_tool_dispatches_with_parity_fixture_args() {
     let fixture = setup_git_mcp_fixture();
     let source_id = parity_seed_source_id(&fixture.repo_root, &fixture.db_path);
+    let (link_source, link_target) = {
+        let session_db = atlas_engine::paths::session_db_path(&fixture.db_path);
+        let mut store = atlas_session::SessionStore::open(&session_db).expect("open session store");
+        let mut seed = |topic: &str| {
+            store
+                .store_memory(&atlas_session::NewMemory {
+                    repo_root: fixture.repo_root.clone(),
+                    session_id: None,
+                    frontend: None,
+                    scope: atlas_session::MemoryScope::Project,
+                    topic: topic.to_owned(),
+                    title: topic.to_owned(),
+                    body: format!("parity link {topic}"),
+                    importance: atlas_session::MemoryImportance::Normal,
+                    source_id: None,
+                    tags: Vec::new(),
+                    links: Vec::new(),
+                    metadata: serde_json::json!({}),
+                })
+                .expect("seed parity memory")
+                .id
+        };
+        (seed("parity-link-source"), seed("parity-link-target"))
+    };
     call(
         "memoir_create",
         Some(&json!({ "name": "parity-graph", "output_format": "json" })),
@@ -724,7 +749,12 @@ fn every_listed_tool_dispatches_with_parity_fixture_args() {
 
     for tool in tools {
         let name = tool["name"].as_str().expect("tool name");
-        let args = super::parity_args::parity_args(name, &source_id, &fixture.repo_root);
+        let args = super::parity_args::parity_args(
+            name,
+            &source_id,
+            &fixture.repo_root,
+            (&link_source, &link_target),
+        );
         let response = call(name, Some(&args), &fixture.repo_root, &fixture.db_path)
             .unwrap_or_else(|error| panic!("tool {name} failed to dispatch: {error}"));
 

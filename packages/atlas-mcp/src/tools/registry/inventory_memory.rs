@@ -271,6 +271,8 @@ pub(super) fn tools() -> Vec<Value> {
                         "scope":       { "type": "string",  "description": "Visibility scope: project, session, frontend, or global (default project)." },
                         "frontend":    { "type": "string",  "description": "Frontend identifier; required when scope is frontend. Normalized to claude, codex, copilot, cli, or mcp unless config allows custom frontends." },
                         "source_id":   { "type": "string",  "description": "Source id linking this memory to a saved-context artifact." },
+                        "tags":        { "type": "array", "items": { "type": "string" }, "description": "Searchable labels; duplicates collapse." },
+                        "links":       { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string", "description": "Target memory id." }, "relation": { "type": "string", "description": "Relation from the memoir vocabulary plus `supersedes`." } }, "required": ["id", "relation"] }, "description": "Memory-map links to existing memories." },
                         "output_format":{ "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": ["text"]
@@ -286,12 +288,27 @@ pub(super) fn tools() -> Vec<Value> {
                         "topic":        { "type": "string",  "description": "Restrict recall to one topic (case-insensitive exact match)." },
                         "importance":   { "type": "string",  "description": "Restrict recall to one importance level." },
                         "scope":        { "type": "string",  "description": "Restrict recall to one scope." },
+                        "tags":         { "type": "array", "items": { "type": "string" }, "description": "Require every listed tag (case-insensitive exact match)." },
                         "shared":       { "type": "boolean", "description": "Only return memories visible to every frontend (project + global)." },
                         "hybrid":       { "type": "boolean", "description": "Fuse optional memory embeddings with lexical recall (requires memory.embedding.enabled). Lexical hits always outrank vector-only matches." },
                         "limit":        { "type": "integer", "description": "Maximum memories to return (default 20)." },
                         "output_format":{ "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": ["query"]
+                }
+        }),
+        json!({
+                "name": "memory_link",
+                "description": "Add one directed memory-map link between two existing memories. Relations use the memoir controlled vocabulary plus `supersedes`; self-links, unknown ids, and invalid relations are rejected.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "memory_id":    { "type": "string", "description": "Exact source memory id." },
+                        "target_id":    { "type": "string", "description": "Exact target memory id." },
+                        "relation":     { "type": "string", "description": "Link relation from the memoir vocabulary plus `supersedes` (default related_to)." },
+                        "output_format":{ "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["memory_id", "target_id"]
                 }
         }),
         json!({

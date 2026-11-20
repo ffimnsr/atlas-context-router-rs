@@ -11,6 +11,7 @@ publish = false
 atlas-core.workspace = true
 atlas-db-utils.workspace = true
 atlas-repo = { path = "../atlas-repo" , version = "1.7.12"}
+atlas-store-markdown.workspace = true
 camino.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

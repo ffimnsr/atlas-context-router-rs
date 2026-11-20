@@ -1,6 +1,6 @@
 # Atlas Architecture
 
-Atlas keeps graph facts, large artifacts, and session state in separate SQLite files under `.atlas/`. CLI commands, MCP tools, and installed hooks all flow through same core services so repo identity, canonical paths, and storage boundaries stay consistent.
+Atlas keeps code graph facts in `worldtree.db`. Durable continuity records (memories, decisions, feedback, memoir graphs, overview records, tasks, experience edges, session ledgers) live as **markdown truth files under `.atlas/`**, with SQLite files kept as derived, rebuildable indexes. CLI commands, MCP tools, and installed hooks all flow through same core services so repo identity, canonical paths, and storage boundaries stay consistent.
 
 ## High-level diagram
 
@@ -166,7 +166,7 @@ Store split exists so one subsystem can degrade without corrupting others.
 
 ## Mental model
 
-Use `worldtree.db` for code truth, `context.db` for large text, and `session.db` for continuity. Frontends differ. Storage contract does not.
+Use `worldtree.db` for code truth. Continuity state lives in markdown: `.atlas/memories/`, `.atlas/decisions/`, `.atlas/feedback/`, `.atlas/memoir/`, `.atlas/overview/` (committed), plus local-only `.atlas/sessions/`, `.atlas/tasks/`, `.atlas/experience/`, and `.atlas/artifacts/`. `context.db` and `session.db` are derived indexes that can be deleted and rebuilt from markdown. Frontends differ. Storage contract does not.
 
 ## MCP stdio repo resolution in editors
 

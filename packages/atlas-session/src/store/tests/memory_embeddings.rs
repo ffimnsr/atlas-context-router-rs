@@ -99,13 +99,7 @@ fn embedding_coverage_counts_recallable_rows_only() {
         MemoryImportance::Normal,
         MemoryScope::Project,
     );
-    store
-        .conn
-        .execute(
-            "UPDATE memories SET superseded_by = ?2 WHERE id = ?1",
-            params!["m3", "m1"],
-        )
-        .expect("mark superseded");
+    mark_superseded(&store, "m3", "m1");
 
     store_embedding(&mut store, &embedded.id, &unit_vector(2, 0));
 

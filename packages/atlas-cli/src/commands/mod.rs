@@ -10,6 +10,7 @@ mod graph;
 mod graph_objects;
 mod history;
 mod hook;
+mod index_cmd;
 mod init_wizard;
 mod insights;
 mod maintenance;
@@ -17,6 +18,7 @@ mod memoir;
 mod memory;
 mod memory_embed;
 mod memory_tui;
+mod migrate_markdown;
 mod overview;
 mod platform;
 mod postprocess;
@@ -42,6 +44,7 @@ pub use graph::{run_build, run_init, run_status, run_update, run_watch};
 pub use graph_objects::{run_communities, run_flows};
 pub use history::run_history;
 pub use hook::run_hook;
+pub use index_cmd::run_index;
 pub use insights::run_insights;
 pub use maintenance::{
     run_db_check, run_debug_config, run_debug_graph, run_doctor, run_embedding_config, run_migrate,

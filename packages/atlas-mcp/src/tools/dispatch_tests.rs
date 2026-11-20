@@ -233,7 +233,37 @@ fn schema_test_artifact_content() -> String {
     "schema-test artifact payload ".repeat(32)
 }
 
-fn schema_test_args(name: &str, saved_source_id: &str, repo_root: &str) -> serde_json::Value {
+fn seed_schema_memory_links(repo_root: &str, db_path: &str) -> (String, String) {
+    let session_db = atlas_engine::paths::session_db_path(db_path);
+    let mut store = atlas_session::SessionStore::open(&session_db).expect("open session store");
+    let mut seed = |topic: &str| {
+        store
+            .store_memory(&atlas_session::NewMemory {
+                repo_root: repo_root.to_owned(),
+                session_id: None,
+                frontend: None,
+                scope: atlas_session::MemoryScope::Project,
+                topic: topic.to_owned(),
+                title: topic.to_owned(),
+                body: format!("schema-test {topic}"),
+                importance: atlas_session::MemoryImportance::Normal,
+                source_id: None,
+                tags: Vec::new(),
+                links: Vec::new(),
+                metadata: json!({}),
+            })
+            .expect("seed schema memory")
+            .id
+    };
+    (seed("schema-link-source"), seed("schema-link-target"))
+}
+
+fn schema_test_args(
+    name: &str,
+    saved_source_id: &str,
+    repo_root: &str,
+    memory_ids: (&str, &str),
+) -> serde_json::Value {
     match name {
         "list_graph_stats" => json!({"output_format": "json"}),
         "tool_list" => json!({"output_format": "json"}),
@@ -313,6 +343,12 @@ fn schema_test_args(name: &str, saved_source_id: &str, repo_root: &str) -> serde
         "get_global_memory" => json!({"output_format": "json"}),
         "memory_store" => json!({"text": "schema-test memory", "output_format": "json"}),
         "memory_ops" => json!({"memory_id": "missing-memory", "output_format": "json"}),
+        "memory_link" => json!({
+            "memory_id": memory_ids.0,
+            "target_id": memory_ids.1,
+            "relation": "refines",
+            "output_format": "json"
+        }),
         "memory_recall" => json!({"query": "schema-test", "output_format": "json"}),
         "memoir_create" => json!({
             "name": "schema-test-created-graph",
@@ -465,13 +501,19 @@ fn tools_with_output_schema_never_emit_array_or_scalar_structured_content() {
         &db_path,
     )
     .expect("seed memoir graph");
+    let (link_source, link_target) = seed_schema_memory_links(&repo_root, &db_path);
 
     for tool in super::super::registry::tool_descriptors() {
         if tool.output_schema.is_none() {
             continue;
         }
         let name = tool.name.as_ref();
-        let args = schema_test_args(name, saved_source_id, &repo_root);
+        let args = schema_test_args(
+            name,
+            saved_source_id,
+            &repo_root,
+            (&link_source, &link_target),
+        );
         let value = call(name, Some(&args), &repo_root, &db_path)
             .unwrap_or_else(|error| panic!("{name} should succeed for shape test: {error}"));
         let structured = value
@@ -523,6 +565,7 @@ fn tools_with_output_schema_emit_schema_compatible_structured_content() {
         &db_path,
     )
     .expect("seed memoir graph");
+    let (link_source, link_target) = seed_schema_memory_links(&repo_root, &db_path);
 
     for tool in super::super::registry::tool_descriptors() {
         let Some(output_schema) = tool.output_schema.as_ref() else {
@@ -532,7 +575,12 @@ fn tools_with_output_schema_emit_schema_compatible_structured_content() {
         let schema = jsonschema::validator_for(&schema_value)
             .unwrap_or_else(|error| panic!("{} output schema should compile: {error}", tool.name));
         let name = tool.name.as_ref();
-        let args = schema_test_args(name, saved_source_id, &repo_root);
+        let args = schema_test_args(
+            name,
+            saved_source_id,
+            &repo_root,
+            (&link_source, &link_target),
+        );
         let value = call(name, Some(&args), &repo_root, &db_path)
             .unwrap_or_else(|error| panic!("{name} should succeed for schema test: {error}"));
         assert_matches_output_schema(name, &value, &schema);

@@ -102,8 +102,8 @@ Hooks and adapters may persist runtime context. They must use content/session se
 Defenses:
 
 - sanitize and redact hook payloads before storage
-- route large payloads into `context.db`
-- keep bounded event rows in `session.db`
+- route large payloads into `.atlas/artifacts/**` markdown truth, with `context.db` chunk/FTS rows as derived indexes
+- keep bounded session ledgers in `.atlas/sessions/<id>/events.md` and derive `session.db` indexes from them
 - never write hook/runtime payloads directly into `worldtree.db`
 
 ### Boundary 4: repo scope -> host scope

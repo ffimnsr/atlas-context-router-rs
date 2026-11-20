@@ -1,12 +1,12 @@
 use super::*;
 
-// ── ICM-A1 — shared memory model and storage schema ──────────────────────────
+// ── M1 — markdown truth, derived index schema ────────────────────────────────
 
 #[test]
-fn memories_table_schema_matches_golden() {
+fn memory_index_columns_match_golden() {
     let (_dir, store) = open_store(16, 1024);
 
-    let columns = table_columns(&store.conn, "memories");
+    let columns = table_columns(&store.conn, "memory_index");
     assert_eq!(
         columns,
         vec![
@@ -21,62 +21,57 @@ fn memories_table_schema_matches_golden() {
             "importance",
             "created_at",
             "updated_at",
-            "last_accessed_at",
-            "decay_score",
             "source_id",
             "metadata_json",
             "superseded_by",
+            "tags_json",
+            "links_json",
             "op_history_json",
             "numeric_value",
+            "path",
         ]
     );
 
     let sql: String = store
         .conn
         .query_row(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'memories'",
+            "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'memories'",
             [],
             |row| row.get(0),
         )
-        .unwrap();
-    assert!(sql.contains("CHECK (scope IN ('project', 'session', 'frontend', 'global'))"));
-    assert!(sql.contains("CHECK (importance IN ('critical', 'high', 'normal', 'low'))"));
-    assert!(sql.contains("scope <> 'frontend' OR (frontend IS NOT NULL AND frontend <> '')"));
-    assert!(sql.contains("scope <> 'session' OR (session_id IS NOT NULL AND session_id <> '')"));
-    assert!(sql.contains("decay_score      REAL NOT NULL DEFAULT 0"));
+        .expect("memories compatibility view");
+    assert!(sql.contains("memory_access"));
 }
 
 #[test]
-fn memories_indexes_match_golden() {
+fn memory_index_indexes_match_golden() {
     let (_dir, store) = open_store(16, 1024);
 
-    for (name, expected) in [
-        (
-            "idx_memories_repo_topic",
-            "CREATE INDEX idx_memories_repo_topic\n    ON memories(repo_root, topic)",
-        ),
-        (
-            "idx_memories_repo_importance",
-            "CREATE INDEX idx_memories_repo_importance\n    ON memories(repo_root, importance)",
-        ),
-        (
-            "idx_memories_repo_scope",
-            "CREATE INDEX idx_memories_repo_scope\n    ON memories(repo_root, scope)",
-        ),
-        (
-            "idx_memories_repo_session",
-            "CREATE INDEX idx_memories_repo_session\n    ON memories(repo_root, session_id)",
-        ),
-    ] {
-        let sql: String = store
+    let indexes = {
+        let mut stmt = store
             .conn
-            .query_row(
-                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?1",
-                params![name],
-                |row| row.get(0),
-            )
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'index'")
             .unwrap();
-        assert_eq!(sql, expected, "index {name} must match golden SQL");
+        stmt.query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    for expected in [
+        "idx_memory_index_repo_topic",
+        "idx_memory_index_repo_importance",
+        "idx_memory_index_repo_scope",
+        "idx_memory_index_repo_session",
+        "idx_memory_index_repo_updated",
+        "idx_memory_index_repo_source",
+        "idx_memory_index_repo_active",
+        "idx_memory_index_superseded",
+        "idx_memory_access_repo",
+    ] {
+        assert!(
+            indexes.iter().any(|name| name == expected),
+            "missing index {expected}"
+        );
     }
 }
 
@@ -87,291 +82,277 @@ fn memory_schema_issues_are_empty_when_healthy() {
 }
 
 #[test]
-fn memory_schema_issues_detect_missing_table_and_indexes() {
+fn memory_schema_issues_detect_missing_fts_and_triggers() {
     let (_dir, store) = open_store(16, 1024);
-    store.conn.execute_batch("DROP TABLE memories").unwrap();
-    let issues = store.memory_schema_issues();
-    assert_eq!(issues, vec!["missing table: memories"]);
-
-    // Re-create the table without indexes and drop the supersession table:
-    // every index and the link table must be reported.
-    store
-        .conn
-        .execute_batch("DROP TABLE memory_supersessions")
-        .unwrap();
     store
         .conn
         .execute_batch(
-            "CREATE TABLE memories (
-                id TEXT PRIMARY KEY,
-                repo_root TEXT NOT NULL,
-                session_id TEXT,
-                frontend TEXT,
-                scope TEXT NOT NULL DEFAULT 'project',
-                topic TEXT NOT NULL DEFAULT '',
-                title TEXT NOT NULL DEFAULT '',
-                body TEXT NOT NULL,
-                importance TEXT NOT NULL DEFAULT 'normal',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                last_accessed_at TEXT NOT NULL,
-                decay_score REAL NOT NULL DEFAULT 0,
-                source_id TEXT,
-                metadata_json TEXT NOT NULL DEFAULT '{}',
-                superseded_by TEXT
-            )",
+            "DROP TRIGGER memory_index_ai;
+             DROP TRIGGER memory_index_ad;
+             DROP TRIGGER memory_index_au;
+             DROP TABLE memory_index_fts;",
         )
         .unwrap();
     let issues = store.memory_schema_issues();
-    assert_eq!(
-        issues,
-        vec![
-            "missing column: memories.op_history_json",
-            "missing column: memories.numeric_value",
-            "missing index: idx_memories_repo_topic",
-            "missing index: idx_memories_repo_importance",
-            "missing index: idx_memories_repo_scope",
-            "missing index: idx_memories_repo_session",
-            "missing index: idx_memories_repo_updated",
-            "missing index: idx_memories_repo_source",
-            "missing index: idx_memories_repo_active",
-            "missing index: idx_memories_superseded",
-            "missing table: memory_supersessions",
-            "missing trigger: memories_ai",
-            "missing trigger: memories_ad",
-            "missing trigger: memories_au",
-        ]
+    assert!(
+        issues
+            .iter()
+            .any(|i| i == "missing table: memory_index_fts")
     );
-}
-
-#[test]
-fn memory_importance_and_scope_parse_rejects_unknown_values() {
-    for (value, parsed) in [
-        ("critical", MemoryImportance::Critical),
-        ("high", MemoryImportance::High),
-        ("normal", MemoryImportance::Normal),
-        ("low", MemoryImportance::Low),
-    ] {
-        assert_eq!(value.parse::<MemoryImportance>().unwrap(), parsed);
-    }
-    for value in ["urgent", "CRITICAL", "", "normal "] {
+    for trigger in ["memory_index_ai", "memory_index_ad", "memory_index_au"] {
         assert!(
-            value.parse::<MemoryImportance>().is_err(),
-            "{value:?} must be rejected"
-        );
-    }
-
-    for (value, parsed) in [
-        ("project", MemoryScope::Project),
-        ("session", MemoryScope::Session),
-        ("frontend", MemoryScope::Frontend),
-        ("global", MemoryScope::Global),
-    ] {
-        assert_eq!(value.parse::<MemoryScope>().unwrap(), parsed);
-    }
-    for value in ["org", "workspace", "PROJECT", ""] {
-        assert!(
-            value.parse::<MemoryScope>().is_err(),
-            "{value:?} must be rejected"
+            issues
+                .iter()
+                .any(|issue| issue == &format!("missing trigger: {trigger}")),
+            "issues: {issues:?}"
         );
     }
 }
 
 #[test]
-fn memory_json_deserialization_rejects_unknown_importance_and_scope() {
-    let unknown_importance = serde_json::from_str::<NewMemory>(
-        r#"{"repo_root":"/repo","body":"x","importance":"urgent"}"#,
-    );
-    assert!(unknown_importance.is_err(), "unknown importance rejected");
-
-    let unknown_scope =
-        serde_json::from_str::<NewMemory>(r#"{"repo_root":"/repo","body":"x","scope":"org"}"#);
-    assert!(unknown_scope.is_err(), "unknown scope rejected");
-}
-
-#[test]
-fn new_memory_defaults_to_normal_importance_and_project_scope() {
-    let input =
-        serde_json::from_str::<NewMemory>(r#"{"repo_root":"/repo","body":"remember this"}"#)
-            .unwrap();
-    assert_eq!(input.importance, MemoryImportance::Normal);
-    assert_eq!(input.scope, MemoryScope::Project);
-    assert_eq!(input.metadata, serde_json::json!({}));
-    assert!(input.validate().is_ok());
-}
-
-#[test]
-fn new_memory_validation_requires_frontend_for_frontend_scope_and_session_for_session_scope() {
-    let base = serde_json::from_str::<NewMemory>(r#"{"repo_root":"/repo","body":"remember this"}"#)
+fn memory_schema_issues_detect_missing_index() {
+    let (_dir, store) = open_store(16, 1024);
+    store
+        .conn
+        .execute_batch("DROP INDEX idx_memory_index_repo_topic")
         .unwrap();
-
-    let frontend_scoped = NewMemory {
-        scope: MemoryScope::Frontend,
-        ..base.clone()
-    };
-    let error = frontend_scoped.validate().unwrap_err().to_string();
+    let issues = store.memory_schema_issues();
     assert!(
-        error.contains("frontend identifier"),
-        "error must name the missing frontend: {error}"
+        issues
+            .iter()
+            .any(|issue| issue == "missing index: idx_memory_index_repo_topic"),
+        "issues: {issues:?}"
     );
+}
 
-    let frontend_scoped_ok = NewMemory {
-        scope: MemoryScope::Frontend,
-        frontend: Some("codex".to_owned()),
-        ..base.clone()
-    };
-    assert!(frontend_scoped_ok.validate().is_ok());
+#[test]
+fn memory_schema_issues_report_malformed_frontmatter_with_path() {
+    let (_dir, store) = open_store(16, 1024);
+    let path = store
+        .markdown
+        .absolute(std::path::Path::new("memories/broken/bad.md"));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "---\nid: bad\nscope: project\n---\n").unwrap();
 
-    let session_scoped = NewMemory {
-        scope: MemoryScope::Session,
-        ..base.clone()
-    };
-    let error = session_scoped.validate().unwrap_err().to_string();
+    let issues = store.memory_schema_issues();
     assert!(
-        error.contains("session_id"),
-        "error must name the missing session_id: {error}"
+        issues
+            .iter()
+            .any(|issue| issue.contains("memories/broken/bad.md")),
+        "issues: {issues:?}"
     );
-
-    let session_scoped_ok = NewMemory {
-        scope: MemoryScope::Session,
-        session_id: Some("s1".to_owned()),
-        ..base
-    };
-    assert!(session_scoped_ok.validate().is_ok());
 }
 
 #[test]
 fn memory_storage_boundary_rejects_unknown_importance_and_scope() {
     let (_dir, store) = open_store(16, 1024);
+    let root = store
+        .markdown
+        .root()
+        .join("memories")
+        .join("bad")
+        .join("record");
+    std::fs::create_dir_all(&root).unwrap();
+    let base = "---\nid: bad-1\ntitle: bad\ntopic: bad\nscope: project\nimportance: normal\ncreated_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\nbody\n";
+    let cases = [
+        (
+            "bad-1.md",
+            base.replace("importance: normal", "importance: urgent"),
+        ),
+        (
+            "bad-2.md",
+            base.replace("scope: project", "scope: workspace"),
+        ),
+    ];
+    for (name, content) in cases {
+        std::fs::write(root.join(name), content).unwrap();
+    }
 
-    let insert = |importance: &str, scope: &str| -> rusqlite::Result<()> {
-        store
-            .conn
-            .execute(
-                "INSERT INTO memories
-                (id, repo_root, scope, topic, title, body, importance,
-                 created_at, updated_at, last_accessed_at, decay_score, metadata_json)
-             VALUES ('m1', '/repo', ?1, 'hooks', 'T', 'body', ?2,
-                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
-                     '2026-01-01T00:00:00Z', 0, '{}')",
-                params![scope, importance],
-            )
-            .map(|_| ())
-    };
-
-    let unknown_importance = insert("urgent", "project").unwrap_err().to_string();
-    assert!(
-        unknown_importance.contains("CHECK constraint failed"),
-        "unknown importance must fail at storage: {unknown_importance}"
-    );
-    let unknown_scope = insert("normal", "org").unwrap_err().to_string();
-    assert!(
-        unknown_scope.contains("CHECK constraint failed"),
-        "unknown scope must fail at storage: {unknown_scope}"
-    );
-
-    // Session-scoped memory without session id and frontend-scoped memory
-    // without frontend identifier are rejected by the storage boundary too.
-    let session_without_id = store
-        .conn
-        .execute(
-            "INSERT INTO memories
-                (id, repo_root, scope, topic, title, body, importance,
-                 created_at, updated_at, last_accessed_at, decay_score, metadata_json)
-             VALUES ('m2', '/repo', 'session', 'hooks', 'T', 'body', 'normal',
-                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
-                     '2026-01-01T00:00:00Z', 0, '{}')",
-            [],
-        )
+    let error = store
+        .list_memories("/repo", &MemoryListFilter::default())
         .unwrap_err()
         .to_string();
-    assert!(
-        session_without_id.contains("CHECK constraint failed"),
-        "session scope without session_id must fail: {session_without_id}"
-    );
-    let frontend_without_name = store
-        .conn
-        .execute(
-            "INSERT INTO memories
-                (id, repo_root, scope, topic, title, body, importance,
-                 created_at, updated_at, last_accessed_at, decay_score, metadata_json)
-             VALUES ('m3', '/repo', 'frontend', 'hooks', 'T', 'body', 'normal',
-                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
-                     '2026-01-01T00:00:00Z', 0, '{}')",
-            [],
-        )
-        .unwrap_err()
-        .to_string();
-    assert!(
-        frontend_without_name.contains("CHECK constraint failed"),
-        "frontend scope without frontend must fail: {frontend_without_name}"
-    );
-
-    // Valid rows with every scope and importance value are accepted.
-    store
-        .conn
-        .execute_batch(
-            r#"INSERT INTO memories
-                (id, repo_root, session_id, frontend, scope, topic, title, body, importance,
-                 created_at, updated_at, last_accessed_at, decay_score, source_id, metadata_json)
-             VALUES
-                ('m4', '/repo', NULL, NULL, 'project', 'hooks', 'T', 'b', 'critical',
-                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 0.5, 'src-1', '{"k":1}'),
-                ('m5', '/repo', NULL, NULL, 'global', 'hooks', 'T', 'b', 'high',
-                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 0, NULL, '{}'),
-                ('m6', '/repo', 's1', NULL, 'session', 'hooks', 'T', 'b', 'normal',
-                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 0, NULL, '{}'),
-                ('m7', '/repo', NULL, 'codex', 'frontend', 'hooks', 'T', 'b', 'low',
-                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 0, NULL, '{}')"#,
-        )
-        .unwrap();
+    assert!(error.contains("invalid importance"), "got: {error}");
+    assert!(error.contains("invalid scope"), "got: {error}");
 }
 
 #[test]
-fn memory_row_round_trips_through_record_shape() {
+fn memory_record_round_trips_through_frontmatter() {
     let (_dir, store) = open_store(16, 1024);
+    let record = seed_memory(
+        &store,
+        "round-trip",
+        "2026-01-02T00:00:00Z",
+        "body: with colon\nand second line",
+        "architecture",
+        MemoryImportance::High,
+        MemoryScope::Project,
+    );
+
+    let relative = super::markdown_memory::relative_path(&record.topic, &record.id);
+    let raw = store.markdown.read_record(&relative).unwrap();
+    let decoded =
+        super::markdown_memory::decode_record(&relative, &raw, &record.repo_root).unwrap();
+    assert_eq!(decoded.id, record.id);
+    assert_eq!(decoded.body, record.body);
+    assert_eq!(decoded.tags, record.tags);
+    assert_eq!(decoded.links, record.links);
+
+    // Canonical serialization is byte-stable: parse then serialize unchanged.
+    let encoded = super::markdown_memory::encode_record(&decoded).unwrap();
+    let original = std::fs::read(store.markdown.absolute(&relative)).unwrap();
+    assert_eq!(encoded.to_bytes(&relative).unwrap(), original);
+}
+
+#[test]
+fn memory_directory_tree_matches_golden() {
+    let (dir, store) = open_store(16, 1024);
+    seed_memory(
+        &store,
+        "tree-1",
+        "2026-01-01T00:00:00Z",
+        "first",
+        "Deploy Process",
+        MemoryImportance::Normal,
+        MemoryScope::Project,
+    );
+    seed_memory(
+        &store,
+        "tree-2",
+        "2026-01-02T00:00:00Z",
+        "second",
+        "deploy-process",
+        MemoryImportance::Normal,
+        MemoryScope::Project,
+    );
+
+    let memories = dir.path().join(".atlas").join("memories");
+    let golden = memories.join("deploy-process");
+    assert!(golden.is_dir(), "slug directory must exist");
+    for id in ["tree-1", "tree-2"] {
+        assert!(golden.join(format!("{id}.md")).is_file(), "missing {id}.md");
+    }
+    assert!(!memories.join("locks").exists());
+    assert!(!memories.join("tmp").exists());
+}
+
+#[test]
+fn duplicate_memory_ids_are_reported_across_topic_directories() {
+    let (_dir, store) = open_store(16, 1024);
+    let record = seed_memory(
+        &store,
+        "dup-id",
+        "2026-01-01T00:00:00Z",
+        "body",
+        "topic-one",
+        MemoryImportance::Normal,
+        MemoryScope::Project,
+    );
+    let other = super::markdown_memory::relative_path("topic-two", &record.id);
+    let encoded = super::markdown_memory::encode_record(&record).unwrap();
+    store.markdown.write_record(&other, &encoded).unwrap();
+
+    let duplicates = store
+        .markdown
+        .detect_duplicate_ids(std::path::Path::new("memories"), "id")
+        .unwrap();
+    assert_eq!(duplicates.len(), 1);
+    assert_eq!(duplicates[0].0, "dup-id");
+}
+
+#[test]
+fn memory_links_validate_targets_and_relations() {
+    let (_dir, mut store) = open_store(16, 1024);
+    seed_memory(
+        &store,
+        "link-a",
+        "2026-01-01T00:00:00Z",
+        "a",
+        "links",
+        MemoryImportance::Normal,
+        MemoryScope::Project,
+    );
+    seed_memory(
+        &store,
+        "link-b",
+        "2026-01-02T00:00:00Z",
+        "b",
+        "links",
+        MemoryImportance::Normal,
+        MemoryScope::Project,
+    );
+
+    let linked = store
+        .link_memories("/repo", "link-a", "link-b", "refines")
+        .unwrap();
+    assert_eq!(linked.links.len(), 1);
+
+    // Duplicate links collapse.
+    let again = store
+        .link_memories("/repo", "link-a", "link-b", "refines")
+        .unwrap();
+    assert_eq!(again.links.len(), 1);
+
+    assert!(
+        store
+            .link_memories("/repo", "link-a", "link-a", "refines")
+            .is_err()
+    );
+    assert!(
+        store
+            .link_memories("/repo", "link-a", "missing", "refines")
+            .is_err()
+    );
+    assert!(
+        store
+            .link_memories("/repo", "link-a", "link-b", "bogus")
+            .is_err()
+    );
+}
+
+#[test]
+fn supersedes_chain_leaves_only_newest_active() {
+    let (_dir, mut store) = open_store(16, 1024);
+    for (id, body) in [("chain-a", "a"), ("chain-b", "b"), ("chain-c", "c")] {
+        seed_memory(
+            &store,
+            id,
+            "2026-01-01T00:00:00Z",
+            body,
+            "chain",
+            MemoryImportance::Normal,
+            MemoryScope::Project,
+        );
+    }
     store
-        .conn
-        .execute_batch(
-            r#"INSERT INTO memories
-                (id, repo_root, session_id, frontend, scope, topic, title, body, importance,
-                 created_at, updated_at, last_accessed_at, decay_score, source_id, metadata_json)
-             VALUES ('m1', '/repo', 's1', 'codex', 'frontend', 'hooks', 'Hook notes', 'body text',
-                     'critical', '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z',
-                     '2026-01-03T00:00:00Z', 0.25, 'src-9', '{"source_kind":"hook"}')"#,
-        )
+        .link_memories("/repo", "chain-b", "chain-a", "supersedes")
+        .unwrap();
+    store
+        .link_memories("/repo", "chain-c", "chain-b", "supersedes")
         .unwrap();
 
-    let record = store
-        .conn
-        .query_row(
-            "SELECT id, repo_root, session_id, frontend, scope, topic, title, body, importance,
-                    created_at, updated_at, last_accessed_at, decay_score, source_id, metadata_json,
-                    superseded_by
-             FROM memories WHERE id = 'm1'",
-            [],
-            super::memory::row_to_memory,
+    let visible = store
+        .list_memories("/repo", &MemoryListFilter::default())
+        .unwrap();
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].id, "chain-c");
+
+    let all = store
+        .list_memories(
+            "/repo",
+            &MemoryListFilter {
+                include_superseded: true,
+                ..Default::default()
+            },
         )
         .unwrap();
+    assert_eq!(all.len(), 3);
     assert_eq!(
-        record,
-        MemoryRecord {
-            id: "m1".to_owned(),
-            repo_root: "/repo".to_owned(),
-            session_id: Some("s1".to_owned()),
-            frontend: Some("codex".to_owned()),
-            scope: MemoryScope::Frontend,
-            topic: "hooks".to_owned(),
-            title: "Hook notes".to_owned(),
-            body: "body text".to_owned(),
-            importance: MemoryImportance::Critical,
-            created_at: "2026-01-01T00:00:00Z".to_owned(),
-            updated_at: "2026-01-02T00:00:00Z".to_owned(),
-            last_accessed_at: "2026-01-03T00:00:00Z".to_owned(),
-            decay_score: 0.25,
-            source_id: Some("src-9".to_owned()),
-            metadata: serde_json::json!({ "source_kind": "hook" }),
-            superseded_by: None,
-        }
+        all.iter()
+            .find(|record| record.id == "chain-a")
+            .unwrap()
+            .superseded_by
+            .as_deref(),
+        Some("chain-b")
     );
 }

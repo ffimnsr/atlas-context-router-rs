@@ -756,6 +756,8 @@ mod tests {
                 body: "session-start wakes the agent with a bounded pack".to_owned(),
                 importance: atlas_session::MemoryImportance::Critical,
                 source_id: None,
+                tags: Vec::new(),
+                links: Vec::new(),
                 metadata: json!({}),
             })
             .unwrap();

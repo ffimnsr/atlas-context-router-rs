@@ -64,12 +64,25 @@ pub(crate) fn memory_record_schema() -> Value {
             "decay_score": { "type": "number" },
             "source_id": { "type": ["string", "null"] },
             "metadata": { "type": "object" },
+            "tags": { "type": "array", "items": { "type": "string" } },
+            "links": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "id": { "type": "string" },
+                        "relation": { "type": "string" }
+                    },
+                    "required": ["id", "relation"]
+                }
+            },
             "superseded_by": { "type": ["string", "null"] }
         },
         "required": [
             "id", "repo_root", "session_id", "frontend", "scope", "topic", "title",
             "body", "importance", "created_at", "updated_at", "last_accessed_at",
-            "decay_score", "source_id", "metadata", "superseded_by"
+            "decay_score", "source_id", "metadata", "tags", "links", "superseded_by"
         ]
     })
 }
@@ -134,6 +147,10 @@ pub(crate) fn memory_recall_output_schema() -> Value {
                         "memory": { "$ref": "#/$defs/memory_record" },
                         "relevance_score": { "type": "integer" },
                         "recall_score": { "type": "number" },
+                        "origin_score": { "type": "number" },
+                        "time_score": { "type": "number" },
+                        "importance_score": { "type": "number" },
+                        "recall_path": { "type": "string" },
                         "ranking": {
                             "type": "object",
                             "additionalProperties": false,

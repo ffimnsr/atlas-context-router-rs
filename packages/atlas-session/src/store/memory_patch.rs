@@ -19,7 +19,9 @@ use sha2::{Digest, Sha256};
 
 use atlas_core::{AtlasError, Result};
 
-use super::memory_ops::{MemoryOp, OpOutcome, apply_memory_op_on, memory_op_now};
+use super::memory_ops::{
+    MemoryOp, OpOutcome, apply_memory_op, load_entity, memory_op_now, persist_entity,
+};
 use super::util::hex_encode;
 
 const SEARCH_MARKER: &str = "<<<< SEARCH";
@@ -286,10 +288,13 @@ impl super::SessionStore {
     ) -> Result<Vec<OpOutcome>> {
         let blocks = parse_patch_blocks(patch_text)?;
         let now = memory_op_now();
-        let tx = self
-            .conn
-            .transaction()
-            .map_err(|error| AtlasError::Db(error.to_string()))?;
+        let mut entity = load_entity(&self.markdown, repo_root, memory_id)?
+            .ok_or_else(|| invalid(format!("no memory with id {memory_id} in {repo_root}")))?;
+        if let Some(superseded_by) = &entity.superseded_by {
+            return Err(invalid(format!(
+                "memory {memory_id} is superseded by {superseded_by}; patches apply to active rows only"
+            )));
+        }
         let mut outcomes = Vec::with_capacity(blocks.len());
         for block in blocks {
             let op = MemoryOp::EuaPatch {
@@ -297,10 +302,9 @@ impl super::SessionStore {
                 replace: block.replace,
                 max_edit_distance,
             };
-            outcomes.push(apply_memory_op_on(&tx, repo_root, memory_id, &op, &now)?);
+            outcomes.push(apply_memory_op(&mut entity, &op, &now)?);
         }
-        tx.commit()
-            .map_err(|error| AtlasError::Db(error.to_string()))?;
+        persist_entity(&self.markdown, &self.conn, &entity, &now)?;
         Ok(outcomes)
     }
 }

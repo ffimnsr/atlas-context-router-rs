@@ -21,6 +21,8 @@ fn record(id: &str, created_at: &str, body: &str, repo_root: &str) -> MemoryReco
         last_accessed_at: created_at.to_owned(),
         decay_score: 0.0,
         source_id: None,
+        tags: Vec::new(),
+        links: Vec::new(),
         metadata: serde_json::json!({}),
         superseded_by: None,
     }
@@ -60,12 +62,10 @@ fn consolidation_apply_keeps_unique_member_facts_and_provenance() {
     );
 
     // Give both rows the same title so they group deterministically.
-    store
-        .conn
-        .execute("UPDATE memories SET title = 'Deploy process'", [])
-        .unwrap();
+    rewrite_all_memories(&store, |record| record.title = "Deploy process".to_owned());
 
-    let plan = crate::store::memory::consolidation_plan(
+    let plan = crate::store::markdown_memory::consolidation_plan(
+        &store.markdown,
         &store.conn,
         "/repo",
         &MemoryListFilter::default(),
@@ -119,14 +119,8 @@ fn oversized_consolidation_routes_full_body_to_context_db() {
         None,
         Some("src-b"),
     );
-    store
-        .conn
-        .execute("UPDATE memories SET title = 'Deploy process'", [])
-        .unwrap();
-    store
-        .conn
-        .execute("UPDATE memories SET repo_root = ?1", [repo])
-        .unwrap();
+    rewrite_all_memories(&store, |record| record.title = "Deploy process".to_owned());
+    rewrite_all_memories(&store, |record| record.repo_root = repo.to_owned());
 
     let mut stored = Vec::new();
     let plan = {
@@ -189,12 +183,10 @@ fn consolidation_dry_run_is_read_only_and_reports_synthesis() {
         MemoryImportance::Low,
         MemoryScope::Project,
     );
-    store
-        .conn
-        .execute("UPDATE memories SET title = 'Same title'", [])
-        .unwrap();
+    rewrite_all_memories(&store, |record| record.title = "Same title".to_owned());
 
-    let plan = crate::store::memory::consolidation_plan(
+    let plan = crate::store::markdown_memory::consolidation_plan(
+        &store.markdown,
         &store.conn,
         "/repo",
         &MemoryListFilter::default(),

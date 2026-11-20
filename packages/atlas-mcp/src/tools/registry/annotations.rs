@@ -70,6 +70,7 @@ pub(crate) fn tool_category(name: &str) -> &'static str {
         | "get_global_memory"
         | "memory_store"
         | "memory_ops"
+        | "memory_link"
         | "memory_recall"
         | "experience_inspect"
         | "feedback_record"
@@ -179,6 +180,7 @@ pub(crate) const TYPED_SESSION_MEMORY_SCHEMA_TOOLS: &[&str] = &[
     "get_global_memory",
     "memory_store",
     "memory_ops",
+    "memory_link",
     "memory_recall",
     "feedback_record",
     "record_session_event",

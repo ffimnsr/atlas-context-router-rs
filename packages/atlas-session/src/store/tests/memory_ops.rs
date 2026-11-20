@@ -87,13 +87,7 @@ fn apply_memory_op_rejects_missing_and_superseded_rows() {
     assert!(store.apply_memory_op("/repo", "missing", &op).is_err());
 
     seed_op_memory(&store);
-    store
-        .conn
-        .execute(
-            "UPDATE memories SET superseded_by = 'newer' WHERE id = 'op-memory'",
-            [],
-        )
-        .unwrap();
+    mark_superseded(&store, "op-memory", "newer");
     let error = store
         .apply_memory_op("/repo", "op-memory", &op)
         .unwrap_err()
@@ -151,6 +145,7 @@ fn failure_events_aggregate_into_topic_entities() {
     ];
 
     crate::store::memory_ops::record_failure_events(
+        &store.markdown,
         &store.conn,
         "/repo",
         &events,
@@ -173,6 +168,7 @@ fn failure_events_aggregate_into_topic_entities() {
 
     // A repeated signature increments the counter without growing signatures.
     crate::store::memory_ops::record_failure_events(
+        &store.markdown,
         &store.conn,
         "/repo",
         &events[..1],
@@ -193,6 +189,7 @@ fn failure_events_do_not_create_entities_without_failures() {
     let mut event = failure_event(1, serde_json::json!({"command": "cargo build"}));
     event.event_type = SessionEventType::CommandRun;
     crate::store::memory_ops::record_failure_events(
+        &store.markdown,
         &store.conn,
         "/repo",
         &[event],
@@ -211,23 +208,26 @@ fn schema_issues_detect_missing_fts_and_triggers() {
     let (_dir, store) = open_store(16, 1024);
     assert!(store.memory_schema_issues().is_empty());
 
-    store.conn.execute_batch("DROP TABLE memories_fts").unwrap();
+    store
+        .conn
+        .execute_batch("DROP TABLE memory_index_fts")
+        .unwrap();
     let issues = store.memory_schema_issues();
     assert!(
         issues
             .iter()
-            .any(|issue| issue == "missing table: memories_fts"),
+            .any(|issue| issue == "missing table: memory_index_fts"),
         "issues: {issues:?}"
     );
 
     store
         .conn
         .execute_batch(
-            "DROP TRIGGER memories_ai; DROP TRIGGER memories_ad; DROP TRIGGER memories_au;",
+            "DROP TRIGGER memory_index_ai; DROP TRIGGER memory_index_ad; DROP TRIGGER memory_index_au;",
         )
         .unwrap();
     let issues = store.memory_schema_issues();
-    for trigger in ["memories_ai", "memories_ad", "memories_au"] {
+    for trigger in ["memory_index_ai", "memory_index_ad", "memory_index_au"] {
         assert!(
             issues.contains(&format!("missing trigger: {trigger}")),
             "issues: {issues:?}"
@@ -251,7 +251,7 @@ fn schema_issues_detect_fts_drift_and_malformed_history() {
     store
         .conn
         .execute(
-            "UPDATE memories SET op_history_json = 'not-json' WHERE id = 'second-memory'",
+            "UPDATE memory_index SET op_history_json = 'not-json' WHERE id = 'second-memory'",
             [],
         )
         .unwrap();
@@ -259,7 +259,9 @@ fn schema_issues_detect_fts_drift_and_malformed_history() {
     // Removing a row without its delete trigger leaves the FTS index stale.
     store
         .conn
-        .execute_batch("DROP TRIGGER memories_ad; DELETE FROM memories WHERE id = 'op-memory';")
+        .execute_batch(
+            "DROP TRIGGER memory_index_ad; DELETE FROM memory_index WHERE id = 'op-memory';",
+        )
         .unwrap();
 
     let issues = store.memory_schema_issues();
@@ -276,39 +278,25 @@ fn schema_issues_detect_fts_drift_and_malformed_history() {
 }
 
 #[test]
-fn migration_013_backfills_fts_for_existing_memories() {
-    let (_dir, mut store) = open_store(16, 1024);
-    store.migrate_to(12).unwrap();
-    // Insert with the pre-013 column set directly: `store_memory_at` writes the
-    // post-013 `op_history_json` column and must not be used on an older schema.
+fn pending_index_rows_export_to_markdown_on_open() {
+    let (_dir, store) = open_store(16, 1024);
     store
         .conn
         .execute(
-            "INSERT INTO memories
+            "INSERT INTO memory_index
                 (id, repo_root, scope, topic, title, body, importance,
-                 created_at, updated_at, last_accessed_at, metadata_json)
-             VALUES ('pre-013', '/repo', 'project', 'migration', 'title-migration',
+                 created_at, updated_at, metadata_json, op_history_json)
+             VALUES ('legacy-row', '/repo', 'project', 'migration', 'title-migration',
                      'backfilled connection pool memory', 'normal',
-                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
-                     '2026-01-01T00:00:00Z', '{}')",
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '{}', '[]')",
             [],
         )
         .unwrap();
-    store.migrate_to(13).unwrap();
 
-    let fts_count: i64 = store
-        .conn
-        .query_row("SELECT COUNT(*) FROM memories_fts", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(fts_count, 1);
-
-    let matches: i64 = store
-        .conn
-        .query_row(
-            "SELECT COUNT(*) FROM memories_fts WHERE memories_fts MATCH 'connection'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(matches, 1);
+    let written = super::markdown_memory::export_pending(&store.markdown, &store.conn, false)
+        .expect("export pending rows");
+    assert_eq!(written.len(), 1);
+    let record = store.get_memory("/repo", "legacy-row").unwrap().unwrap();
+    assert_eq!(record.body, "backfilled connection pool memory");
+    assert_eq!(record.topic, "migration");
 }

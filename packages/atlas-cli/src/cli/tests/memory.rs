@@ -276,11 +276,13 @@ fn parse_memory_recall_command() {
                     ref topic,
                     ref importance,
                     ref scope,
+                    ref tags,
                     shared: false,
                     limit: 5,
                     hybrid: false,
                 }
-        } if query == "deploy"
+        } if tags.is_empty()
+            && query == "deploy"
             && topic.as_deref() == Some("hooks")
             && importance.as_deref() == Some("high")
             && scope.as_deref() == Some("project")

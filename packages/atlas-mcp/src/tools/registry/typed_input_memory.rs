@@ -359,6 +359,14 @@ pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
                 "Source id linking this memory to a saved-context artifact.",
             ),
             (
+                "properties/tags",
+                "Searchable labels; duplicate tags collapse on write.",
+            ),
+            (
+                "properties/links",
+                "Memory-map links to existing memories (id plus relation).",
+            ),
+            (
                 "properties/patch_id",
                 "Exact memory id to patch with an EUA search/replace document; mutually exclusive with text.",
             ),
@@ -393,6 +401,19 @@ pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
             (
                 "properties/limit",
                 "Maximum memories to return (default 20).",
+            ),
+            (
+                "properties/tags",
+                "Require every listed tag (case-insensitive exact match).",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
+        "memory_link" => Some(typed_schema_with_descriptions::<MemoryLinkArgsSchema>(&[
+            ("properties/memory_id", "Exact source memory id."),
+            ("properties/target_id", "Exact target memory id."),
+            (
+                "properties/relation",
+                "Link relation from the memoir vocabulary plus `supersedes` (default related_to).",
             ),
             ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
         ])),

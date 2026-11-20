@@ -585,6 +585,12 @@ pub fn run_purge_noncanonical(cli: &Cli) -> Result<()> {
 }
 
 pub fn run_migrate(cli: &Cli) -> Result<()> {
+    if let Command::Migrate {
+        subcommand: Some(crate::cli::MigrateCommand::Markdown { .. }),
+    } = &cli.command
+    {
+        return super::migrate_markdown::run_migrate_markdown(cli);
+    }
     let repo = resolve_repo(cli)?;
     let graph_db = db_path(cli, &repo);
     let content_db = atlas_engine::paths::content_db_path(&graph_db);

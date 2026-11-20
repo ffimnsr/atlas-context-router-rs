@@ -252,6 +252,30 @@ pub fn tool_memory_store(
     let source_id = args
         .and_then(|a| a.get("source_id"))
         .and_then(|v| v.as_str());
+    let tags = args
+        .and_then(|a| a.get("tags"))
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let links = args
+        .and_then(|a| a.get("links"))
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|value| {
+                    let id = value.get("id")?.as_str()?.to_owned();
+                    let relation = value.get("relation")?.as_str()?.to_owned();
+                    Some(atlas_session::MemoryLink { id, relation })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
 
     // Same boundary validation as the CLI: strict enum parsing and
     // config-gated frontend normalization from the shared layer.
@@ -286,6 +310,8 @@ pub fn tool_memory_store(
         body: text.to_owned(),
         importance,
         source_id: source_id.map(str::to_owned),
+        tags,
+        links,
         metadata,
     };
     input.validate()?;
@@ -309,6 +335,54 @@ pub fn tool_memory_store(
         output_format,
     )
 }
+
+// ---------------------------------------------------------------------------
+// memory_link
+// ---------------------------------------------------------------------------
+
+/// Add one directed memory-map link between two existing memories.
+pub fn tool_memory_link(
+    args: Option<&Value>,
+    repo_root: &str,
+    db_path: &str,
+    output_format: OutputFormat,
+) -> Result<Value> {
+    let memory_id = args
+        .and_then(|a| a.get("memory_id"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing required argument: memory_id"))?;
+    let target_id = args
+        .and_then(|a| a.get("target_id"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing required argument: target_id"))?;
+    let relation = args
+        .and_then(|a| a.get("relation"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("related_to");
+
+    let session_db = derive_session_db_path(db_path);
+    let mut store = SessionStore::open(&session_db)?;
+    let record = store.link_memories(repo_root, memory_id, target_id, relation)?;
+
+    build_normalized_tool_result_value(
+        &serde_json::json!({
+            "tool": "memory_link",
+            "repo_root": repo_root,
+            "memory": record,
+            "summary": {
+                "memory_id": record.id,
+                "scope": record.scope.as_str(),
+                "importance": record.importance.as_str(),
+            },
+            "warnings": [],
+        }),
+        output_format,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// memory_recall
+// ---------------------------------------------------------------------------
 
 /// Recall memories through the shared memory service layer with the same
 /// visibility rules and defaults as `atlas memory recall`. The MCP viewer is
@@ -334,6 +408,16 @@ pub fn tool_memory_recall(
         .and_then(|a| a.get("shared"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let tags = args
+        .and_then(|a| a.get("tags"))
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let hybrid = args
         .and_then(|a| a.get("hybrid"))
         .and_then(|v| v.as_bool())
@@ -356,6 +440,7 @@ pub fn tool_memory_recall(
         scope: scope
             .map(|raw| raw.parse().map_err(anyhow::Error::from))
             .transpose()?,
+        tags,
         ..Default::default()
     };
     let viewer = MemoryViewer {

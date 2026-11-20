@@ -346,7 +346,7 @@ pub(super) fn compact_session_events(
                     )
                     .ok();
                 if let Some(memory_id) = memory_id {
-                    apply_memory_op_on(&tx, repo_root, &memory_id, &op, &now)?;
+                    apply_memory_op_on(&store.markdown, &tx, repo_root, &memory_id, &op, &now)?;
                 }
             }
         }
@@ -375,6 +375,8 @@ pub(super) fn compact_session_events(
     .map_err(|e| AtlasError::Db(e.to_string()))?;
 
     tx.commit().map_err(|e| AtlasError::Db(e.to_string()))?;
+    let _ =
+        super::markdown_session::rewrite_session(&store.markdown, &store.conn, session_id.as_str());
 
     let deleted_count = all_delete.len();
     let summary_written = usize::from(summary_payload.is_some());
@@ -385,7 +387,13 @@ pub(super) fn compact_session_events(
     // CM11: update global memory from all events (before eviction list is applied).
     // Best-effort — failure must not abort compaction.
     if let Ok(Some(meta)) = store.get_session_meta(session_id) {
-        let _ = update_global_memory_from_events(&store.conn, &meta.repo_root, &events, &now);
+        let _ = update_global_memory_from_events(
+            &store.markdown,
+            &store.conn,
+            &meta.repo_root,
+            &events,
+            &now,
+        );
     }
 
     Ok(CurationResult {

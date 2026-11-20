@@ -51,6 +51,7 @@
 //! | `get_global_memory`       | CM11: frequent symbols/files/workflows; related sessions |
 //! | `memory_store`            | ICM-A/VM2: store a memory or apply an EUA patch          |
 //! | `memory_ops`              | VM1: typed operator history for one memory row           |
+//! | `memory_link`             | Add one directed memory-map link between two memories    |
 //! | `memory_recall`           | ICM-A/VM3: two-path recall with score breakdown and hints |
 //! | `experience_inspect`      | VR4: query-conditioned experience edge inspection         |
 //! | `feedback_record`         | ICM-C: record a correction when a prediction was wrong    |

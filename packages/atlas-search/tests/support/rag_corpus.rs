@@ -245,6 +245,8 @@ fn seed_memories(session: &mut SessionStore) -> atlas_core::Result<Vec<MemoryCas
             body: format!("{query} rollout notes"),
             importance: MemoryImportance::Normal,
             source_id: Some(format!("rag-src-lexical-{index}")),
+            tags: Vec::new(),
+            links: Vec::new(),
             metadata: serde_json::json!({}),
         })?;
         cases.push(MemoryCase {
@@ -265,6 +267,8 @@ fn seed_memories(session: &mut SessionStore) -> atlas_core::Result<Vec<MemoryCas
         body: "restore the previous release artifact".to_owned(),
         importance: MemoryImportance::High,
         source_id: Some("rag-src-deploy".to_owned()),
+        tags: Vec::new(),
+        links: Vec::new(),
         metadata: serde_json::json!({}),
     })?;
     let neighbour = session.store_memory(&NewMemory {
@@ -277,6 +281,8 @@ fn seed_memories(session: &mut SessionStore) -> atlas_core::Result<Vec<MemoryCas
         body: "do not ship during the freeze window".to_owned(),
         importance: MemoryImportance::Normal,
         source_id: Some("rag-src-freeze".to_owned()),
+        tags: Vec::new(),
+        links: Vec::new(),
         metadata: serde_json::json!({}),
     })?;
     let cache = session.store_memory(&NewMemory {
@@ -289,6 +295,8 @@ fn seed_memories(session: &mut SessionStore) -> atlas_core::Result<Vec<MemoryCas
         body: "evict stale entries before serving".to_owned(),
         importance: MemoryImportance::Normal,
         source_id: Some("rag-src-cache".to_owned()),
+        tags: Vec::new(),
+        links: Vec::new(),
         metadata: serde_json::json!({}),
     })?;
 

@@ -1,6 +1,5 @@
 // ── ICM-B — memory decay, stale, prune, health, and consolidation ─────────────
 
-use serde_json::Value;
 use time::OffsetDateTime;
 
 use super::*;
@@ -55,9 +54,12 @@ fn seed(store: &SessionStore, id: &str, spec: SeedSpec<'_>) -> MemoryRecord {
         body: spec.body.to_owned(),
         importance: spec.importance,
         source_id: spec.source.map(str::to_owned),
+        tags: Vec::new(),
+        links: Vec::new(),
         metadata,
     };
-    super::memory::store_memory_at(&store.conn, &input, &ts(spec.at), id).unwrap()
+    super::markdown_memory::store_memory_at(&store.markdown, &store.conn, &input, &ts(spec.at), id)
+        .unwrap()
 }
 
 // ── Decay scoring and policy ─────────────────────────────────────────────────
@@ -129,7 +131,8 @@ fn decay_reports_compute_scores_without_writing_in_dry_run() {
         },
     );
 
-    let reports = super::memory::decay_reports(
+    let reports = super::markdown_memory::decay_reports(
+        &store.markdown,
         &store.conn,
         "/repo",
         &MemoryListFilter::default(),
@@ -196,7 +199,8 @@ fn decay_apply_persists_scores_and_never_prunes() {
         },
     );
 
-    let reports = super::memory::decay_reports(
+    let reports = super::markdown_memory::decay_reports(
+        &store.markdown,
         &store.conn,
         "/repo",
         &MemoryListFilter::default(),
@@ -254,7 +258,8 @@ fn disabled_policy_reports_no_decay() {
         enabled: false,
         ..default_policy()
     };
-    let reports = super::memory::decay_reports(
+    let reports = super::markdown_memory::decay_reports(
+        &store.markdown,
         &store.conn,
         "/repo",
         &MemoryListFilter::default(),
@@ -298,7 +303,8 @@ fn stale_memories_never_report_protected_critical() {
         },
     );
 
-    let stale = super::memory::stale_memories(
+    let stale = super::markdown_memory::stale_memories(
+        &store.markdown,
         &store.conn,
         "/repo",
         &MemoryListFilter::default(),
@@ -353,7 +359,8 @@ fn prune_dry_run_reports_candidates_without_deleting() {
         },
     );
 
-    let result = super::memory::prune_memories(
+    let result = super::markdown_memory::prune_memories(
+        &store.markdown,
         &store.conn,
         "/repo",
         &MemoryListFilter::default(),
@@ -406,7 +413,8 @@ fn prune_apply_deletes_only_pruneable_rows() {
         },
     );
 
-    let result = super::memory::prune_memories(
+    let result = super::markdown_memory::prune_memories(
+        &store.markdown,
         &store.conn,
         "/repo",
         &MemoryListFilter::default(),
@@ -465,7 +473,8 @@ fn prune_importance_low_selects_only_low_rows() {
         importance: Some(MemoryImportance::Low),
         ..Default::default()
     };
-    let result = super::memory::prune_memories(
+    let result = super::markdown_memory::prune_memories(
+        &store.markdown,
         &store.conn,
         "/repo",
         &filter,
@@ -507,7 +516,8 @@ fn prune_critical_requires_explicit_override() {
         ..Default::default()
     };
 
-    let err = super::memory::prune_memories(
+    let err = super::markdown_memory::prune_memories(
+        &store.markdown,
         &store.conn,
         "/repo",
         &filter,
@@ -523,7 +533,8 @@ fn prune_critical_requires_explicit_override() {
     );
 
     // With the explicit override the critical row becomes a candidate.
-    let result = super::memory::prune_memories(
+    let result = super::markdown_memory::prune_memories(
+        &store.markdown,
         &store.conn,
         "/repo",
         &filter,
@@ -639,7 +650,8 @@ fn health_report_categories_are_deterministic() {
         },
     );
 
-    let report = super::memory::health_report(
+    let report = super::markdown_memory::health_report(
+        &store.markdown,
         &store.conn,
         "/repo",
         &MemoryListFilter::default(),
@@ -712,7 +724,8 @@ fn health_report_flags_noisy_topics_and_missing_critical_decisions() {
         },
     );
 
-    let report = super::memory::health_report(
+    let report = super::markdown_memory::health_report(
+        &store.markdown,
         &store.conn,
         "/repo",
         &MemoryListFilter::default(),
@@ -810,7 +823,8 @@ fn consolidation_plan_dry_run_groups_and_preserves_source_ids() {
         },
     );
 
-    let plan = super::memory::consolidation_plan(
+    let plan = super::markdown_memory::consolidation_plan(
+        &store.markdown,
         &store.conn,
         "/repo",
         &MemoryListFilter::default(),
@@ -914,7 +928,8 @@ fn consolidation_plan_groups_by_same_body_and_metadata_category() {
         },
     );
 
-    let plan = super::memory::consolidation_plan(
+    let plan = super::markdown_memory::consolidation_plan(
+        &store.markdown,
         &store.conn,
         "/repo",
         &MemoryListFilter::default(),
@@ -968,7 +983,8 @@ fn consolidation_apply_supersedes_merged_rows_and_links_them() {
         },
     );
 
-    let plan = super::memory::consolidation_plan(
+    let plan = super::markdown_memory::consolidation_plan(
+        &store.markdown,
         &store.conn,
         "/repo",
         &MemoryListFilter::default(),
@@ -986,40 +1002,24 @@ fn consolidation_apply_supersedes_merged_rows_and_links_them() {
     assert_eq!(group.merged_memory_ids, vec!["m2"]);
 
     // Merged row is marked superseded with a link row.
-    let (superseded_by, importance): (String, String) = store
-        .conn
-        .query_row(
-            "SELECT superseded_by, importance FROM memories WHERE id = 'm2'",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .unwrap();
-    assert_eq!(superseded_by, consolidated_id);
-    assert_eq!(importance, "normal");
-    let (old_id, new_id, reason): (String, String, String) = store
-        .conn
-        .query_row(
-            "SELECT old_memory_id, new_memory_id, reason FROM memory_supersessions",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .unwrap();
-    assert_eq!(old_id, "m2");
-    assert_eq!(new_id, consolidated_id);
-    assert!(!reason.is_empty());
+    let merged = store.get_memory("/repo", "m2").unwrap().unwrap();
+    assert_eq!(merged.superseded_by.as_deref(), Some(consolidated_id));
+    assert_eq!(merged.importance, MemoryImportance::Normal);
+    let consolidated = store.get_memory("/repo", consolidated_id).unwrap().unwrap();
+    assert!(
+        consolidated
+            .links
+            .iter()
+            .any(|link| { link.id == "m2" && link.relation == "supersedes" })
+    );
 
     // Consolidated row preserves source references and merged ids in metadata.
-    let (body, source_id, metadata_json): (String, Option<String>, String) = store
-        .conn
-        .query_row(
-            "SELECT body, source_id, metadata_json FROM memories WHERE id = ?1",
-            [consolidated_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .unwrap();
-    assert_eq!(body, "deploy uses helm charts\ndeploy uses helm");
-    assert_eq!(source_id.as_deref(), Some("src-a"));
-    let metadata: Value = serde_json::from_str(&metadata_json).unwrap();
+    assert_eq!(
+        consolidated.body,
+        "deploy uses helm charts\ndeploy uses helm"
+    );
+    assert_eq!(consolidated.source_id.as_deref(), Some("src-a"));
+    let metadata = consolidated.metadata;
     assert_eq!(metadata["consolidated"], serde_json::json!(true));
     assert_eq!(metadata["merged_ids"], serde_json::json!(["m2"]));
     assert_eq!(
@@ -1057,7 +1057,8 @@ fn consolidation_keeps_merged_rows_visible_behind_include_superseded() {
             category: None,
         },
     );
-    super::memory::consolidation_plan(
+    super::markdown_memory::consolidation_plan(
+        &store.markdown,
         &store.conn,
         "/repo",
         &MemoryListFilter::default(),
@@ -1066,12 +1067,12 @@ fn consolidation_keeps_merged_rows_visible_behind_include_superseded() {
     )
     .unwrap();
 
-    // Default list hides superseded rows.
+    // Default list hides superseded rows: only the consolidated file is active.
     let listed = store
         .list_memories("/repo", &MemoryListFilter::default())
         .unwrap();
-    assert_eq!(listed.len(), 2, "consolidated + kept row");
-    assert!(listed.iter().any(|m| m.superseded_by.is_none()));
+    assert_eq!(listed.len(), 1, "only the consolidated memory stays active");
+    assert!(listed[0].superseded_by.is_none());
 
     // Explicit inspection shows the superseded row with its link target.
     let all = store

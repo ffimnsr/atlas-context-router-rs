@@ -195,6 +195,8 @@ mod tests {
             last_accessed_at: created_at.to_owned(),
             decay_score: 0.0,
             source_id: None,
+            tags: Vec::new(),
+            links: Vec::new(),
             metadata: Value::Null,
             superseded_by: None,
         }

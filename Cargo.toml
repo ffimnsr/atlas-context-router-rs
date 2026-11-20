@@ -78,6 +78,7 @@ rusqlite = { version = "0.32", features = ["bundled-full"] }
 # the missing -Du_int*_t defines for musl builds.
 sqlite-vec = "0.1.9"
 atlas-db-utils = { path = "packages/atlas-db-utils", version = "1.0.0" }
+atlas-store-markdown = { path = "packages/atlas-store-markdown", version = "1.7.12" }
 
 # Tree-sitter
 # Keep `tree-sitter` and `tree-sitter-loader` on the same 0.x minor: both link

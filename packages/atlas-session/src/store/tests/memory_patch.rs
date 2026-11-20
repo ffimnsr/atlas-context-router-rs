@@ -123,13 +123,7 @@ fn store_patch_rejects_superseded_memories() {
         MemoryImportance::Normal,
         MemoryScope::Project,
     );
-    store
-        .conn
-        .execute(
-            "UPDATE memories SET superseded_by = 'newer' WHERE id = 'old'",
-            [],
-        )
-        .unwrap();
+    mark_superseded(&store, "old", "newer");
 
     let patch = "<<<< SEARCH\nold\n====\nnew\n>>>> REPLACE\n";
     let error = store
@@ -154,6 +148,12 @@ fn direct_eua_operator_matches_store_patch() {
         numeric_value: None,
         op_history: Vec::new(),
         superseded_by: None,
+        tags: Vec::new(),
+        links: Vec::new(),
+        session_id: None,
+        frontend: None,
+        created_at: String::new(),
+        updated_at: String::new(),
     };
     let op = MemoryOp::EuaPatch {
         search: "beta".to_owned(),

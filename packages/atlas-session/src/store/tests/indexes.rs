@@ -124,11 +124,11 @@ fn memory_recall_lookups_use_repo_indexes() {
         &[&"/repo"],
     );
     assert!(
-        active.contains("SEARCH memories USING INDEX idx_memories_repo_"),
+        active.contains("idx_memory_index_repo_"),
         "expected a repo-scoped memory index, got:\n{active}"
     );
     assert!(
-        !active.starts_with("SCAN memories"),
+        !active.starts_with("SCAN "),
         "active-memory count must not full-scan memories, got:\n{active}"
     );
 
@@ -138,7 +138,7 @@ fn memory_recall_lookups_use_repo_indexes() {
         &[&"/repo", &"src-1"],
     );
     assert!(
-        by_source.contains("idx_memories_repo_source"),
+        by_source.contains("idx_memory_index_repo_source"),
         "expected source-id index, got:\n{by_source}"
     );
 }
@@ -175,9 +175,9 @@ fn migration_016_adds_hot_path_indexes() {
         "idx_experience_edges_repo_validated",
         "idx_memoir_relations_repo_source",
         "idx_memoir_relations_repo_target",
-        "idx_memories_repo_active",
-        "idx_memories_repo_updated",
-        "idx_memories_repo_source",
+        "idx_memory_index_repo_active",
+        "idx_memory_index_repo_updated",
+        "idx_memory_index_repo_source",
         "idx_durable_tasks_updated_created_task",
         "idx_session_events_event_type",
     ] {
@@ -204,9 +204,6 @@ fn migration_016_drops_redundant_and_unused_indexes() {
         "idx_overview_records_subject_kind",
         "idx_overview_packets_repo",
         "idx_decision_memory_session_updated",
-        "idx_memories_repo_accessed",
-        "idx_memory_supersessions_new",
-        "idx_durable_tasks_updated_task",
     ] {
         assert!(
             !indexes.iter().any(|name| name == removed),

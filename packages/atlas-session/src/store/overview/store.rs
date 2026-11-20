@@ -413,6 +413,7 @@ impl SessionStore {
             )
             .map_err(|error| AtlasError::Db(error.to_string()))?;
         insert_fts(&self.conn, &record)?;
+        super::super::markdown_records::sync_overview(&self.markdown, &self.conn)?;
         Ok(record)
     }
 
@@ -725,6 +726,7 @@ impl SessionStore {
                     params![overview_id],
                 )
                 .map_err(|error| AtlasError::Db(error.to_string()))?;
+            super::super::markdown_records::delete_overview(&self.markdown, overview_id)?;
         }
         Ok(OverviewDeleteResult {
             overview_id: overview_id.to_owned(),

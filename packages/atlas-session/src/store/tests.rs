@@ -111,9 +111,58 @@ fn seed_memory_full(
         body: body.to_owned(),
         importance,
         source_id: source_id.map(str::to_owned),
+        tags: Vec::new(),
+        links: Vec::new(),
         metadata: serde_json::json!({ "seed": id }),
     };
-    super::memory::store_memory_at(&store.conn, &input, now, id).unwrap()
+    super::markdown_memory::store_memory_at(&store.markdown, &store.conn, &input, now, id).unwrap()
+}
+
+/// Rewrite one markdown record through the truth store.
+fn update_memory(store: &SessionStore, id: &str, apply: impl FnOnce(&mut MemoryRecord)) {
+    let mut record = super::markdown_memory::load_by_id(&store.markdown, "/repo", id)
+        .unwrap()
+        .expect("memory exists");
+    apply(&mut record);
+    super::markdown_memory::write_existing_record(&store.markdown, &store.conn, &record).unwrap();
+}
+
+/// Rewrite every memory record for the seeded repo.
+fn rewrite_all_memories(store: &SessionStore, apply: impl Fn(&mut MemoryRecord)) {
+    let records = super::markdown_memory::scan(&store.markdown, "/repo").unwrap();
+    for mut record in records {
+        apply(&mut record);
+        super::markdown_memory::write_existing_record(&store.markdown, &store.conn, &record)
+            .unwrap();
+    }
+}
+
+/// Mark `id` as superseded by a `supersedes` link from `by`, creating the
+/// marker record when a test only needs the effect.
+fn mark_superseded(store: &SessionStore, id: &str, by: &str) {
+    if super::markdown_memory::load_by_id(&store.markdown, "/repo", by)
+        .unwrap()
+        .is_none()
+    {
+        seed_memory_full(
+            store,
+            by,
+            "2000-01-01T00:00:00Z",
+            "supersession marker",
+            "markers",
+            MemoryImportance::Normal,
+            MemoryScope::Project,
+            None,
+            None,
+            None,
+        );
+    }
+    update_memory(store, by, |record| {
+        record.links.push(MemoryLink {
+            id: id.to_owned(),
+            relation: "supersedes".to_owned(),
+        });
+    });
 }
 
 mod compaction;
@@ -126,6 +175,7 @@ mod memoir;
 mod memory_consolidate;
 mod memory_curation;
 mod memory_embeddings;
+mod memory_markdown;
 mod memory_ops;
 mod memory_ops_operators;
 mod memory_patch;

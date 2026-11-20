@@ -647,6 +647,10 @@ fn typed_session_memory_schemas_preserve_required_fields_and_descriptions() {
                 .collect(),
             "memory_store" => BTreeSet::new(),
             "memory_ops" => ["memory_id"].into_iter().map(ToOwned::to_owned).collect(),
+            "memory_link" => ["memory_id", "target_id"]
+                .into_iter()
+                .map(ToOwned::to_owned)
+                .collect(),
             "feedback_record" => ["predicted", "actual"]
                 .into_iter()
                 .map(ToOwned::to_owned)

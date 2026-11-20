@@ -16,6 +16,12 @@ fn entity() -> MemoryEntity {
         numeric_value: None,
         op_history: Vec::new(),
         superseded_by: None,
+        tags: Vec::new(),
+        links: Vec::new(),
+        session_id: None,
+        frontend: None,
+        created_at: String::new(),
+        updated_at: String::new(),
     }
 }
 

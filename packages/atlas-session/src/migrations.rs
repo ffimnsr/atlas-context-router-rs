@@ -83,9 +83,19 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "016_session_index_hot_paths",
         up_sql: include_str!("migrations/016_session_index_hot_paths.sql"),
     },
+    Migration {
+        version: 17,
+        name: "017_memory_markdown_index",
+        up_sql: include_str!("migrations/017_memory_markdown_index.sql"),
+    },
+    Migration {
+        version: 18,
+        name: "018_memories_view_tags",
+        up_sql: include_str!("migrations/018_memories_view_tags.sql"),
+    },
 ];
 
-pub const LATEST_VERSION: i32 = 16;
+pub const LATEST_VERSION: i32 = 18;
 
 pub const MIGRATION_SET: MigrationSet = MigrationSet {
     db_kind: "session",

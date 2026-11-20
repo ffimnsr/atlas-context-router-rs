@@ -8,6 +8,7 @@
 
 mod artifact;
 mod lifecycle;
+mod markdown;
 pub mod registry;
 mod search;
 #[cfg(test)]
@@ -47,6 +48,8 @@ pub struct ContentStore {
     pub(super) config: ContentStoreConfig,
     pub(super) routing_stats: RoutingStats,
     pub(super) run_stats: IndexRunStats,
+    /// Markdown truth store rooted at the `.atlas/` directory.
+    pub(super) markdown: atlas_store_markdown::MarkdownStore,
     /// In-process cache of frozen embedding dimensions, keyed by
     /// `(provider_name, model_name)`.  Populated lazily or by `warm_dimension_cache()`.
     pub(super) dim_cache: HashMap<(String, String), u32>,
@@ -80,11 +83,19 @@ impl ContentStore {
         )
         .map_err(|e| AtlasError::Db(e.to_string()))?;
 
+        let atlas_dir = std::path::Path::new(path)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| std::path::Path::new(".").join(".atlas"));
+        let markdown = atlas_store_markdown::MarkdownStore::open(&atlas_dir)
+            .map_err(|error| AtlasError::Other(format!("markdown store: {error}")))?;
         let mut store = Self {
             conn,
             config,
             routing_stats: RoutingStats::default(),
             run_stats: IndexRunStats::default(),
+            markdown,
             dim_cache: HashMap::new(),
             _thread_bound: std::marker::PhantomData,
         };
@@ -92,6 +103,30 @@ impl ContentStore {
         set_application_id(&store.conn, application_id::CONTEXT)?;
         store.migrate()?;
         Ok(store)
+    }
+
+    /// Rebuild derived chunk/FTS/vocabulary indexes from `.atlas/artifacts/**`.
+    /// `full` clears existing derived rows first; otherwise indexing is
+    /// incremental and unchanged chunks are reused.
+    pub fn rebuild_from_markdown(&mut self, full: bool) -> Result<usize> {
+        if full {
+            self.conn
+                .execute_batch(
+                    "DELETE FROM chunks_fts;
+                     DELETE FROM chunks_trigram;
+                     DELETE FROM chunks;
+                     DELETE FROM sources;
+                     DELETE FROM vocabulary;",
+                )
+                .map_err(|error| AtlasError::Db(error.to_string()))?;
+        }
+        let artifacts = markdown::read_all(&self.markdown)?;
+        let mut indexed = 0usize;
+        for artifact in artifacts {
+            self.index_artifact(artifact.to_meta(), &artifact.body, &artifact.content_type)?;
+            indexed += 1;
+        }
+        Ok(indexed)
     }
 
     /// Apply any pending schema migrations.

@@ -53,7 +53,7 @@ fn parse_init_mode_flags() {
 #[test]
 fn parse_migrate_command() {
     let cli = parse(&["atlas", "migrate"]);
-    assert!(matches!(cli.command, Command::Migrate));
+    assert!(matches!(cli.command, Command::Migrate { .. }));
 }
 #[test]
 fn parse_repo_add_command() {

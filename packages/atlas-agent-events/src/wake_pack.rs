@@ -1007,6 +1007,8 @@ mod tests {
                 body: "wake the agent with a bounded pack".to_owned(),
                 importance: MemoryImportance::Critical,
                 source_id: None,
+                tags: Vec::new(),
+                links: Vec::new(),
                 metadata: json!({}),
             })
             .unwrap();
@@ -1072,6 +1074,8 @@ mod tests {
                 body: "hooks must be non-blocking".to_owned(),
                 importance: MemoryImportance::High,
                 source_id: None,
+                tags: Vec::new(),
+                links: Vec::new(),
                 metadata: json!({}),
             })
             .unwrap();

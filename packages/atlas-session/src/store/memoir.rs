@@ -948,19 +948,25 @@ impl super::SessionStore {
     /// Create a memoir graph in the repo; duplicate `(repo, scope, name)`
     /// combinations fail deterministically.
     pub fn create_memoir_graph(&mut self, input: &NewMemoirGraph) -> Result<MemoirGraph> {
-        create_memoir_graph(&self.conn, input)
+        let graph = create_memoir_graph(&self.conn, input)?;
+        super::markdown_records::sync_memoir(&self.markdown, &self.conn)?;
+        Ok(graph)
     }
 
     /// Add a concept to an existing memoir graph. Missing graphs are never
     /// auto-created.
     pub fn add_memoir_concept(&mut self, input: &NewMemoirConcept) -> Result<MemoirConcept> {
-        add_memoir_concept(&self.conn, input)
+        let concept = add_memoir_concept(&self.conn, input)?;
+        super::markdown_records::sync_memoir(&self.markdown, &self.conn)?;
+        Ok(concept)
     }
 
     /// Link two existing concepts; unknown relation types are rejected and
     /// missing endpoints require explicit `create_missing` opt-in.
     pub fn link_memoir_concepts(&mut self, input: &NewMemoirRelation) -> Result<MemoirRelation> {
-        link_memoir_concepts(&self.conn, input)
+        let relation = link_memoir_concepts(&self.conn, input)?;
+        super::markdown_records::sync_memoir(&self.markdown, &self.conn)?;
+        Ok(relation)
     }
 
     /// Bounded memoir traversal with canonical relation direction and source
@@ -978,7 +984,23 @@ impl super::SessionStore {
         name: &str,
         dry_run: bool,
     ) -> Result<super::memoir_delete::MemoirDeleteResult> {
-        super::memoir_delete::delete_memoir_graph(&self.conn, repo_root, scope, name, dry_run)
+        let graph_id: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT id FROM memoir_graphs WHERE repo_root = ?1 AND scope = ?2 AND name = ?3 COLLATE NOCASE",
+                params![repo_root, scope.as_str(), name],
+                |row| row.get(0),
+            )
+            .ok();
+        let result =
+            super::memoir_delete::delete_memoir_graph(&self.conn, repo_root, scope, name, dry_run)?;
+        if !dry_run
+            && result.deleted
+            && let Some(graph_id) = graph_id.as_deref()
+        {
+            super::markdown_records::delete_memoir_graph(&self.markdown, &self.conn, graph_id)?;
+        }
+        Ok(result)
     }
 
     /// Read-only concept listing for the memory TUI (ICM-H2).

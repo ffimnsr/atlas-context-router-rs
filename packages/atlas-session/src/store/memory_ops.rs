@@ -12,7 +12,8 @@
 
 use std::collections::BTreeSet;
 
-use rusqlite::{Connection, OptionalExtension, params};
+use atlas_store_markdown::MarkdownStore;
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -20,9 +21,13 @@ use sha2::{Digest, Sha256};
 use atlas_core::{AtlasError, Clock, Result, SystemClock};
 
 use super::SessionStore;
-use super::memory::{derive_memory_id, store_memory_at};
-use super::types::{MemoryImportance, MemoryScope, NewMemory, SessionEventRow, SessionEventType};
-use super::util::{hex_encode, to_from_sql_error};
+use super::markdown_memory;
+use super::memory::derive_memory_id;
+use super::types::{
+    MemoryImportance, MemoryLink, MemoryRecord, MemoryScope, NewMemory, SessionEventRow,
+    SessionEventType,
+};
+use super::util::hex_encode;
 
 /// Maximum operator history entries retained per memory row.
 pub const MAX_OP_HISTORY_ENTRIES: usize = 32;
@@ -113,6 +118,12 @@ pub struct MemoryEntity {
     pub numeric_value: Option<f64>,
     pub op_history: Vec<MemoryOpHistoryEntry>,
     pub superseded_by: Option<String>,
+    pub tags: Vec<String>,
+    pub links: Vec<MemoryLink>,
+    pub session_id: Option<String>,
+    pub frontend: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 /// Result of applying one operator.
@@ -422,15 +433,17 @@ fn op_error(message: impl Into<String>) -> AtlasError {
 
 // ── Persistence ──────────────────────────────────────────────────────────────
 
-/// Apply one operator to a stored memory inside the caller's connection.
+/// Apply one operator to a stored memory. Markdown is the truth write; the
+/// derived index is refreshed in the same call.
 pub(super) fn apply_memory_op_on(
+    store: &MarkdownStore,
     conn: &Connection,
     repo_root: &str,
     memory_id: &str,
     op: &MemoryOp,
     now: &str,
 ) -> Result<OpOutcome> {
-    let mut entity = load_entity(conn, repo_root, memory_id)?
+    let mut entity = load_entity(store, repo_root, memory_id)?
         .ok_or_else(|| op_error(format!("no memory with id {memory_id} in {repo_root}")))?;
     if let Some(superseded_by) = &entity.superseded_by {
         return Err(op_error(format!(
@@ -438,80 +451,92 @@ pub(super) fn apply_memory_op_on(
         )));
     }
     let outcome = apply_memory_op(&mut entity, op, now)?;
-    persist_entity(conn, &entity, now)?;
+    persist_entity(store, conn, &entity, now)?;
     Ok(outcome)
 }
 
-fn load_entity(
-    conn: &Connection,
+pub(super) fn load_entity(
+    store: &MarkdownStore,
     repo_root: &str,
     memory_id: &str,
 ) -> Result<Option<MemoryEntity>> {
-    conn.query_row(
-        "SELECT id, repo_root, topic, title, body, importance, scope, source_id,
-                metadata_json, numeric_value, op_history_json, superseded_by
-         FROM memories
-         WHERE id = ?1 AND repo_root = ?2",
-        params![memory_id, repo_root],
-        |row| {
-            let importance: String = row.get(5)?;
-            let scope: String = row.get(6)?;
-            let metadata_json: String = row.get(8)?;
-            let metadata = serde_json::from_str(&metadata_json).map_err(|error| {
-                to_from_sql_error(op_error(format!(
-                    "malformed metadata_json for memory {memory_id}: {error}"
-                )))
-            })?;
-            let history_json: String = row.get(10)?;
-            let op_history = parse_history(&history_json, memory_id).map_err(to_from_sql_error)?;
-            Ok(MemoryEntity {
-                id: row.get(0)?,
-                repo_root: row.get(1)?,
-                topic: row.get(2)?,
-                title: row.get(3)?,
-                body: row.get(4)?,
-                importance: importance.parse().map_err(to_from_sql_error)?,
-                scope: scope.parse().map_err(to_from_sql_error)?,
-                source_id: row.get(7)?,
-                metadata,
-                numeric_value: row.get(9)?,
-                op_history,
-                superseded_by: row.get(11)?,
-            })
-        },
-    )
-    .optional()
-    .map_err(|error| AtlasError::Db(error.to_string()))
+    let Some(record) = markdown_memory::load_by_id(store, repo_root, memory_id)? else {
+        return Ok(None);
+    };
+    let metadata = record.metadata;
+    let numeric_value = metadata.get("__numeric_value").and_then(Value::as_f64);
+    let op_history = metadata
+        .get("__op_history")
+        .cloned()
+        .map(|history| parse_history(&history.to_string(), memory_id))
+        .transpose()?
+        .unwrap_or_default();
+    Ok(Some(MemoryEntity {
+        id: record.id,
+        repo_root: record.repo_root,
+        topic: record.topic,
+        title: record.title,
+        body: record.body,
+        importance: record.importance,
+        scope: record.scope,
+        source_id: record.source_id,
+        metadata,
+        numeric_value,
+        op_history,
+        superseded_by: record.superseded_by,
+        tags: record.tags,
+        links: record.links,
+        session_id: record.session_id,
+        frontend: record.frontend,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+    }))
 }
 
-fn persist_entity(conn: &Connection, entity: &MemoryEntity, now: &str) -> Result<()> {
-    let metadata_json = serde_json::to_string(&entity.metadata)
-        .map_err(|error| AtlasError::Other(format!("serialize memory metadata: {error}")))?;
-    let history_json = serde_json::to_string(&entity.op_history)
-        .map_err(|error| AtlasError::Other(format!("serialize operator history: {error}")))?;
-    conn.execute(
-        "UPDATE memories
-         SET topic = ?1, title = ?2, body = ?3, importance = ?4, scope = ?5,
-             source_id = ?6, metadata_json = ?7, numeric_value = ?8,
-             op_history_json = ?9, updated_at = ?10
-         WHERE id = ?11 AND repo_root = ?12",
-        params![
-            entity.topic,
-            entity.title,
-            entity.body,
-            entity.importance.as_str(),
-            entity.scope.as_str(),
-            entity.source_id,
-            metadata_json,
-            entity.numeric_value,
-            history_json,
-            now,
-            entity.id,
-            entity.repo_root,
-        ],
-    )
-    .map_err(|error| AtlasError::Db(error.to_string()))?;
-    Ok(())
+pub(super) fn persist_entity(
+    store: &MarkdownStore,
+    conn: &Connection,
+    entity: &MemoryEntity,
+    now: &str,
+) -> Result<()> {
+    let mut metadata = entity.metadata.clone();
+    if let Some(object) = metadata.as_object_mut() {
+        object.insert(
+            "__op_history".to_owned(),
+            serde_json::to_value(&entity.op_history).map_err(|error| {
+                AtlasError::Other(format!("serialize operator history: {error}"))
+            })?,
+        );
+        match entity.numeric_value {
+            Some(value) => {
+                object.insert("__numeric_value".to_owned(), json!(value));
+            }
+            None => {
+                object.remove("__numeric_value");
+            }
+        }
+    }
+    let record = MemoryRecord {
+        id: entity.id.clone(),
+        repo_root: entity.repo_root.clone(),
+        session_id: entity.session_id.clone(),
+        frontend: entity.frontend.clone(),
+        scope: entity.scope,
+        topic: entity.topic.clone(),
+        title: entity.title.clone(),
+        body: entity.body.clone(),
+        importance: entity.importance,
+        created_at: entity.created_at.clone(),
+        updated_at: now.to_owned(),
+        last_accessed_at: entity.created_at.clone(),
+        decay_score: 0.0,
+        source_id: entity.source_id.clone(),
+        metadata,
+        tags: entity.tags.clone(),
+        links: entity.links.clone(),
+        superseded_by: entity.superseded_by.clone(),
+    };
+    markdown_memory::write_existing_record(store, conn, &record)
 }
 
 fn parse_history(raw: &str, memory_id: &str) -> Result<Vec<MemoryOpHistoryEntry>> {
@@ -542,14 +567,7 @@ impl SessionStore {
         op: &MemoryOp,
     ) -> Result<OpOutcome> {
         let now = memory_op_now();
-        let tx = self
-            .conn
-            .transaction()
-            .map_err(|error| AtlasError::Db(error.to_string()))?;
-        let outcome = apply_memory_op_on(&tx, repo_root, memory_id, op, &now)?;
-        tx.commit()
-            .map_err(|error| AtlasError::Db(error.to_string()))?;
-        Ok(outcome)
+        apply_memory_op_on(&self.markdown, &self.conn, repo_root, memory_id, op, &now)
     }
 
     /// Read the bounded operator history for one memory row.
@@ -558,7 +576,7 @@ impl SessionStore {
         repo_root: &str,
         memory_id: &str,
     ) -> Result<Option<MemoryOpHistory>> {
-        let Some(entity) = load_entity(&self.conn, repo_root, memory_id)? else {
+        let Some(entity) = load_entity(&self.markdown, repo_root, memory_id)? else {
             return Ok(None);
         };
         Ok(Some(MemoryOpHistory {
@@ -579,6 +597,7 @@ impl SessionStore {
 /// `AppendUnique(error_signatures)` update. Signatures are SHA-256 hashes of the
 /// normalized failure text so raw stderr never lands in durable memory state.
 pub(super) fn record_failure_events(
+    store: &MarkdownStore,
     conn: &Connection,
     repo_root: &str,
     events: &[SessionEventRow],
@@ -608,9 +627,10 @@ pub(super) fn record_failure_events(
         .unchecked_transaction()
         .map_err(|error| AtlasError::Db(error.to_string()))?;
     for (topic, failures) in by_topic {
-        let memory_id = ensure_failure_entity(&tx, repo_root, topic, now)?;
+        let memory_id = ensure_failure_entity(store, conn, repo_root, topic, now)?;
         for (signature, observed_at) in failures {
             apply_memory_op_on(
+                store,
                 &tx,
                 repo_root,
                 &memory_id,
@@ -620,6 +640,7 @@ pub(super) fn record_failure_events(
                 now,
             )?;
             apply_memory_op_on(
+                store,
                 &tx,
                 repo_root,
                 &memory_id,
@@ -630,6 +651,7 @@ pub(super) fn record_failure_events(
                 now,
             )?;
             apply_memory_op_on(
+                store,
                 &tx,
                 repo_root,
                 &memory_id,
@@ -648,24 +670,25 @@ pub(super) fn record_failure_events(
 }
 
 fn ensure_failure_entity(
+    store: &MarkdownStore,
     conn: &Connection,
     repo_root: &str,
     topic: &str,
     now: &str,
 ) -> Result<String> {
-    let existing: Option<String> = conn
-        .query_row(
-            "SELECT id FROM memories
-             WHERE repo_root = ?1 AND topic = ?2 AND title = ?3 AND superseded_by IS NULL
-             ORDER BY created_at ASC, id ASC
-             LIMIT 1",
-            params![repo_root, topic, FAILURE_TITLE],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|error| AtlasError::Db(error.to_string()))?;
-    if let Some(id) = existing {
-        return Ok(id);
+    let existing = markdown_memory::list_memories(
+        store,
+        conn,
+        repo_root,
+        &super::types::MemoryListFilter {
+            topic: Some(topic.to_owned()),
+            ..Default::default()
+        },
+    )?
+    .into_iter()
+    .find(|record| record.title == FAILURE_TITLE);
+    if let Some(record) = existing {
+        return Ok(record.id);
     }
 
     let body = format!(
@@ -683,8 +706,10 @@ fn ensure_failure_entity(
         importance: MemoryImportance::Normal,
         source_id: None,
         metadata: json!({ "entity_key": "failure_log" }),
+        tags: Vec::new(),
+        links: Vec::new(),
     };
-    store_memory_at(conn, &input, now, &id)?;
+    markdown_memory::store_memory_at(store, conn, &input, now, &id)?;
     Ok(id)
 }
 
@@ -758,36 +783,36 @@ fn nested_payload_string(payload_json: &str, outer: &str, inner: &str) -> Option
 
 // ── Schema validation (`atlas db check`) ────────────────────────────────────
 
-/// Validate the VM1 additions: operator columns, FTS table, and triggers.
+/// Validate the derived operator index: FTS table, triggers, and history JSON.
 pub(super) fn schema_issues(conn: &Connection) -> Vec<String> {
     let mut issues = Vec::new();
 
     let fts_exists: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'memories_fts'",
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'memory_index_fts'",
             [],
             |row| row.get(0),
         )
         .unwrap_or(0);
     if fts_exists == 0 {
-        issues.push("missing table: memories_fts".to_owned());
+        issues.push("missing table: memory_index_fts".to_owned());
     } else {
-        let memories_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
+        let index_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memory_index", [], |row| row.get(0))
             .unwrap_or(0);
         let fts_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM memories_fts_docsize", [], |row| {
+            .query_row("SELECT COUNT(*) FROM memory_index_fts_docsize", [], |row| {
                 row.get(0)
             })
             .unwrap_or(0);
-        if memories_count != fts_count {
+        if index_count != fts_count {
             issues.push(format!(
-                "memories_fts is out of sync with memories: {fts_count} indexed rows for {memories_count} memories"
+                "memory_index_fts is out of sync with memory_index: {fts_count} indexed rows for {index_count} records"
             ));
         }
     }
 
-    for trigger in ["memories_ai", "memories_ad", "memories_au"] {
+    for trigger in ["memory_index_ai", "memory_index_ad", "memory_index_au"] {
         let exists: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name = ?1",
@@ -800,7 +825,7 @@ pub(super) fn schema_issues(conn: &Connection) -> Vec<String> {
         }
     }
 
-    if let Ok(mut stmt) = conn.prepare("SELECT id, op_history_json FROM memories")
+    if let Ok(mut stmt) = conn.prepare("SELECT id, op_history_json FROM memory_index")
         && let Ok(rows) = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })

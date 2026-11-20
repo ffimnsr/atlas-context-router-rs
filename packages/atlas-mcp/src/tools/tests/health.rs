@@ -513,8 +513,8 @@ fn db_check_reports_missing_memories_table() {
     let store = atlas_session::SessionStore::open(&session_db_path).expect("open session store");
     drop(store);
     let conn = Connection::open(&session_db_path).expect("open session db");
-    conn.execute_batch("DROP TABLE memories")
-        .expect("drop memories table");
+    conn.execute_batch("DROP TABLE memory_index")
+        .expect("drop memory index table");
     drop(conn);
 
     let args = serde_json::json!({ "output_format": "json" });
@@ -534,7 +534,7 @@ fn db_check_reports_missing_memories_table() {
             .as_array()
             .expect("memory schema issues array")
             .iter()
-            .any(|issue| issue.as_str() == Some("missing table: memories"))
+            .any(|issue| issue.as_str() == Some("missing table: memory_index"))
     );
 }
 

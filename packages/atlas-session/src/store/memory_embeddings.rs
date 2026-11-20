@@ -13,6 +13,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use atlas_core::{AtlasError, Clock, Result};
 
+use atlas_store_markdown::MarkdownStore;
+
 use super::memory::{append_filter_clauses, row_to_memory};
 use super::memory_recall::{
     append_visibility_clause, candidate_limit, ranking_for, recall_memories_with_policy,
@@ -233,6 +235,7 @@ pub(super) fn get_memory_embedding(
 /// and testable without network access.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn hybrid_recall_with_policy(
+    store: &MarkdownStore,
     conn: &Connection,
     repo_root: &str,
     query: &str,
@@ -266,6 +269,7 @@ pub(super) fn hybrid_recall_with_policy(
 
     // Lexical path runs first and keeps its lexical-first tier order.
     let mut lexical = recall_memories_with_policy(
+        store,
         conn,
         repo_root,
         query,

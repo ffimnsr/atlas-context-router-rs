@@ -391,6 +391,10 @@ pub enum MemoryCommand {
         #[arg(long)]
         source_id: Option<String>,
 
+        /// Searchable tag (repeatable; duplicates collapse).
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+
         /// Exact memory id to patch with an EUA search/replace document.
         #[arg(long, conflicts_with = "text")]
         patch_id: Option<String>,
@@ -418,8 +422,13 @@ pub enum MemoryCommand {
         importance: Option<String>,
 
         /// Restrict recall to one scope.
+        /// Restrict to one scope.
         #[arg(long)]
         scope: Option<String>,
+
+        /// Require this tag (repeatable; every tag must match).
+        #[arg(long = "tag")]
+        tags: Vec<String>,
 
         /// Only return memories visible to every frontend (project + global).
         #[arg(long, conflicts_with = "scope")]
@@ -432,6 +441,20 @@ pub enum MemoryCommand {
         /// Fuse optional memory embeddings with lexical recall (ICM-E2).
         #[arg(long)]
         hybrid: bool,
+    },
+
+    /// Link one memory to another; relations use the memoir vocabulary
+    /// plus `supersedes`.
+    Link {
+        /// Exact source memory id.
+        memory_id: String,
+
+        /// Exact target memory id.
+        target_id: String,
+
+        /// Link relation (default: related_to).
+        #[arg(long, default_value = "related_to")]
+        relation: String,
     },
 
     /// Compute and store embeddings for memories that do not have one (ICM-E2).

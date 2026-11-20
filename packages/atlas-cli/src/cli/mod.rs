@@ -30,6 +30,40 @@ pub use uri::UriCommand;
 
 use crate::install::InstructionsMode;
 
+/// `atlas index` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum IndexCommand {
+    /// Rebuild context.db chunk/FTS indexes from `.atlas/artifacts/**`.
+    Rebuild {
+        /// Clear derived rows first and regenerate every chunk.
+        #[arg(long)]
+        full: bool,
+
+        /// Also attempt provider-backed embedding regeneration.
+        #[arg(long)]
+        embeddings: bool,
+    },
+}
+
+/// `atlas migrate` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum MigrateCommand {
+    /// Export durable continuity records to `.atlas/**` markdown truth files.
+    Markdown {
+        /// Report pending files without writing or backing up.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Remove the pre-migration backup and legacy staging table.
+        #[arg(long)]
+        finalize: bool,
+
+        /// Rebuild memory embeddings from markdown bodies after migration.
+        #[arg(long)]
+        embeddings: bool,
+    },
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum ReviewContextFormat {
     Text,
@@ -87,8 +121,18 @@ pub enum Command {
         force: bool,
     },
 
-    /// Run repo-local database migrations without building graph state.
-    Migrate,
+    /// Run repo-local database migrations without building graph state, or
+    /// export continuity truth to markdown.
+    Migrate {
+        #[command(subcommand)]
+        subcommand: Option<MigrateCommand>,
+    },
+
+    /// Rebuild derived retrieval indexes from markdown truth files.
+    Index {
+        #[command(subcommand)]
+        subcommand: IndexCommand,
+    },
 
     /// Manage the multi-repo registry.
     Repo {

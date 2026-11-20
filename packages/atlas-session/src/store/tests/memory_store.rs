@@ -64,6 +64,8 @@ fn store_memory_preserves_exact_text_and_metadata() {
         scope: MemoryScope::Frontend,
         frontend: Some("codex".to_owned()),
         source_id: Some("artifact-1".to_owned()),
+        tags: Vec::new(),
+        links: Vec::new(),
         metadata: serde_json::json!({ "source_kind": "hook", "count": 3 }),
         ..Default::default()
     };

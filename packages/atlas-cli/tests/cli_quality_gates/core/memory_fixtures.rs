@@ -55,6 +55,8 @@ pub(super) fn seed_memory_layer(repo_root: &Path) -> MemoryLayerFixture {
                 .to_owned(),
             importance: MemoryImportance::Critical,
             source_id: None,
+            tags: Vec::new(),
+            links: Vec::new(),
             metadata: json!({ "kind": "decision" }),
         })
         .expect("seed critical memory");
@@ -71,6 +73,8 @@ pub(super) fn seed_memory_layer(repo_root: &Path) -> MemoryLayerFixture {
             body: "Temporary probe notes from an expired investigation.".to_owned(),
             importance: MemoryImportance::Low,
             source_id: None,
+            tags: Vec::new(),
+            links: Vec::new(),
             metadata: json!({}),
         })
         .expect("seed stale memory");
@@ -88,6 +92,8 @@ pub(super) fn seed_memory_layer(repo_root: &Path) -> MemoryLayerFixture {
             body: "codex-only preference: keep output terse.".to_owned(),
             importance: MemoryImportance::Normal,
             source_id: None,
+            tags: Vec::new(),
+            links: Vec::new(),
             metadata: json!({}),
         })
         .expect("seed private memory");
@@ -242,15 +248,19 @@ pub(super) fn seed_memory_layer(repo_root: &Path) -> MemoryLayerFixture {
 fn backdate_memory(repo_root: &Path, memory_id: &str, days: i64) {
     let graph_db = repo_root.join(".atlas").join("worldtree.db");
     let session_db = derive_session_db_path(graph_db.to_str().expect("graph db path"));
-    let conn = rusqlite::Connection::open(&session_db).expect("open session db");
+    let mut store = SessionStore::open(&session_db).expect("open session store");
     let cutoff = (time::OffsetDateTime::now_utc() - time::Duration::days(days))
         .replace_nanosecond(0)
         .expect("valid timestamp")
         .format(&time::format_description::well_known::Rfc3339)
         .expect("format timestamp");
-    conn.execute(
-        "UPDATE memories SET created_at = ?2, updated_at = ?2, last_accessed_at = ?2 WHERE id = ?1",
-        rusqlite::params![memory_id, cutoff],
-    )
-    .expect("backdate memory");
+    let repo = canonical_path(repo_root).to_string_lossy().into_owned();
+    let mut record = store
+        .get_memory(&repo, memory_id)
+        .expect("read memory")
+        .expect("memory exists");
+    record.created_at = cutoff.clone();
+    record.updated_at = cutoff.clone();
+    record.last_accessed_at = cutoff;
+    store.rewrite_memory(&record).expect("backdate memory");
 }

@@ -518,6 +518,17 @@ impl std::str::FromStr for MemoryScope {
     }
 }
 
+/// One directed memory-map link stored in memory frontmatter.
+///
+/// `relation` uses the memoir controlled vocabulary plus `supersedes`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryLink {
+    /// Target memory id.
+    pub id: String,
+    /// Relation name (`depends_on`, `refines`, `supersedes`, ...).
+    pub relation: String,
+}
+
 /// A stored memory record as persisted in the `memories` table.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MemoryRecord {
@@ -537,8 +548,15 @@ pub struct MemoryRecord {
     pub source_id: Option<String>,
     /// Free-form JSON metadata (column `metadata_json`).
     pub metadata: Value,
+    /// Searchable labels; duplicate tags collapse on write.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Memory-map links to other memory records.
+    #[serde(default)]
+    pub links: Vec<MemoryLink>,
     /// Id of the consolidated memory that replaced this row (ICM-B3), or
-    /// `None` when the row is still active. Set by consolidation apply.
+    /// `None` when the row is still active. Derived from `supersedes` links at
+    /// read time; never stored as truth.
     pub superseded_by: Option<String>,
 }
 
@@ -561,6 +579,12 @@ pub struct NewMemory {
     #[serde(default)]
     pub importance: MemoryImportance,
     pub source_id: Option<String>,
+    /// Searchable labels; duplicate tags collapse on write.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Memory-map links to other memory records.
+    #[serde(default)]
+    pub links: Vec<MemoryLink>,
     #[serde(default = "default_memory_metadata")]
     pub metadata: Value,
 }
@@ -581,6 +605,8 @@ impl Default for NewMemory {
             body: String::new(),
             importance: MemoryImportance::default(),
             source_id: None,
+            tags: Vec::new(),
+            links: Vec::new(),
             metadata: default_memory_metadata(),
         }
     }
@@ -705,6 +731,8 @@ pub struct MemoryListFilter {
     /// Include rows already superseded by consolidation (ICM-B3). Default
     /// `false`: superseded rows are hidden from normal listing.
     pub include_superseded: bool,
+    /// Every tag in this list must be present (case-insensitive exact match).
+    pub tags: Vec<String>,
 }
 
 /// Outcome of a memory delete, including dry-run inspection.

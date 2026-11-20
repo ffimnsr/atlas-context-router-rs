@@ -4,6 +4,18 @@ This file summarizes shipped technical capabilities (still detailed).
 
 For active backlog, see ISSUES.md.
 
+## Markdown Continuity Storage
+
+- Durable continuity truth lives in Markdown under `.atlas/`; SQLite is a derived, rebuildable index.
+- Committed families: `memories/`, `decisions/`, `feedback/`, `memoir/`, `overview/`.
+- Local-only families: `sessions/` (event ledgers and resume snapshots), `tasks/`, `experience/`, `artifacts/`.
+- Memory map: frontmatter `tags` and `links`, with the memoir controlled relation vocabulary plus `supersedes`.
+- Read-path purity: access counts, `last_accessed_at`, and decay scores live in a derived `memory_access` index, so recall never rewrites truth files.
+- Active memory records are derived from `supersedes` links; consolidation writes only the new consolidated file.
+- `atlas migrate markdown [--dry-run] [--finalize] [--embeddings]` exports legacy rows, verifies round-trips, and keeps `session.db.bak` until finalized.
+- `atlas index rebuild [--full]` regenerates context chunk/FTS indexes from `.atlas/artifacts/**`.
+- Session ledgers use computed code fences (longest backtick run plus one, minimum four) so payloads containing triple backticks round-trip safely.
+
 ## Technical Scope Implemented
 
 - Repository scan, parse, graph persistence, incremental update, search, impact traversal, review context, context assembly, reasoning, and deterministic refactor flows are implemented.

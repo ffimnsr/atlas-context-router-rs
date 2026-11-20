@@ -91,7 +91,7 @@ fn rollback_and_reupgrade_restore_session_schema() {
     let memories_exists: i64 = store
         .conn
         .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'memories'",
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'view' AND name = 'memories'",
             [],
             |row| row.get(0),
         )

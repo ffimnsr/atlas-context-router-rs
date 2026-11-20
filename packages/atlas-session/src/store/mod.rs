@@ -13,6 +13,7 @@ use atlas_core::{AtlasError, Clock, Result, SystemClock};
 use atlas_db_utils::{
     application_id, apply_atlas_pragmas, migrate_database_to, set_application_id,
 };
+use atlas_store_markdown::MarkdownStore;
 
 use crate::SessionId;
 use crate::migrations::{LATEST_VERSION, MIGRATION_SET};
@@ -23,6 +24,9 @@ mod decision_memory;
 mod experience_edges;
 mod feedback;
 mod global_memory;
+mod markdown_memory;
+mod markdown_records;
+mod markdown_session;
 mod memoir;
 mod memoir_delete;
 mod memoir_schema;
@@ -81,13 +85,14 @@ pub use self::types::{
     GlobalWorkflowPattern, MAX_INLINE_EVENT_PAYLOAD_BYTES, MEMORY_HYBRID_RRF_K,
     MEMORY_VECTOR_SCAN_LIMIT, MemoryConsolidationGroup, MemoryConsolidationPlan, MemoryDecayPolicy,
     MemoryDecayReport, MemoryDeleteResult, MemoryEmbeddingCoverage, MemoryEmbeddingPolicy,
-    MemoryHealthCategory, MemoryHealthFinding, MemoryHealthReport, MemoryImportance,
+    MemoryHealthCategory, MemoryHealthFinding, MemoryHealthReport, MemoryImportance, MemoryLink,
     MemoryListFilter, MemoryPruneResult, MemoryRecallPolicy, MemoryRecallRanking, MemoryRecord,
     MemoryScope, MemorySearchHit, MemorySupersessionLink, MemoryViewer, NOISY_TOPIC_ENTRIES,
     NewDurableTask, NewFeedback, NewMemory, NewSessionEvent, OVERSIZED_BODY_CHARS, ResumeSnapshot,
     SessionEventRow, SessionEventType, SessionMeta, SessionStats, SessionStoreConfig,
 };
 
+pub use self::markdown_memory::MarkdownMigrationReport;
 pub use self::memory_consolidate::{
     CONSOLIDATION_OVERFLOW_SOURCE_TYPE, ConsolidatedBody, OverflowSink, overflow_source_id,
     route_overflow_body, synthesize_consolidated_body,
@@ -104,10 +109,8 @@ use self::decision_memory::{search_decisions, upsert_decision_from_event};
 use self::feedback::{
     feedback_matching, feedback_schema_issues, feedback_stats, search_feedback, store_feedback,
 };
-use self::memory::{
-    consolidation_plan, decay_reports, delete_memory, get_memory, health_report, list_memories,
-    memory_schema_issues, prune_memories, stale_memories, store_memory,
-};
+use self::markdown_memory::{decay_reports, health_report, prune_memories, stale_memories};
+use self::memory::memory_schema_issues;
 use self::memory_recall::{recall_memories, recall_memories_with_policy};
 use self::resume::build_resume_snapshot;
 use self::util::{
@@ -123,6 +126,10 @@ pub struct SessionStore {
     // `Send` and `Sync` auto-traits at the compiler level.
     pub(super) conn: Connection,
     pub(super) config: SessionStoreConfig,
+    /// Markdown truth store rooted at the `.atlas/` directory.
+    pub(super) markdown: MarkdownStore,
+    /// Absolute database path, used by markdown migration backups.
+    pub(super) db_path: std::path::PathBuf,
     /// Marker that opts this struct out of `Send` and `Sync`.
     _thread_bound: std::marker::PhantomData<*const ()>,
 }
@@ -170,14 +177,26 @@ impl SessionStore {
         )
         .map_err(|e| AtlasError::Db(e.to_string()))?;
 
+        let atlas_dir = Path::new(path)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| Path::new(".").join(".atlas"));
+        let markdown = MarkdownStore::open(&atlas_dir)
+            .map_err(|error| AtlasError::Other(format!("markdown store: {error}")))?;
+
         let mut store = Self {
             conn,
             config,
+            markdown,
+            db_path: std::path::PathBuf::from(path),
             _thread_bound: std::marker::PhantomData,
         };
         apply_atlas_pragmas(&store.conn)?;
         set_application_id(&store.conn, application_id::SESSION)?;
         store.migrate()?;
+        markdown_memory::reconcile_on_open(&store.markdown, &store.conn)?;
+        markdown_records::sync_all(&store.markdown, &store.conn)?;
         Ok(store)
     }
 
@@ -226,7 +245,7 @@ impl SessionStore {
     /// Validates the shared memory schema (`memories` table, columns, and
     /// indexes). Returns an empty list when healthy; used by `atlas db check`.
     pub fn memory_schema_issues(&self) -> Vec<String> {
-        memory_schema_issues(&self.conn)
+        memory_schema_issues(&self.conn, &self.markdown)
     }
 
     /// Validates the feedback schema (`feedback_records` table, columns,
@@ -238,7 +257,9 @@ impl SessionStore {
 
     /// Validate and persist a new feedback record, returning the stored record.
     pub fn store_feedback(&mut self, input: &NewFeedback) -> Result<FeedbackRecord> {
-        store_feedback(&self.conn, input)
+        let record = store_feedback(&self.conn, input)?;
+        markdown_records::sync_feedback(&self.markdown, &self.conn)?;
+        Ok(record)
     }
 
     /// Lexical feedback search with exact-match filters; falls back to a
@@ -277,7 +298,7 @@ impl SessionStore {
 
     /// Validate and persist a new memory, returning the stored record.
     pub fn store_memory(&mut self, input: &NewMemory) -> Result<MemoryRecord> {
-        store_memory(&self.conn, input)
+        markdown_memory::store_memory(&self.markdown, &self.conn, input)
     }
 
     /// Lexical recall; exact topic matches rank above broad text matches.
@@ -293,6 +314,7 @@ impl SessionStore {
         limit: usize,
     ) -> Result<Vec<MemorySearchHit>> {
         recall_memories(
+            &self.markdown,
             &self.conn,
             repo_root,
             query,
@@ -316,6 +338,7 @@ impl SessionStore {
         policy: &MemoryRecallPolicy,
     ) -> Result<Vec<MemorySearchHit>> {
         recall_memories_with_policy(
+            &self.markdown,
             &self.conn,
             repo_root,
             query,
@@ -329,7 +352,68 @@ impl SessionStore {
 
     /// Fetch one memory row by exact id within a repo.
     pub fn get_memory(&self, repo_root: &str, memory_id: &str) -> Result<Option<MemoryRecord>> {
-        get_memory(&self.conn, repo_root, memory_id)
+        markdown_memory::get_memory(&self.markdown, &self.conn, repo_root, memory_id)
+    }
+
+    /// Export pending derived-index rows to markdown truth files. With
+    /// `dry_run` only the pending paths are reported; with `finalize` the
+    /// pre-migration backup and legacy staging table are removed.
+    pub fn migrate_markdown(
+        &mut self,
+        dry_run: bool,
+        finalize: bool,
+    ) -> Result<markdown_memory::MarkdownMigrationReport> {
+        if finalize {
+            return markdown_memory::finalize_migration(&self.db_path, &self.conn);
+        }
+        let pending = markdown_memory::export_pending(&self.markdown, &self.conn, dry_run)?;
+        let backup = if !dry_run && !pending.is_empty() {
+            Some(markdown_memory::write_migration_backup(&self.db_path)?)
+        } else {
+            None
+        };
+        let records_written = if dry_run {
+            0
+        } else {
+            markdown_records::sync_all(&self.markdown, &self.conn)?
+        };
+        Ok(markdown_memory::MarkdownMigrationReport {
+            dry_run,
+            written: pending
+                .iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect(),
+            pending: markdown_memory::pending_export_count(&self.conn)?,
+            backup,
+            records_written,
+        })
+    }
+
+    /// Rewrite a memory record in the markdown truth store and refresh its
+    /// derived index row. Used by tooling and tests that need deterministic
+    /// timestamps or hand-edited fields.
+    pub fn rewrite_memory(&mut self, record: &MemoryRecord) -> Result<()> {
+        markdown_memory::write_existing_record(&self.markdown, &self.conn, record)
+    }
+
+    /// Add one directed memory-map link between two existing records.
+    pub fn link_memories(
+        &mut self,
+        repo_root: &str,
+        memory_id: &str,
+        target_id: &str,
+        relation: &str,
+    ) -> Result<MemoryRecord> {
+        let now = util::format_now();
+        markdown_memory::add_memory_link(
+            &self.markdown,
+            &self.conn,
+            repo_root,
+            memory_id,
+            target_id,
+            relation,
+            &now,
+        )
     }
 
     /// Hybrid recall (ICM-E2): lexical hits reranked by reciprocal-rank fusion,
@@ -352,6 +436,7 @@ impl SessionStore {
         embedding_policy: &MemoryEmbeddingPolicy,
     ) -> Result<Vec<MemorySearchHit>> {
         memory_embeddings::hybrid_recall_with_policy(
+            &self.markdown,
             &self.conn,
             repo_root,
             query,
@@ -428,7 +513,9 @@ impl SessionStore {
         edge: &NewExperienceEdge,
     ) -> Result<ExperienceEdgeRecord> {
         let now = util::format_now();
-        experience_edges::upsert_experience_edge(&self.conn, edge, &now)
+        let record = experience_edges::upsert_experience_edge(&self.conn, edge, &now)?;
+        markdown_records::sync_experience(&self.markdown, &self.conn)?;
+        Ok(record)
     }
 
     /// Mark edges touched by changed or deleted paths (VR4).
@@ -437,7 +524,10 @@ impl SessionStore {
         repo_root: &str,
         changed: &[(String, Option<String>)],
     ) -> Result<usize> {
-        experience_edges::invalidate_experience_paths(&self.conn, repo_root, changed)
+        let changed =
+            experience_edges::invalidate_experience_paths(&self.conn, repo_root, changed)?;
+        markdown_records::sync_experience(&self.markdown, &self.conn)?;
+        Ok(changed)
     }
 
     /// Activate only fresh experience edges above the documented thresholds.
@@ -471,7 +561,24 @@ impl SessionStore {
         older_than_days: u64,
         dry_run: bool,
     ) -> Result<usize> {
-        experience_edges::prune_experience_edges(&self.conn, repo_root, older_than_days, dry_run)
+        let removed = experience_edges::prune_experience_edges(
+            &self.conn,
+            repo_root,
+            older_than_days,
+            dry_run,
+        )?;
+        if !dry_run {
+            markdown_records::sync_experience(&self.markdown, &self.conn)?;
+            markdown_records::prune_orphans(
+                &self.markdown,
+                &self.conn,
+                "experience_edges",
+                "id",
+                "experience",
+                "id",
+            )?;
+        }
+        Ok(removed)
     }
 
     /// Schema invariants surfaced by `atlas db check`.
@@ -485,7 +592,7 @@ impl SessionStore {
         repo_root: &str,
         filter: &MemoryListFilter,
     ) -> Result<Vec<MemoryRecord>> {
-        list_memories(&self.conn, repo_root, filter)
+        markdown_memory::list_memories(&self.markdown, &self.conn, repo_root, filter)
     }
 
     /// Delete a memory by exact id within a repo; `dry_run` only inspects.
@@ -495,7 +602,7 @@ impl SessionStore {
         memory_id: &str,
         dry_run: bool,
     ) -> Result<MemoryDeleteResult> {
-        delete_memory(&self.conn, repo_root, memory_id, dry_run)
+        markdown_memory::delete_memory(&self.markdown, &self.conn, repo_root, memory_id, dry_run)
     }
 
     /// Compute (and, when not dry-running, persist) updated decay scores for
@@ -508,6 +615,7 @@ impl SessionStore {
         dry_run: bool,
     ) -> Result<Vec<MemoryDecayReport>> {
         decay_reports(
+            &self.markdown,
             &self.conn,
             repo_root,
             filter,
@@ -525,7 +633,14 @@ impl SessionStore {
         filter: &MemoryListFilter,
         policy: &MemoryDecayPolicy,
     ) -> Result<Vec<MemoryDecayReport>> {
-        stale_memories(&self.conn, repo_root, filter, policy, SystemClock.now_utc())
+        stale_memories(
+            &self.markdown,
+            &self.conn,
+            repo_root,
+            filter,
+            policy,
+            SystemClock.now_utc(),
+        )
     }
 
     /// Delete (or, in dry-run, only report) memories past their retention
@@ -539,6 +654,7 @@ impl SessionStore {
         allow_critical: bool,
     ) -> Result<MemoryPruneResult> {
         prune_memories(
+            &self.markdown,
             &self.conn,
             repo_root,
             filter,
@@ -558,6 +674,7 @@ impl SessionStore {
         source_exists: &dyn Fn(&str) -> bool,
     ) -> Result<MemoryHealthReport> {
         health_report(
+            &self.markdown,
             &self.conn,
             repo_root,
             filter,
@@ -575,7 +692,14 @@ impl SessionStore {
         filter: &MemoryListFilter,
         dry_run: bool,
     ) -> Result<MemoryConsolidationPlan> {
-        consolidation_plan(&self.conn, repo_root, filter, dry_run, None)
+        markdown_memory::consolidation_plan(
+            &self.markdown,
+            &self.conn,
+            repo_root,
+            filter,
+            dry_run,
+            None,
+        )
     }
 
     /// Deterministic consolidation with an overflow sink (typically `context.db`)
@@ -587,7 +711,14 @@ impl SessionStore {
         dry_run: bool,
         overflow: &mut self::memory_consolidate::OverflowSink<'_>,
     ) -> Result<MemoryConsolidationPlan> {
-        consolidation_plan(&self.conn, repo_root, filter, dry_run, Some(overflow))
+        markdown_memory::consolidation_plan(
+            &self.markdown,
+            &self.conn,
+            repo_root,
+            filter,
+            dry_run,
+            Some(overflow),
+        )
     }
 
     pub fn upsert_session_meta(
@@ -756,6 +887,12 @@ impl SessionStore {
         }
 
         tx.commit().map_err(|e| AtlasError::Db(e.to_string()))?;
+        markdown_records::sync_decisions(&self.markdown, &self.conn)?;
+        if let Some(stored) = row.as_ref()
+            && let Some(meta) = self.get_session_meta(&event.session_id)?
+        {
+            let _ = markdown_session::append_event(&self.markdown, &meta, stored);
+        }
 
         if inserted == 0 {
             return Ok(None);
@@ -808,6 +945,9 @@ impl SessionStore {
             .map_err(|e| AtlasError::Db(e.to_string()))?;
         self.get_durable_task(&task.task_id)?
             .ok_or_else(|| AtlasError::Db("created durable task missing on reload".to_owned()))
+            .inspect(|_| {
+                let _ = markdown_records::sync_tasks(&self.markdown, &self.conn);
+            })
     }
 
     pub fn update_durable_task(&mut self, task_id: &str, update: &DurableTaskUpdate) -> Result<()> {
@@ -844,6 +984,7 @@ impl SessionStore {
                 ],
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
+        markdown_records::sync_tasks(&self.markdown, &self.conn)?;
         Ok(())
     }
 
@@ -855,6 +996,9 @@ impl SessionStore {
                 params![task_id],
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
+        if deleted > 0 {
+            markdown_records::delete_task(&self.markdown, task_id)?;
+        }
         Ok(deleted > 0)
     }
 
@@ -970,6 +1114,14 @@ impl SessionStore {
                 params![session_id.as_str(), now],
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
+        markdown_session::write_resume(
+            &self.markdown,
+            session_id.as_str(),
+            snapshot,
+            event_count,
+            consumed,
+            &now,
+        )?;
         Ok(())
     }
 
@@ -1013,6 +1165,24 @@ impl SessionStore {
                 params![session_id.as_str(), now],
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
+        let stored: Option<(String, i64)> = self
+            .conn
+            .query_row(
+                "SELECT snapshot, event_count FROM session_resume WHERE session_id = ?1",
+                params![session_id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok();
+        if let Some((snapshot, event_count)) = stored {
+            markdown_session::write_resume(
+                &self.markdown,
+                session_id.as_str(),
+                &snapshot,
+                event_count,
+                consumed,
+                &now,
+            )?;
+        }
         Ok(())
     }
 
@@ -1051,6 +1221,9 @@ impl SessionStore {
                 params![session_id.as_str()],
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
+        if rows > 0 {
+            markdown_session::delete_session(&self.markdown, session_id.as_str())?;
+        }
         Ok(rows > 0)
     }
 
@@ -1077,6 +1250,16 @@ impl SessionStore {
 
     pub fn cleanup_stale_sessions(&mut self, keep_days: u32) -> Result<usize> {
         let cutoff = format_days_ago(keep_days);
+        let stale = self
+            .conn
+            .prepare("SELECT session_id FROM session_meta WHERE updated_at < ?1")
+            .ok()
+            .and_then(|mut stmt| {
+                stmt.query_map(params![cutoff], |row| row.get::<_, String>(0))
+                    .ok()
+                    .map(|rows| rows.filter_map(std::result::Result::ok).collect::<Vec<_>>())
+            })
+            .unwrap_or_default();
         let count = self
             .conn
             .execute(
@@ -1084,6 +1267,9 @@ impl SessionStore {
                 params![cutoff],
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
+        for session_id in stale {
+            let _ = markdown_session::delete_session(&self.markdown, &session_id);
+        }
         Ok(count)
     }
 
