@@ -251,6 +251,9 @@ pub(crate) fn parse_document(
         let value = if rest.is_empty() {
             open_list = Some(frontmatter.fields.len());
             Value::List(Vec::new())
+        } else if rest == "[]" {
+            open_list = None;
+            Value::List(Vec::new())
         } else if rest.starts_with('{') {
             open_list = None;
             parse_flow_map(rest, path, line_number)?
@@ -408,6 +411,21 @@ mod tests {
         let input = "---\r\ntitle: x\r\n---\r\nbody";
         let (frontmatter, _) = parse_document(input.as_bytes(), &path()).expect("parse");
         assert_eq!(frontmatter.get_str("title"), Some("x"));
+    }
+
+    #[test]
+    fn empty_list_and_map_round_trip_as_containers() {
+        let frontmatter = round_trip("---\ntags: []\nmetadata: {}\n---\nbody\n");
+        assert_eq!(frontmatter.get_list("tags"), Some(&[][..]));
+        assert!(frontmatter.get("metadata").unwrap().as_map().is_some());
+
+        let mut rebuilt = Frontmatter::new();
+        rebuilt.set("tags", Value::List(Vec::new()));
+        rebuilt.set("metadata", Value::Map(Vec::new()));
+        let bytes = rebuilt.to_bytes(&path()).unwrap();
+        let (parsed, _) = parse_document(&bytes, &path()).unwrap();
+        assert_eq!(parsed.get_list("tags"), Some(&[][..]));
+        assert!(parsed.get("metadata").unwrap().as_map().is_some());
     }
 
     #[test]

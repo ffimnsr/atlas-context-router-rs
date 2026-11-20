@@ -266,6 +266,9 @@ impl ContentStore {
         );
 
         // --- upsert source row and remove stale chunks (single transaction) ---
+        // Truth first: the markdown artifact exists before derived chunk rows, so
+        // a DB failure never loses the payload.
+        super::markdown::write_artifact(&self.markdown, &meta, raw_text, content_type, &now)?;
         let existing_chunk_ids: HashSet<String> = {
             let tx = self
                 .conn
@@ -476,8 +479,6 @@ impl ContentStore {
         {
             debug!("content store size limit enforcement failed (best-effort): {e}");
         }
-
-        super::markdown::write_artifact(&self.markdown, &meta, raw_text, content_type, &now)?;
 
         Ok(())
     }

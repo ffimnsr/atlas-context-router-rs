@@ -245,6 +245,30 @@ mod tests {
     }
 
     #[test]
+    fn rebuild_prunes_sources_whose_markdown_file_was_deleted() {
+        let dir = TempDir::new().unwrap();
+        let mut store = open_store(&dir);
+        store
+            .index_artifact(meta("src-prune", "prune"), "content to find", "text/plain")
+            .unwrap();
+        assert!(store.get_source("src-prune").unwrap().is_some());
+
+        std::fs::remove_file(store.markdown.absolute(&artifact_path("src-prune"))).unwrap();
+        store.rebuild_from_markdown(false).unwrap();
+
+        assert!(
+            store.get_source("src-prune").unwrap().is_none(),
+            "incremental rebuild must prune rows without truth files"
+        );
+        assert!(
+            store
+                .search("content", &Default::default())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn artifact_body_round_trips_crlf_and_bom() {
         let dir = TempDir::new().unwrap();
         let mut store = open_store(&dir);

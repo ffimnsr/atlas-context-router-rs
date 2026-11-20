@@ -367,6 +367,7 @@ fn dedupe_tags(tags: Vec<String>) -> Vec<String> {
 
 /// All memory records for a repo, derived active set applied, sorted newest
 /// first. A malformed file fails the scan with its path in the error.
+#[cfg(test)]
 pub(super) fn scan(store: &MarkdownStore, repo_root: &str) -> Result<Vec<MemoryRecord>> {
     let mut records = Vec::new();
     for relative in store
@@ -447,32 +448,15 @@ pub(super) fn apply_supersessions(records: &mut [MemoryRecord]) {
     }
 }
 
-/// Load one record by exact id within a repo.
+/// Load one record by exact id within a repo. Other malformed files are
+/// reported by health but never block this lookup.
 pub(super) fn load_by_id(
     store: &MarkdownStore,
     repo_root: &str,
     memory_id: &str,
 ) -> Result<Option<MemoryRecord>> {
-    let listed = store
-        .list_markdown(Path::new(MEMORIES_DIR))
-        .map_err(markdown_error)?;
-    for relative in listed {
-        let record = store.read_record(&relative).map_err(markdown_error)?;
-        if record.frontmatter.get_str("id") != Some(memory_id) {
-            continue;
-        }
-        let decoded = decode_record(&relative, &record, repo_root)?;
-        let mut all = scan(store, repo_root)?;
-        apply_supersessions(&mut all);
-        let superseded_by = all
-            .into_iter()
-            .find(|candidate| candidate.id == memory_id)
-            .and_then(|candidate| candidate.superseded_by);
-        let mut decoded = decoded;
-        decoded.superseded_by = superseded_by;
-        return Ok(Some(decoded));
-    }
-    Ok(None)
+    let (records, _issues) = scan_lenient(store, repo_root);
+    Ok(records.into_iter().find(|record| record.id == memory_id))
 }
 
 fn strip_internal_metadata(metadata: &mut JsonValue) {
@@ -516,10 +500,12 @@ pub(super) fn load_records(
 /// Insert or replace one record in the derived index. The FTS triggers keep
 /// `memory_index_fts` in sync.
 pub(super) fn index_upsert(
+    store: &MarkdownStore,
     conn: &Connection,
     record: &MemoryRecord,
     relative: &Path,
 ) -> Result<()> {
+    let (file_mtime_ns, file_size) = file_identity(store, relative);
     let metadata_json = serde_json::to_string(&public_metadata(&record.metadata))
         .map_err(|error| AtlasError::Other(format!("serialize memory metadata: {error}")))?;
     let tags_json = serde_json::to_string(&record.tags)
@@ -541,8 +527,8 @@ pub(super) fn index_upsert(
         "INSERT INTO memory_index
             (id, repo_root, session_id, frontend, scope, topic, title, body, importance,
              created_at, updated_at, source_id, metadata_json, superseded_by, tags_json,
-             links_json, op_history_json, numeric_value, path)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+             links_json, op_history_json, numeric_value, path, file_mtime_ns, file_size)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
          ON CONFLICT(id) DO UPDATE SET
              repo_root = excluded.repo_root,
              session_id = excluded.session_id,
@@ -561,7 +547,9 @@ pub(super) fn index_upsert(
              links_json = excluded.links_json,
              op_history_json = excluded.op_history_json,
              numeric_value = excluded.numeric_value,
-             path = excluded.path",
+             path = excluded.path,
+             file_mtime_ns = excluded.file_mtime_ns,
+             file_size = excluded.file_size",
         params![
             record.id,
             record.repo_root,
@@ -582,10 +570,26 @@ pub(super) fn index_upsert(
             history_json,
             numeric,
             relative.to_string_lossy(),
+            file_mtime_ns,
+            file_size,
         ],
     )
     .map_err(|error| AtlasError::Db(error.to_string()))?;
     Ok(())
+}
+
+/// `(mtime_ns, size)` for one truth file. Missing files store `NULL` identity so
+/// the next reconciliation treats the row as changed.
+fn file_identity(store: &MarkdownStore, relative: &Path) -> (Option<i64>, Option<i64>) {
+    let Ok(metadata) = std::fs::metadata(store.absolute(relative)) else {
+        return (None, None);
+    };
+    let mtime = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|value| i64::try_from(value.as_nanos()).ok());
+    (mtime, i64::try_from(metadata.len()).ok())
 }
 
 /// Remove one record from the derived index (and its access/embedding rows).
@@ -647,24 +651,9 @@ pub(super) fn refresh_supersession_index(conn: &Connection, repo_root: &str) -> 
     Ok(())
 }
 
-/// Rebuild the derived index for one repo from the markdown tree.
-pub(super) fn rebuild_index(
-    store: &MarkdownStore,
-    conn: &Connection,
-    repo_root: &str,
-) -> Result<usize> {
-    let records = scan(store, repo_root)?;
-    conn.execute("DELETE FROM memory_index WHERE repo_root = ?1", [repo_root])
-        .map_err(|error| AtlasError::Db(error.to_string()))?;
-    for record in &records {
-        index_upsert(conn, record, &relative_path(&record.topic, &record.id))?;
-    }
-    refresh_supersession_index(conn, repo_root)?;
-    Ok(records.len())
-}
-
-/// Rebuild the index when markdown exists but the derived table is empty, and
-/// export legacy index rows that have no markdown file yet.
+/// Export legacy derived rows that have no markdown file yet. Memory index
+/// reconciliation from the markdown tree happens lazily per repo via
+/// [`super::markdown_memory_sync::sync_index`].
 pub(super) fn reconcile_on_open(store: &MarkdownStore, conn: &Connection) -> Result<usize> {
     Ok(export_pending(store, conn, false)?.len())
 }
@@ -706,16 +695,14 @@ pub(super) fn pending_export_count(conn: &Connection) -> Result<usize> {
 }
 
 /// Copy the session database to `session.db.bak` before the first export.
+/// Uses SQLite's `VACUUM INTO` so the backup is a consistent snapshot of a WAL
+/// database instead of a raw file copy that can miss uncheckpointed frames.
 pub(super) fn write_migration_backup(db_path: &Path) -> Result<String> {
     let backup = db_path.with_extension("db.bak");
     if !backup.exists() {
-        std::fs::copy(db_path, &backup).map_err(|error| {
-            AtlasError::Other(format!(
-                "copy migration backup {} -> {}: {error}",
-                db_path.display(),
-                backup.display()
-            ))
-        })?;
+        let conn = Connection::open(db_path).map_err(|error| AtlasError::Db(error.to_string()))?;
+        conn.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])
+            .map_err(|error| AtlasError::Db(format!("create migration backup: {error}")))?;
     }
     Ok(backup.to_string_lossy().into_owned())
 }
@@ -848,7 +835,7 @@ pub(super) fn export_pending(
             .write_record(&relative, &encoded)
             .map_err(markdown_error)?;
         verify_written(store, &relative, &record)?;
-        index_upsert(conn, &record, &relative)?;
+        index_upsert(store, conn, &record, &relative)?;
         written.push(relative);
     }
     if !dry_run && !written.is_empty() {
@@ -996,7 +983,7 @@ fn write_record_with_index(
         }
     })?;
     store.write_record(&relative, &encoded)?;
-    index_upsert(conn, record, &relative).map_err(|error| {
+    index_upsert(store, conn, record, &relative).map_err(|error| {
         atlas_store_markdown::MarkdownError::InvalidValue {
             field: "index".to_owned(),
             message: error.to_string(),
@@ -1099,26 +1086,15 @@ pub(super) fn add_memory_link(
     })
 }
 
-/// Ensure the derived index has rows for a repo when markdown exists.
+/// Ensure the derived index mirrors the markdown tree for a repo. One stat per
+/// file detects hand edits, checkouts, new files, and deletions without reading
+/// unchanged bodies.
 pub(super) fn ensure_index(
     store: &MarkdownStore,
     conn: &Connection,
     repo_root: &str,
 ) -> Result<()> {
-    let indexed: i64 = conn
-        .query_row("SELECT COUNT(*) FROM memory_index", [], |row| row.get(0))
-        .unwrap_or(0);
-    if indexed > 0 {
-        return Ok(());
-    }
-    let on_disk = store
-        .list_markdown(Path::new(MEMORIES_DIR))
-        .map_err(markdown_error)?;
-    if !on_disk.is_empty() {
-        // Malformed files must not prevent the lenient list path from reporting
-        // every issue; the index stays empty until the tree is repaired.
-        let _ = rebuild_index(store, conn, repo_root);
-    }
+    super::markdown_memory_sync::sync_index(store, conn, repo_root)?;
     Ok(())
 }
 

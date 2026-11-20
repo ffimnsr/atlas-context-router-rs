@@ -176,6 +176,28 @@ regenerates artifact retrieval indexes. Session appends flush immediately
 (buffer cap 1) and resume builds read the derived index instead of parsing the
 ledger, which meets the bounded-read intent without an in-memory buffer.
 
+Second-pass integrity additions:
+
+- `SessionStore::open` imports markdown into the derived tables before any read,
+  so hand edits survive, and deleting `session.db` rebuilds session meta,
+  events, resume snapshots, decisions, feedback, memoir graphs, overviews,
+  tasks, and experience edges from `.atlas/` instead of losing continuity.
+- Memory recall reconciles `memory_index` against `.atlas/memories/**` by
+  persisted `(mtime, size)` identity, so new, edited, and deleted memory files
+  are indexed without reading unchanged bodies. Malformed files are skipped per
+  path and never block other records.
+- `atlas migrate markdown` opens the store with markdown reconciliation
+  disabled, so `--dry-run` writes nothing; backups use `VACUUM INTO` for a
+  consistent WAL snapshot.
+- Memoir deletion removes the committed markdown directory, and artifact truth
+  is written before derived chunk indexing so a failed index never loses the
+  payload.
+
+Known remaining optimizations (not correctness blockers): `overview_show
+--level` still projects from stored record fields rather than slicing the file,
+and artifact save still performs synchronous chunk indexing. L0/L1/L2 semantics
+and byte-stable outputs are preserved.
+
 #### Phase M0 — markdown store foundation
 
 - [x] add `packages/atlas-store-markdown` crate with frontmatter parse/serialize, bounded read, and slug/id derivation helpers; new crate is mandatory because `packages/atlas-session/src/store/mod.rs` exceeds the 1K LOC edit threshold

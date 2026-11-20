@@ -375,8 +375,11 @@ pub(super) fn compact_session_events(
     .map_err(|e| AtlasError::Db(e.to_string()))?;
 
     tx.commit().map_err(|e| AtlasError::Db(e.to_string()))?;
-    let _ =
-        super::markdown_session::rewrite_session(&store.markdown, &store.conn, session_id.as_str());
+    if let Err(error) =
+        super::markdown_session::rewrite_session(&store.markdown, &store.conn, session_id.as_str())
+    {
+        tracing::warn!(%error, "session ledger rewrite failed; derived rows are curated");
+    }
 
     let deleted_count = all_delete.len();
     let summary_written = usize::from(summary_payload.is_some());

@@ -149,26 +149,10 @@ fn strftime_now() -> String {
     )
 }
 
-/// Rebuild the derived index when markdown records exist but the index is empty
-/// (e.g. `session.db` was deleted). Reads only; truth files are untouched.
+/// Reconcile markdown records with the derived index before ranking. Reads
+/// only; truth files are untouched.
 fn ensure_index(store: &MarkdownStore, conn: &Connection, repo_root: &str) -> Result<()> {
-    let indexed: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM memory_index WHERE repo_root = ?1",
-            [repo_root],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-    if indexed > 0 {
-        return Ok(());
-    }
-    let on_disk = store
-        .list_markdown(std::path::Path::new(markdown_memory::MEMORIES_DIR))
-        .map_err(|error| AtlasError::Other(format!("markdown store error: {error}")))?;
-    if !on_disk.is_empty() {
-        markdown_memory::rebuild_index(store, conn, repo_root)?;
-    }
-    Ok(())
+    markdown_memory::ensure_index(store, conn, repo_root)
 }
 
 /// Primary lexical path: derived FTS candidates ranked by tier + composite

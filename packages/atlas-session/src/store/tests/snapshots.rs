@@ -11,6 +11,7 @@ fn snapshot_size_cap_trims_bulky_buckets() {
             max_inline_payload_bytes: 8192,
             max_snapshot_bytes: 512,
             dedup_window_secs: 0,
+            ..Default::default()
         },
     )
     .unwrap();
@@ -51,6 +52,7 @@ fn dedup_window_blocks_same_hash_within_window() {
             max_inline_payload_bytes: 8192,
             max_snapshot_bytes: DEFAULT_MAX_SNAPSHOT_BYTES,
             dedup_window_secs: 60,
+            ..Default::default()
         },
     )
     .unwrap();
@@ -90,6 +92,7 @@ fn dedup_window_keeps_different_payloads_within_window() {
             max_inline_payload_bytes: 8192,
             max_snapshot_bytes: DEFAULT_MAX_SNAPSHOT_BYTES,
             dedup_window_secs: 60,
+            ..Default::default()
         },
     )
     .unwrap();

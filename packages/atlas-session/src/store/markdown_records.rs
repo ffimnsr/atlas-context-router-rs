@@ -435,36 +435,17 @@ fn concept_relations(conn: &Connection, concept_id: &str) -> Result<Vec<ConceptR
     Ok(rows)
 }
 
-/// Remove a memoir graph directory by graph id.
-pub(super) fn delete_memoir_graph(
-    store: &MarkdownStore,
-    conn: &Connection,
-    graph_id: &str,
-) -> Result<()> {
-    if !table_exists(conn, "memoir_graphs") {
-        return Ok(());
+/// Remove a memoir graph directory by graph name.
+pub(super) fn delete_memoir_graph_dir(store: &MarkdownStore, graph_name: &str) -> Result<()> {
+    let dir = store.absolute(&Path::new("memoir").join(slugify(graph_name)));
+    match std::fs::remove_dir_all(&dir) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(AtlasError::Other(format!(
+            "remove memoir directory {}: {error}",
+            dir.display()
+        ))),
     }
-    let name: Option<String> = conn
-        .query_row(
-            "SELECT name FROM memoir_graphs WHERE id = ?1",
-            [graph_id],
-            |row| row.get(0),
-        )
-        .ok();
-    if let Some(name) = name {
-        let dir = store.absolute(&Path::new("memoir").join(slugify(&name)));
-        match std::fs::remove_dir_all(&dir) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(AtlasError::Other(format!(
-                    "remove memoir directory {}: {error}",
-                    dir.display()
-                )));
-            }
-        }
-    }
-    Ok(())
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

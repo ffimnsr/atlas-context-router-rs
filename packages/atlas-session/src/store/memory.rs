@@ -40,6 +40,8 @@ pub(super) const MEMORY_INDEX_COLUMNS: &[&str] = &[
     "op_history_json",
     "numeric_value",
     "path",
+    "file_mtime_ns",
+    "file_size",
 ];
 
 /// Index set of the derived `memory_index` table.

@@ -13,8 +13,11 @@ For active backlog, see ISSUES.md.
 - Read-path purity: access counts, `last_accessed_at`, and decay scores live in a derived `memory_access` index, so recall never rewrites truth files.
 - Active memory records are derived from `supersedes` links; consolidation writes only the new consolidated file.
 - `atlas migrate markdown [--dry-run] [--finalize] [--embeddings]` exports legacy rows, verifies round-trips, and keeps `session.db.bak` until finalized.
-- `atlas index rebuild [--full]` regenerates context chunk/FTS indexes from `.atlas/artifacts/**`.
+- `atlas index rebuild [--full]` regenerates context chunk/FTS indexes from `.atlas/artifacts/**` and prunes derived sources whose truth file was deleted.
 - Session ledgers use computed code fences (longest backtick run plus one, minimum four) so payloads containing triple backticks round-trip safely.
+- Store open imports markdown into the derived session tables, so hand edits survive and deleting `session.db` rebuilds events, resume snapshots, decisions, feedback, memoir graphs, overviews, tasks, and experience edges from `.atlas/`.
+- Memory recall reconciles the derived index from file `(mtime, size)` identity, picking up new, edited, and deleted memory files without rewriting truth files.
+- Memoir deletion removes its committed markdown directory; artifact payloads are written before chunk indexing.
 
 ## Technical Scope Implemented
 

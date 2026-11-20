@@ -93,9 +93,14 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "018_memories_view_tags",
         up_sql: include_str!("migrations/018_memories_view_tags.sql"),
     },
+    Migration {
+        version: 19,
+        name: "019_memory_index_file_identity",
+        up_sql: include_str!("migrations/019_memory_index_file_identity.sql"),
+    },
 ];
 
-pub const LATEST_VERSION: i32 = 18;
+pub const LATEST_VERSION: i32 = 19;
 
 pub const MIGRATION_SET: MigrationSet = MigrationSet {
     db_kind: "session",

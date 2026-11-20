@@ -308,7 +308,7 @@ fn fresh_experience_edge_adds_shortcut_with_provenance() {
     let repo = repo_root_for(&dir);
     let mut store = open_store();
     seed_test_fixture(&mut store);
-    let mut session = SessionStore::open(":memory:").unwrap();
+    let mut session = SessionStore::open(dir.path().join("session.db").to_str().unwrap()).unwrap();
     let repo_id = atlas_repo::stable_repo_id(camino::Utf8Path::new(&repo));
     let target_uri = format!("atlas://repo/{repo_id}/file/src%2Ftarget.rs");
     let test_uri = format!("atlas://repo/{repo_id}/file/tests%2Ftarget_test.rs");
@@ -340,7 +340,7 @@ fn fresh_experience_edge_reduces_escalation_rounds() {
     let repo = repo_root_for(&dir);
     let mut store = open_store();
     seed_test_fixture(&mut store);
-    let mut session = SessionStore::open(":memory:").unwrap();
+    let mut session = SessionStore::open(dir.path().join("session.db").to_str().unwrap()).unwrap();
     let repo_id = atlas_repo::stable_repo_id(camino::Utf8Path::new(&repo));
     let target_uri = format!("atlas://repo/{repo_id}/file/src%2Ftarget.rs");
     let test_uri = format!("atlas://repo/{repo_id}/file/tests%2Ftarget_test.rs");
@@ -370,7 +370,7 @@ fn stale_experience_edge_is_not_surfaced() {
     let repo = repo_root_for(&dir);
     let mut store = open_store();
     seed_test_fixture(&mut store);
-    let mut session = SessionStore::open(":memory:").unwrap();
+    let mut session = SessionStore::open(dir.path().join("session.db").to_str().unwrap()).unwrap();
     let repo_id = atlas_repo::stable_repo_id(camino::Utf8Path::new(&repo));
     let target_uri = format!("atlas://repo/{repo_id}/file/src%2Ftarget.rs");
     let test_uri = format!("atlas://repo/{repo_id}/file/tests%2Ftarget_test.rs");

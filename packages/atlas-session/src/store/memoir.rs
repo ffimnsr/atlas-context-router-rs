@@ -305,7 +305,7 @@ fn derive_memoir_concept_id(graph_id: &str, name: &str) -> String {
     derive_memoir_id(&["memoir_concept", graph_id, &canonical_name(name)])
 }
 
-fn derive_memoir_relation_id(
+pub(super) fn derive_memoir_relation_id(
     graph_id: &str,
     source_concept_id: &str,
     target_concept_id: &str,
@@ -984,21 +984,10 @@ impl super::SessionStore {
         name: &str,
         dry_run: bool,
     ) -> Result<super::memoir_delete::MemoirDeleteResult> {
-        let graph_id: Option<String> = self
-            .conn
-            .query_row(
-                "SELECT id FROM memoir_graphs WHERE repo_root = ?1 AND scope = ?2 AND name = ?3 COLLATE NOCASE",
-                params![repo_root, scope.as_str(), name],
-                |row| row.get(0),
-            )
-            .ok();
         let result =
             super::memoir_delete::delete_memoir_graph(&self.conn, repo_root, scope, name, dry_run)?;
-        if !dry_run
-            && result.deleted
-            && let Some(graph_id) = graph_id.as_deref()
-        {
-            super::markdown_records::delete_memoir_graph(&self.markdown, &self.conn, graph_id)?;
+        if !dry_run && result.deleted {
+            super::markdown_records::delete_memoir_graph_dir(&self.markdown, name)?;
         }
         Ok(result)
     }

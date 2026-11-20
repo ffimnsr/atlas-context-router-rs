@@ -45,6 +45,7 @@ struct MemoryCase {
 struct RagCorpus {
     code: Store,
     session: SessionStore,
+    _session_dir: tempfile::TempDir,
     overviews: Vec<OverviewRecord>,
     memory_cases: Vec<MemoryCase>,
     shortcut_queries: Vec<String>,
@@ -59,7 +60,14 @@ pub fn evaluate_rag_corpus() -> atlas_core::Result<RagEvaluationReport> {
 impl RagCorpus {
     fn build() -> atlas_core::Result<Self> {
         let code = build_code_corpus()?;
-        let mut session = SessionStore::open(":memory:")?;
+        let session_dir = tempfile::TempDir::new()
+            .map_err(|error| AtlasError::Other(format!("session temp dir: {error}")))?;
+        let session_db = session_dir.path().join("session.db");
+        let mut session = SessionStore::open(
+            session_db
+                .to_str()
+                .ok_or_else(|| AtlasError::Other("non-utf8 session db path".to_owned()))?,
+        )?;
         let memory_cases = seed_memories(&mut session)?;
         seed_memoir(&mut session)?;
         seed_experience_edges(&mut session)?;
@@ -72,6 +80,7 @@ impl RagCorpus {
         Ok(Self {
             code,
             session,
+            _session_dir: session_dir,
             overviews,
             memory_cases,
             shortcut_queries,

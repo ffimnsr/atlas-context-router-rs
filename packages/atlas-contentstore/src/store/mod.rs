@@ -121,6 +121,27 @@ impl ContentStore {
                 .map_err(|error| AtlasError::Db(error.to_string()))?;
         }
         let artifacts = markdown::read_all(&self.markdown)?;
+        let present = artifacts
+            .iter()
+            .map(|artifact| artifact.source_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        // Markdown truth: drop derived sources whose file was deleted outside
+        // the delete path before indexing the remaining files.
+        let indexed_ids = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id FROM sources")
+                .map_err(|error| AtlasError::Db(error.to_string()))?;
+            stmt.query_map([], |row| row.get::<_, String>(0))
+                .map_err(|error| AtlasError::Db(error.to_string()))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|error| AtlasError::Db(error.to_string()))?
+        };
+        for source_id in indexed_ids {
+            if !present.contains(source_id.as_str()) {
+                self.delete_source(&source_id)?;
+            }
+        }
         let mut indexed = 0usize;
         for artifact in artifacts {
             self.index_artifact(artifact.to_meta(), &artifact.body, &artifact.content_type)?;

@@ -17,6 +17,9 @@ pub struct SessionStoreConfig {
     pub max_inline_payload_bytes: usize,
     pub max_snapshot_bytes: usize,
     pub dedup_window_secs: u64,
+    /// Import markdown truth and export legacy rows on open. Disable for
+    /// migration commands so a dry run performs no writes.
+    pub markdown_reconcile_on_open: bool,
 }
 
 impl Default for SessionStoreConfig {
@@ -26,6 +29,7 @@ impl Default for SessionStoreConfig {
             max_inline_payload_bytes: MAX_INLINE_EVENT_PAYLOAD_BYTES,
             max_snapshot_bytes: DEFAULT_MAX_SNAPSHOT_BYTES,
             dedup_window_secs: DEFAULT_DEDUP_WINDOW_SECS,
+            markdown_reconcile_on_open: true,
         }
     }
 }

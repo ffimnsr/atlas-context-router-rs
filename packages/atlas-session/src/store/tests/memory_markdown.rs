@@ -316,3 +316,122 @@ fn migrate_markdown_dry_run_export_and_finalize() {
         "finalize must remove the backup"
     );
 }
+
+#[test]
+fn hand_added_markdown_memory_is_indexed_for_list_and_recall() {
+    let (_dir, store) = open_store(16, 1024);
+    let record = MemoryRecord {
+        id: "hand-added".to_owned(),
+        repo_root: "/repo".to_owned(),
+        session_id: None,
+        frontend: None,
+        scope: MemoryScope::Project,
+        topic: "handmade".to_owned(),
+        title: "Hand added".to_owned(),
+        body: "handcrafted markdown fact".to_owned(),
+        importance: MemoryImportance::Normal,
+        created_at: "2026-02-01T00:00:00Z".to_owned(),
+        updated_at: "2026-02-01T00:00:00Z".to_owned(),
+        last_accessed_at: "2026-02-01T00:00:00Z".to_owned(),
+        decay_score: 0.0,
+        source_id: None,
+        metadata: serde_json::json!({}),
+        tags: vec!["added".to_owned()],
+        links: Vec::new(),
+        superseded_by: None,
+    };
+    let encoded = super::markdown_memory::encode_record(&record).unwrap();
+    store
+        .markdown
+        .write_record(
+            std::path::Path::new(&super::markdown_memory::relative_path(
+                "handmade",
+                "hand-added",
+            )),
+            &encoded,
+        )
+        .unwrap();
+
+    let listed = store
+        .list_memories("/repo", &MemoryListFilter::default())
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, "hand-added");
+
+    let hits = store
+        .recall_memories(
+            "/repo",
+            "handcrafted",
+            &MemoryListFilter::default(),
+            false,
+            &cli_viewer(),
+            10,
+        )
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].memory.id, "hand-added");
+}
+
+#[test]
+fn hand_deleted_markdown_memory_is_pruned_from_index_and_recall() {
+    let (_dir, store) = open_store(16, 1024);
+    seed(&store, "kept", "kept fact", "prune");
+    seed(&store, "gone", "gonefact unique token", "prune");
+
+    let relative = super::markdown_memory::relative_path("prune", "gone");
+    std::fs::remove_file(store.markdown.absolute(&relative)).unwrap();
+
+    let listed = store
+        .list_memories("/repo", &MemoryListFilter::default())
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, "kept");
+
+    let hits = store
+        .recall_memories(
+            "/repo",
+            "gonefact",
+            &MemoryListFilter::default(),
+            false,
+            &cli_viewer(),
+            10,
+        )
+        .unwrap();
+    assert!(hits.is_empty(), "deleted markdown must leave recall");
+}
+
+#[test]
+fn hand_edited_markdown_body_is_reindexed_for_recall() {
+    let (_dir, store) = open_store(16, 1024);
+    seed(&store, "edit-me", "alpha original text", "edit");
+    let relative = super::markdown_memory::relative_path("edit", "edit-me");
+    let mut record = store.markdown.read_record(&relative).unwrap();
+    record.body = "zebra replacement text".to_owned();
+    store.markdown.write_record(&relative, &record).unwrap();
+
+    let hits = store
+        .recall_memories(
+            "/repo",
+            "zebra",
+            &MemoryListFilter::default(),
+            false,
+            &cli_viewer(),
+            10,
+        )
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].memory.body, "zebra replacement text");
+}
+
+#[test]
+fn malformed_unrelated_file_does_not_block_get_by_id() {
+    let (_dir, store) = open_store(16, 1024);
+    seed(&store, "good-get", "valid fact", "health");
+    let broken = store
+        .markdown
+        .absolute(std::path::Path::new("memories/health/broken.md"));
+    std::fs::write(&broken, "---\nid: broken\nscope: nope\n---\nbody\n").unwrap();
+
+    let record = store.get_memory("/repo", "good-get").unwrap();
+    assert_eq!(record.map(|record| record.id), Some("good-get".to_owned()));
+}

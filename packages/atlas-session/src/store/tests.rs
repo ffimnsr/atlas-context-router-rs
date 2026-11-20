@@ -171,6 +171,7 @@ mod curation_compress;
 mod durable;
 mod feedback;
 mod indexes;
+mod markdown_import;
 mod memoir;
 mod memory_consolidate;
 mod memory_curation;

@@ -24,7 +24,9 @@ mod decision_memory;
 mod experience_edges;
 mod feedback;
 mod global_memory;
+mod markdown_import;
 mod markdown_memory;
+mod markdown_memory_sync;
 mod markdown_records;
 mod markdown_session;
 mod memoir;
@@ -195,8 +197,23 @@ impl SessionStore {
         apply_atlas_pragmas(&store.conn)?;
         set_application_id(&store.conn, application_id::SESSION)?;
         store.migrate()?;
-        markdown_memory::reconcile_on_open(&store.markdown, &store.conn)?;
-        markdown_records::sync_all(&store.markdown, &store.conn)?;
+        if store.config.markdown_reconcile_on_open {
+            match markdown_import::import_all(&store.markdown, &store.conn) {
+                Ok(report) => {
+                    if !report.issues.is_empty() {
+                        tracing::warn!(
+                            count = report.issues.len(),
+                            issues = ?report.issues,
+                            "markdown import skipped malformed records"
+                        );
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "markdown import failed; derived rows may be stale");
+                }
+            }
+            markdown_memory::reconcile_on_open(&store.markdown, &store.conn)?;
+        }
         Ok(store)
     }
 
@@ -366,12 +383,25 @@ impl SessionStore {
         if finalize {
             return markdown_memory::finalize_migration(&self.db_path, &self.conn);
         }
-        let pending = markdown_memory::export_pending(&self.markdown, &self.conn, dry_run)?;
-        let backup = if !dry_run && !pending.is_empty() {
+        // Snapshot the pre-migration database before any markdown import or
+        // export writes. Importing hand-edited markdown first would make the
+        // backup no longer describe the legacy state.
+        let pending_before = if dry_run {
+            0
+        } else {
+            markdown_memory::pending_export_count(&self.conn)?
+        };
+        let backup = if !dry_run && pending_before > 0 {
             Some(markdown_memory::write_migration_backup(&self.db_path)?)
         } else {
             None
         };
+        if !dry_run {
+            // Respect edits made directly to markdown before regenerating any
+            // legacy rows; dry-run stays read-only.
+            let _ = markdown_import::import_all(&self.markdown, &self.conn);
+        }
+        let pending = markdown_memory::export_pending(&self.markdown, &self.conn, dry_run)?;
         let records_written = if dry_run {
             0
         } else {
@@ -890,8 +920,9 @@ impl SessionStore {
         markdown_records::sync_decisions(&self.markdown, &self.conn)?;
         if let Some(stored) = row.as_ref()
             && let Some(meta) = self.get_session_meta(&event.session_id)?
+            && let Err(error) = markdown_session::append_event(&self.markdown, &meta, stored)
         {
-            let _ = markdown_session::append_event(&self.markdown, &meta, stored);
+            tracing::warn!(%error, "session ledger append failed; derived row is committed");
         }
 
         if inserted == 0 {

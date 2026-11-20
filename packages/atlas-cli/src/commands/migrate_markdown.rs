@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 
-use atlas_session::{MemoryListFilter, SessionStore};
+use atlas_session::{MemoryListFilter, SessionStore, SessionStoreConfig};
 
 use crate::cli::{Cli, Command, MigrateCommand};
 
@@ -25,8 +25,14 @@ pub fn run_migrate_markdown(cli: &Cli) -> Result<()> {
     let (dry_run, finalize, embeddings) = sub;
 
     let session_db = atlas_engine::paths::session_db_path(&super::db_path(cli, &repo));
-    let mut store = SessionStore::open(&session_db)
-        .with_context(|| format!("cannot open session store at {session_db}"))?;
+    let mut store = SessionStore::open_with_config(
+        &session_db,
+        SessionStoreConfig {
+            markdown_reconcile_on_open: false,
+            ..Default::default()
+        },
+    )
+    .with_context(|| format!("cannot open session store at {session_db}"))?;
     let report = store.migrate_markdown(dry_run, finalize)?;
 
     if embeddings && !dry_run && !finalize {

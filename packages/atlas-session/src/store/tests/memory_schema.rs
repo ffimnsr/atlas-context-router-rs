@@ -29,6 +29,8 @@ fn memory_index_columns_match_golden() {
             "op_history_json",
             "numeric_value",
             "path",
+            "file_mtime_ns",
+            "file_size",
         ]
     );
 
