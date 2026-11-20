@@ -1,6 +1,6 @@
 [package]
 name = "atlas-docs"
-version = "1.7.13"
+version = "1.7.14"
 license.workspace = true
 rust-version.workspace = true
 edition = "2024"
@@ -9,8 +9,8 @@ description = "Markdown documentation generation and dependency diagram export f
 [dependencies]
 atlas-core.workspace = true
 atlas-engine.workspace = true
-atlas-reasoning = { path = "../atlas-reasoning", version = "1.7.13" }
-atlas-store-sqlite = { path = "../atlas-store-sqlite", version = "1.7.13" }
+atlas-reasoning = { path = "../atlas-reasoning", version = "1.7.14" }
+atlas-store-sqlite = { path = "../atlas-store-sqlite", version = "1.7.14" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
