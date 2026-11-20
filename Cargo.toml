@@ -15,6 +15,7 @@ members = [
   "packages/atlas-reasoning",
   "packages/atlas-contentstore",
   "packages/atlas-session",
+  "packages/atlas-store-markdown",
   "packages/atlas-contextsave",
   "packages/atlas-adapters",
   "packages/atlas-db-utils",

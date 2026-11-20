@@ -535,6 +535,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "atlas-store-markdown"
+version = "1.7.12"
+dependencies = [
+ "fs2",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "atlas-store-sqlite"
 version = "1.7.12"
 dependencies = [

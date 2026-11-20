@@ -1,0 +1,20 @@
+[package]
+name = "atlas-store-markdown"
+version = "1.7.12"
+license.workspace = true
+rust-version.workspace = true
+edition = "2024"
+description = "Markdown-truth persistence for Atlas continuity records"
+publish = false
+
+[dependencies]
+fs2 = "0.4"
+sha2.workspace = true
+thiserror.workspace = true
+unicode-normalization.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

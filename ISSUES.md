@@ -171,32 +171,32 @@ Full design: `docs/PLAN-MARKDOWN-STORAGE.md`. Goal: durable continuity records b
 
 #### Phase M0 — markdown store foundation
 
-- [ ] add `packages/atlas-store-markdown` crate with frontmatter parse/serialize, bounded read, and slug/id derivation helpers; new crate is mandatory because `packages/atlas-session/src/store/mod.rs` exceeds the 1K LOC edit threshold
-- [ ] add atomic write using temps under `.atlas/tmp/` (same filesystem as targets), `fsync`, then `rename`; crash-simulation test asserts the target stays intact and the leftover fragment lands in `.atlas/tmp/`, never in committed directories
-- [ ] add advisory writer locks centralized under `.atlas/locks/<store>.lock` (vetted `fs4`-style crate) so lock files never appear inside committed directories; two-writer contention test using `tempfile::TempDir`, no globals, locks acquired per call
-- [ ] make reads lock-free by relying on rename atomicity; add a test asserting a concurrent read during a write sees either the old or the new file content, never a torn file
-- [ ] add golden round-trip tests for each record frontmatter type (memory, decision, feedback, memoir, overview, task, experience, artifact, session)
-- [ ] add canonical frontmatter serialization (fixed field order, stable wrapping, verbatim bodies) with a byte-stability test asserting parse-then-serialize of an unchanged record is byte-identical
-- [ ] add an in-process frontmatter cache keyed by path plus mtime for long-lived MCP server reads, invalidated per lookup by an mtime stat, with a cache test covering cross-process invalidation
-- [ ] add workspace member entry and run `cargo check`, clippy `-D warnings`, and fmt gates
+- [x] add `packages/atlas-store-markdown` crate with frontmatter parse/serialize, bounded read, and slug/id derivation helpers; new crate is mandatory because `packages/atlas-session/src/store/mod.rs` exceeds the 1K LOC edit threshold
+- [x] add atomic write using temps under `.atlas/tmp/` (same filesystem as targets), `fsync`, then `rename`; crash-simulation test asserts the target stays intact and the leftover fragment lands in `.atlas/tmp/`, never in committed directories
+- [x] add advisory writer locks centralized under `.atlas/locks/<store>.lock` (vetted `fs4`-style crate) so lock files never appear inside committed directories; two-writer contention test using `tempfile::TempDir`, no globals, locks acquired per call
+- [x] make reads lock-free by relying on rename atomicity; add a test asserting a concurrent read during a write sees either the old or the new file content, never a torn file
+- [x] add golden round-trip tests for each record frontmatter type (memory, decision, feedback, memoir, overview, task, experience, artifact, session)
+- [x] add canonical frontmatter serialization (fixed field order, stable wrapping, verbatim bodies) with a byte-stability test asserting parse-then-serialize of an unchanged record is byte-identical
+- [x] add an in-process frontmatter cache keyed by path plus mtime for long-lived MCP server reads, invalidated per lookup by an mtime stat, with a cache test covering cross-process invalidation
+- [x] add workspace member entry and run `cargo check`, clippy `-D warnings`, and fmt gates
 
 #### Phase M0 — edge cases
 
-- [ ] add frontmatter edge-case tests: titles with colons, quotes, and newlines; unicode titles, tags, and topics (CJK, emoji); tags containing slashes; empty-string versus absent optional fields serialize canonically
-- [ ] add body edge-case tests: body starting with `---`, body containing frontmatter-shaped lines, empty body, single very long line, CRLF endings, and a UTF-8 BOM all round-trip byte-identical
-- [ ] add slug/id edge-case tests: two topics colliding to the same slug, empty and unicode-only titles, deterministic id derivation for identical inputs, and duplicate id detection across topic directories
-- [ ] add lock edge-case tests: a writer process killed mid-write releases the OS lock (flock dies with the process), a stale lock never blocks a fresh writer, and a read during a compaction rewrite sees old-or-new content
-- [ ] add cache edge-case tests: file replaced by a shorter one (rename), file deleted between stat and open (TOCTOU returns not-found, not a panic), same-mtime rewrite detected via size, and the LRU cap evicts correctly when a directory scan exceeds it
-- [ ] add tmp edge-case tests: stale `.atlas/tmp/` fragments from a prior crash are cleaned on store open and never appear inside committed directories
+- [x] add frontmatter edge-case tests: titles with colons, quotes, and newlines; unicode titles, tags, and topics (CJK, emoji); tags containing slashes; empty-string versus absent optional fields serialize canonically
+- [x] add body edge-case tests: body starting with `---`, body containing frontmatter-shaped lines, empty body, single very long line, CRLF endings, and a UTF-8 BOM all round-trip byte-identical
+- [x] add slug/id edge-case tests: two topics colliding to the same slug, empty and unicode-only titles, deterministic id derivation for identical inputs, and duplicate id detection across topic directories
+- [x] add lock edge-case tests: a writer process killed mid-write releases the OS lock (flock dies with the process), a stale lock never blocks a fresh writer, and a read during a compaction rewrite sees old-or-new content
+- [x] add cache edge-case tests: file replaced by a shorter one (rename), file deleted between stat and open (TOCTOU returns not-found, not a panic), same-mtime rewrite detected via size, and the LRU cap evicts correctly when a directory scan exceeds it
+- [x] add tmp edge-case tests: stale `.atlas/tmp/` fragments from a prior crash are cleaned on store open and never appear inside committed directories
 
 #### Phase M0 — acceptance criteria
 
-- [ ] all record-type golden round-trip tests pass and parse-then-serialize of every golden file is byte-identical
-- [ ] crash-simulation suite passes: a killed writer leaves the previous target intact and the fragment lands only in `.atlas/tmp/`
-- [ ] two-writer contention test passes with no lost update; the concurrent-read test observes only old-or-new content, never torn
-- [ ] no lock or temp file ever exists inside a committed directory (path assertions across the whole test suite)
-- [ ] frontmatter cache tests pass: mtime bump invalidates cross-process, the LRU cap evicts, and TOCTOU returns not-found without panic
-- [ ] `cargo check`, workspace clippy `-D warnings`, and fmt pass for the new crate with no unsafe code
+- [x] all record-type golden round-trip tests pass and parse-then-serialize of every golden file is byte-identical
+- [x] crash-simulation suite passes: a killed writer leaves the previous target intact and the fragment lands only in `.atlas/tmp/`
+- [x] two-writer contention test passes with no lost update; the concurrent-read test observes only old-or-new content, never torn
+- [x] no lock or temp file ever exists inside a committed directory (path assertions across the whole test suite)
+- [x] frontmatter cache tests pass: mtime bump invalidates cross-process, the LRU cap evicts, and TOCTOU returns not-found without panic
+- [x] `cargo check`, workspace clippy `-D warnings`, and fmt pass for the new crate with no unsafe code
 
 #### Phase M1 — memories
 
