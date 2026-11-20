@@ -1,6 +1,6 @@
 [package]
 name = "atlas-reasoning"
-version = "1.7.12"
+version = "1.7.13"
 license.workspace = true
 rust-version.workspace = true
 edition = "2024"
@@ -10,8 +10,8 @@ publish = false
 [dependencies]
 atlas-core.workspace = true
 atlas-engine.workspace = true
-atlas-repo = { path = "../atlas-repo", version = "1.7.12" }
-atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "1.7.12"}
+atlas-repo = { path = "../atlas-repo", version = "1.7.13" }
+atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "1.7.13"}
 camino.workspace = true
 serde.workspace = true
 tracing.workspace = true

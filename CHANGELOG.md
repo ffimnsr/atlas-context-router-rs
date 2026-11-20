@@ -36,6 +36,37 @@ Versioning policy may evolve while Atlas is still moving quickly, but release no
 - drop the unused `windows-sys` target dependency from `atlas-cli` and the stale `#[allow(deprecated)]` around `std::env::home_dir`; allow `Zlib` in `deny.toml` for `foldhash` 0.2 and remove the obsolete `number_prefix` advisory ignore now that `indicatif` 0.18 no longer pulls it
 - extract the Unix stdio broker (daemon attach/spawn, stdio relay, reconnect loop) and its signal handling into `commands/platform/broker.rs` / `commands/platform/broker_signals.rs`, bringing `platform.rs` back under the 1K LOC threshold
 
+## 1.7.13 - 2026-11-20
+
+### Features
+
+- add atlas-store-markdown crate (M0 markdown continuity storage) (`06c7da5`)
+- move continuity truth to markdown with derived sqlite indexes (`d0978ff`)
+
+
+### Fixes
+
+- harden markdown truth reconciliation and rebuild paths (`dbe1623`)
+- give trace_calls, embed_chunks, explain_query, list_symbols tailored guidance (`011a6f8`)
+- canonicalize memory repo root in quality gates (`4b4e5c1`)
+- direct agents to persist exploration findings (`c8aef87`)
+- make feedback FTS external-content so update/delete triggers work (`05fb8d5`)
+
+
+### Documentation
+
+- add markdown continuity storage plan (`ae30677`)
+- update issues.md for cleanup (`1e5388b`)
+- add plan persistence and workflow patterns to core guide (`4ae7f49`)
+- expand continuity and tool workflows into multi-sentence guidance (`704bfd5`)
+- close remaining tool guidance gaps (`3b81a8c`)
+
+
+### Tests
+
+- reject duplicate documented tools (`417ab71`)
+
+
 ## 1.7.12 - 2026-11-16
 
 ### Fixes

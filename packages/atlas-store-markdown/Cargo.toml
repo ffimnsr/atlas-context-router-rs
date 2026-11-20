@@ -1,6 +1,6 @@
 [package]
 name = "atlas-store-markdown"
-version = "1.7.12"
+version = "1.7.13"
 license.workspace = true
 rust-version.workspace = true
 edition = "2024"
