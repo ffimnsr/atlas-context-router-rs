@@ -592,12 +592,17 @@ fn backdate_memory(repo: &Path, id: &str, updated_at: &str) {
     });
 }
 
+/// Returns the canonical repo root the CLI stores memory ownership under.
+fn memory_repo_root(repo: &Path) -> String {
+    canonical_path(repo).to_string_lossy().into_owned()
+}
+
 /// Rewrites one markdown memory record through the truth store.
 fn rewrite_memory(repo: &Path, id: &str, apply: impl FnOnce(&mut atlas_session::MemoryRecord)) {
     let session_db = repo.join(".atlas").join("session.db");
     let mut store = atlas_session::SessionStore::open(session_db.to_str().expect("db path"))
         .expect("open session store");
-    let repo_root = repo.to_string_lossy().into_owned();
+    let repo_root = memory_repo_root(repo);
     let mut record = store
         .get_memory(&repo_root, id)
         .expect("read memory")
@@ -1004,7 +1009,7 @@ fn memory_consolidate_dry_run_then_apply_supersedes_duplicates() {
         let session_db = repo.path().join(".atlas").join("session.db");
         let store = atlas_session::SessionStore::open(session_db.to_str().expect("db path"))
             .expect("open session store");
-        let repo_root = repo.path().to_string_lossy().into_owned();
+        let repo_root = memory_repo_root(repo.path());
         store
             .get_memory(&repo_root, &merged_id)
             .expect("read merged")
@@ -1015,7 +1020,7 @@ fn memory_consolidate_dry_run_then_apply_supersedes_duplicates() {
         let session_db = repo.path().join(".atlas").join("session.db");
         let store = atlas_session::SessionStore::open(session_db.to_str().expect("db path"))
             .expect("open session store");
-        let repo_root = repo.path().to_string_lossy().into_owned();
+        let repo_root = memory_repo_root(repo.path());
         store
             .get_memory(&repo_root, &consolidated_id)
             .expect("read consolidated")
