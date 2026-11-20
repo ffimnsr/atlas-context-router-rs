@@ -71,7 +71,7 @@ For active backlog, see ISSUES.md.
 
 - Deterministic insights engine is implemented with shared report primitives (`InsightSummary`, `InsightFinding`, `InsightEvidence`), stable severity values, deterministic sort order, and reuse of existing ranking/truncation and freshness/provenance metadata contracts; no LLM dependency and no writes to SQLite.
 - Code health metrics engine is implemented for node-level fan-in/fan-out, dependency depth with cycle guard, reference counts, test adjacency, LOC, cyclomatic and cognitive complexity, branch counts, and max nesting depth (with per-language `not_available` instead of text guessing), file-level node/edge/import/test-coverage metrics, module-level coupling and cohesion approximations, and min/max/avg/p50/p90/p95 distribution statistics with outlier detection.
-- Large and complex function finder is implemented with repo-wide and file-scoped modes, LOC/complexity threshold overrides, `large`/`complex`/`large-or-complex` modes, changed-file and fan-in/fan-out ranking boosts, complete finding payloads, and CLI `atlas insights large-functions` plus MCP `find_large_functions` with parity tests.
+- Large and complex function finder is implemented with repo-wide and file-scoped modes, LOC/complexity threshold overrides, `large`/`complex`/`large-or-complex` modes, changed-file and fan-in/fan-out ranking boosts, mode-aware finding payloads that report the threshold actually gating each hit, and CLI `atlas insights large-functions` plus MCP `find_large_functions` with parity tests.
 - Architecture analysis is implemented with module-level graph aggregation, SCC cycle detection with local/cross-module classification and deterministic cycle paths, inline layer-rule enforcement with violation findings, coupling scores, tightly-coupled cluster detection, and high-connectivity file flags.
 - Risk assessment is implemented as explainable weighted `0-100` scores with public-API, fan-in/out, cross-module dependency, test adjacency, depth, unresolved-edge, size/complexity, and cycle-participation factors, each with factor contribution and evidence, plus configurable low/medium/high thresholds.
 - Pattern detection is implemented for repeated call chains, unused/isolated structures with removal blockers, high-centrality hubs and bottlenecks, and deep chains with traversal caps and cycle guards.
@@ -272,7 +272,7 @@ For active backlog, see ISSUES.md.
 
 ## MCP Elicitation, Durable Tasks, and MRTR
 
-- Elicitation is implemented with form and URL modes, single- and multi-select enums, titled and untitled enum values, default values on primitive fields, and typed response validation; `purge_saved_context` requires elicited confirmation before running without a `session_id`.
+- Elicitation is implemented with form and URL modes, single- and multi-select enums, titled and untitled enum values, default values on primitive fields, and typed response validation; `purge_saved_context` requires elicited confirmation, or an explicit non-interactive confirm flag when the client cannot render forms, before running without a `session_id`, and returns structured retry guidance when neither is available.
 - Durable tasks are implemented with continuity-owned SQLite persistence: task id, originating method, lifecycle timestamps, status, progress snapshot, final result or error, polling, deferred result retrieval, and cancellation where the underlying job is cancellable.
 - MRTR (Multi Round-Trip Requests) is implemented for `2026-07-28`: server-initiated JSON-RPC requests are replaced with `InputRequiredResult`/`inputRequests`/`inputResponses`, `requestState` is integrity-protected with method/tool/args digest, expiry, and authenticated principal where available, and destructive confirmations return `resultType: "input_required"`.
 - Tasks follow the `2026-07-28` extension shape: advertised under `extensions`, old `tasks/list`/`tasks/result`/`tasks/cancel` handlers removed, `tasks/get` and `tasks/update` implemented, and long-running tool calls return task handles without per-request opt-in.
@@ -474,13 +474,13 @@ For active backlog, see ISSUES.md.
 
 ## Repository-Wide Symbol Inventory
 
-- `atlas symbols` and MCP `list_symbols` are implemented for paginated repo symbol inventory with kind, language, subpath, and repo_id filters, shared kind-alias normalization in `atlas-core`, totals, and `next_offset` paging.
+- `atlas symbols` and MCP `list_symbols` are implemented for paginated repo symbol inventory with kind, language, subpath, and repo_id filters, an explicit synthetic package-owner opt-in on both surfaces, shared kind-alias normalization in `atlas-core`, totals, and `next_offset` paging.
 - A `/symbols` shell command is implemented over the same service surface.
 
 ## Directional Call Tracing
 
 - `atlas trace <FROM>` and MCP `trace_calls` are implemented for directional call-chain tracing with `up`, `down`, and `both` directions, an `--edge-kind` / `edge_kinds` filter defaulting to `calls`, depth and node caps, and a `--to` / `to` shortest-path mode over the same direction and edge-kind constraints.
-- Trace hops join graph nodes in SQL, so unresolved expression-level call targets never enter the chain, and the legacy bidirectional `traverse_graph` walk remains unchanged for general reachability.
+- Trace hops join graph nodes in SQL, so unresolved expression-level call targets never enter the chain, while the bidirectional `traverse_graph` walk keeps general reachability and orders edges by kind priority so cross-file call edges survive small node budgets.
 - CLI text output renders per-hop direction markers, edge kind, and source site, while JSON output mirrors the MCP node, edge, path, and summary shape.
 
 ## Developer Tooling and Reporting
@@ -492,8 +492,118 @@ For active backlog, see ISSUES.md.
 - Central `budget_policy` mapping is implemented in config with validation and documentation of byte-heuristic versus tokenizer-backed limits, tokenizer budget fields, tokenizer-backed accounting on context, review, and export `max_tokens` paths, deterministic byte and character fallback with fallback metadata, and tests across both modes.
 - `proptest` coverage is implemented for ranking and trimming, canonical-path normalization, and FTS query escaping.
 
+## SQLite Index and Query Planner Optimization
+
+- Hot-path lookups are index-backed across the graph, session, and content stores: symbol-name lookups, case-insensitive name and path matching, direct file-path lookups, overview supersession and repair queries, session recency and cleanup ordering, feedback search, experience-edge activation, memoir relation walks, and saved-source recency queries no longer scan whole tables.
+- Ordering indexes are implemented for symbol inventory paging, repo-scoped file reads, dead-code and caller lookups, commit listing, recent-file queries, durable-task cursor paging, memory listing, and ordered edge export so hot queries no longer need temporary sorts.
+- Case-insensitive search is index-backed through dedicated case-insensitive name and path indexes that mirror the database's default case-insensitive matching behavior.
+- Redundant and unused indexes were removed after plan verification: duplicates of automatic unique indexes, prefix duplicates, and indexes no query uses were dropped across all three stores, reducing write overhead without changing results.
+- Planner maintenance is automatic: statistics collection and query-planner optimization run after successful build, update, and postprocess runs so the database consistently selects the new indexes, and the schema snapshot regenerates with each index migration.
+- Regression coverage pins the work: query-plan tests assert hot lookups use their intended indexes with bound parameters, migration tests assert dropped index names stay absent after upgrade, and verified planner quirks that intentionally differ are documented as non-goals.
+
+## Tokenizer Port Upstream Pinning
+
+- The tiktoken-compatible tokenizer port is anchored for reproducibility: vocabulary assets are never committed to the repository and are downloaded from pinned upstream URLs exactly like official releases, and the port references the exact upstream implementation files at a locked upstream commit.
+
+## Memoir Graph Deletion
+
+- `atlas memoir delete` and MCP `memoir_delete` are implemented so throwaway or smoke-test concept graphs can be removed without direct database edits: exact graph and scope selection, dry-run counts that match the real delete, cascade-safe removal of concepts and relations, and regression coverage.
+
+## Saved-Context Retrieval and Paging Hardening
+
+- `read_saved_context` returns non-empty content with a strictly advancing offset even when the requested page is smaller than one chunk, clips at UTF-8-safe boundaries, and flags the clipped chunk.
+- Saved structured payloads round-trip byte-for-byte: the verbatim payload is persisted at save time and served back exactly as stored, instead of being reconstructed lossily from search chunks.
+- `save_context_artifact` reports when automatic redaction rewrote a payload so silent rewrites are visible, and its inline-versus-stored size threshold is documented accurately.
+- `search_saved_context` no longer writes a decision memory per query, so wake-up and decision recall surface real decisions instead of lookup bookkeeping.
+
+## Graph Traversal and Impact Correctness
+
+- `get_impact_radius` reports real dependents for large changed files: the traversal budget is split between changed symbols and impact neighbors, and expression-level targets that are not graph nodes no longer crowd out real dependents.
+- `get_context` symbol targets keep the direct caller ahead of higher-scored callees in both ranking and payload trimming, with dropped counts exposed.
+- `get_context` file targets reserve a share for cross-file neighbors, default to one-hop depth, and stop listing unrelated files.
+
+## Review Context Fairness and Scope
+
+- Changed-symbol selection is fair-shared across changed files so documentation nodes cannot consume every changed-symbol slot on mixed deltas.
+- `get_review_context` applies directory scope filters to changed-file seeds, populates impacted neighbors and critical edges, and reports traversal counts consistent with the delivered payload.
+- `explain_change` no longer counts documentation headings as untested symbols, so documentation-only changes report no coverage gaps and stay low risk, and its payload now runs through the standard response budget.
+- `get_context` multi-file targets keep every target file represented, and linked decisions attach only within remaining headroom instead of competing with graph evidence.
+
+## Insights Analysis Quality
+
+- `analyze_patterns` emits hubs, bottlenecks, and isolated structures alongside repeated chains, with per-category fair share driven by the requested limit.
+- `find_complex_functions` reports the threshold that actually gated each hit instead of defaulting to size.
+- `find_similar_functions` exposes a reachable default similarity floor, honors the configured floor, and reflects the requested floor in hints and reported thresholds.
+- `analyze_safety` returns structured symbol-not-found errors with retry guidance.
+- `analyze_dead_code` reports blocker counts that match emitted rows, and called receiver methods, trait implementations, and trait declarations are downgraded from definite with explicit blockers instead of reported as false positives.
+- `analyze_architecture` lists bounded module couplings and module edges in compact output and excludes synthetic owner metadata from findings and file metrics.
+- `analyze_metrics` surfaces distribution statistics including cyclomatic complexity, returns unique symbols per requested limit, and documents its count scope.
+- `analyze_dependency` cleanups are deduplicated and name the blocking caller.
+- `infer_modules` limits select the largest modules by symbol count instead of slicing by module id.
+- `concept_clusters` never returns seed-only pseudo-clusters, reports coupled seeds when no other cluster exists, and normalizes empty coupling metrics to a clean zero.
+- `label_components` keeps the core label alongside path-derived diagnostics labels.
+- `postprocess_graph` reports a clean no-op when no files changed and accepts only the documented stage ids.
+
+## Session Continuity and Resume Correctness
+
+- `compact_session` is idempotent on an unchanged ledger and reports a no-op flag derived from real curation changes; per-call tool telemetry is partitioned out of curation, bounded, and excluded from summaries.
+- `resume_session` rebuilds from live events once a snapshot is consumed instead of serving stale content.
+- `get_session_status` reports snapshot existence as false once the snapshot is consumed.
+- `cross_session_search` treats agent partitions as hard isolation filters with an explicit merge opt-in, and the effective filter is recorded in the response.
+- `memory_ops` seeds the operator audit trail on the initial store so fresh memories report their history.
+- `memory_store` persists patch files as related-file metadata on plain stores.
+- `experience_inspect` is documented as report-only: the ledger stays empty until a retrieval workflow records edges, and an empty report is valid output.
+
+## Wake-Up and Session CLI Parity
+
+- `atlas wake-up` records the session-start event through the shared event service and emits the same recorded summary and agent attribution as the MCP surface.
+- Session CLI commands gained artifact save, read, search, and stats subcommands plus explicit session selectors, and compaction prints the same payload as MCP.
+- Memory CLI commands gained global and decisions views, a not-found flag instead of an error exit for unknown memory ids, flag-form text input, and a shorthand for experience inspection.
+
+## Overview Subject Resolution and Resources
+
+- `overview_export` resolves subjects scope-aware, exports canonical file subjects, and emits caller and callee arrays without file nodes or unresolved expression targets.
+- `overview_ingest` accepts string subject references and inline analysis JSON, and reports routing metadata consistently.
+- `overview_show` resolves canonical file paths as file subjects, returns near-match records and candidates on misses, and prints structured CLI errors instead of hard failures.
+- `overview_refresh_plan` counts only real freshness transitions.
+- `atlas://` resources accept qualified names containing slashes, resolve the active-repo alias, read symbol views through best-match metadata, and decode encoded docs heading segments.
+- The provenance resource stamps repo and commit identity on every payload.
+
+## Discovery, Introspection, and Metrics Contracts
+
+- Discovery tools honor the requested result limit directly with a default of one hundred, report the requested limit, and flag truncation only when a file is actually dropped.
+- `debug_graph` field names match the CLI and documented shapes.
+- `tool_search` applies a relative score floor for multi-token queries so single-token noise cannot flood results.
+- `tool_list` can attach output schemas on request and names the manual surface as the schema source.
+- `man` rejects unsupported namespaces with structured errors and clean messages.
+- `feedback_record` reports stored confirmation flags in its response and schema.
+- `get_context_stats` emits the standard tool and warnings envelope keys.
+- `get_metrics` uses millisecond-suffixed summary fields and omits histogram buckets in compact mode.
+- `status` carries the same content-schema fields on MCP as the CLI.
+- `purge_saved_context` supports non-interactive confirmed cleanup and returns structured retry errors when client confirmation is unavailable.
+- `explain_query` tokenization matches the real full-text index, including underscore splitting, without noisy warnings for snake-case identifiers.
+- `embed_chunks` dry-run reports the true backlog total alongside the selected batch.
+- Health counts and freshness agree across surfaces: file and node counts derive from one source, and committed-but-unindexed changes are detected so status, doctor, and overview freshness stay consistent.
+
+## MCP Performance and Protocol Verification
+
+- Graph-backed MCP call latency is bounded: the readiness gate uses a time-cached lightweight integrity probe instead of running full integrity checks and metadata scans on every call, and read paths no longer mutate the database.
+- Protocol negotiation is verified spec-correct for the current MCP revision with an automated negotiation test.
+
+## CLI Payload and Envelope Parity
+
+- CLI JSON envelopes for symbol resolution, graph query, query explanation, docs-section lookup, overview search, and the insights family now emit the same structured payload as MCP, with narrow legacy aliases where the CLI contract still requires them.
+- CLI insight output runs through the same response byte ceiling as MCP, with bounded printers that trim oversized arrays and flag truncation.
+- Community detection is wired to the CLI and the postprocess stage; history lookups gained a file-symbol shorthand with clear empty-index guidance; resource URIs work without a read subcommand; flow creation and tracing match documented flags; and feedback adjustment reports deterministic counters.
+- Memoir CLI commands accept natural positional forms for relations and graph names, treat concept descriptions as optional, and return structured errors with retry guidance instead of plain text.
+
+## Tool Guide Alignment
+
+- The MCP tool test guide is aligned with actual response shapes across lookup, analysis, session, content, manual, and resource tools: field names, thresholds, tokenization paths, rejection texts, count shapes, and fixture forms all match real output.
+- Guide thresholds are stated as proportional floors against observed parser output instead of absolute counts, and high-volume defaults carry bounded-usage guidance.
+- Fixtures from completed tool-guide sweeps were removed with zero leftover rows verified across memories, memoir graphs, overview records, sessions, saved artifacts, and flows, and leaked test daemons were cleaned up; the remaining fixture cleanup from the latest sweep stays in ISSUES.md.
+
 ## Still Open
 
-- Shared parser query migration remainder (Go migration and final validation pass) and minimal-context escalation metadata remain in ISSUES.md.
-- Remaining Additional Backlog items (parser-cache CI gate, LSP shim) remain in ISSUES.md.
-
+- Shared parser query migration remainder (Go migration and final validation pass), minimal-context escalation metadata, tokenizer implementation phases, and markdown continuity storage remain in ISSUES.md.
+- Remaining Additional Backlog items (parser-cache CI gate, LSP shim).
