@@ -154,9 +154,9 @@ Call `tool_help` before first use of a tool with non-obvious arguments and after
 
 ## Common tool map
 
-- continuity: `wake_up`, `get_session_status`, `resume_session`, `save_context_artifact`, `record_session_event`, `compact_session`, `get_context_stats`, `purge_saved_context`, `search_saved_context`, `cross_session_search`, `read_saved_context`, `search_decisions`
+- continuity: `wake_up`, `get_session_status`, `resume_session`, `save_context_artifact`, `record_session_event`, `compact_session`, `get_context_stats`, `purge_saved_context`, `search_saved_context`, `cross_session_search`, `read_saved_context`, `search_decisions`, `experience_inspect`
 - shared memory and notes: `memory_store`, `memory_recall`, `memory_link`, `memory_ops`, `feedback_record`
-- memoir: `memoir_create`, `memoir_add_concept`, `memoir_link`, `memoir_inspect`, `memoir_delete`
+- memoir: `memoir_create`, `memoir_add_concept`, `memoir_link`, `memoir_inspect`
 - overview: `overview_export`, `overview_ingest`, `overview_search`, `overview_show`, `overview_refresh_plan`
 - architecture and code health: `analyze_architecture`, `infer_modules`, `label_components`, `analyze_metrics`, `analyze_patterns`, `find_large_functions`, `find_complex_functions`, `find_similar_functions`, `find_duplicates`, `analyze_dead_code`, `analyze_dependency`, `analyze_remove`
 - maintenance: `postprocess_graph`, `embed_chunks`, `repo_registry`, `broker_status`, `get_metrics`

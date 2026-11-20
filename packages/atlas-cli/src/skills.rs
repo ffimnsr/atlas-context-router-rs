@@ -298,6 +298,7 @@ mod tests {
         "label_components",
         "list_graph_stats",
         "list_symbols",
+        "man",
         // Memoir concept graph links.
         "memoir_add_concept",
         "memoir_create",
@@ -458,6 +459,7 @@ mod tests {
             "`memory_store`",
             "`feedback_record`",
             "`compact_session`",
+            "`experience_inspect`",
         ] {
             assert!(content.contains(tool), "core guide must mention {tool}");
         }

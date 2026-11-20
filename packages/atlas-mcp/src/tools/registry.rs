@@ -25,7 +25,7 @@ pub(crate) use contract::{ToolResultContract, tool_result_contract};
 use output_schemas::*;
 pub(crate) use schemas::*;
 
-use super::manual::tool_usage_guidance;
+use super::manual_guidance::tool_usage_guidance;
 
 mod annotations;
 mod contract;

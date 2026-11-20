@@ -13,6 +13,7 @@ mod inventory;
 mod manual;
 mod manual_bounds;
 mod manual_errors;
+mod manual_guidance;
 mod metrics;
 mod postprocess;
 mod registry;
