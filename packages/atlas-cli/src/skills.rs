@@ -277,6 +277,7 @@ mod tests {
         "detect_changes",
         "doctor",
         "embed_chunks",
+        "experience_inspect",
         "explain_change",
         "explain_query",
         "feedback_record",
@@ -299,8 +300,10 @@ mod tests {
         "list_symbols",
         "memoir_add_concept",
         "memoir_create",
+        "memoir_delete",
         "memoir_inspect",
         "memoir_link",
+        "memory_ops",
         "memory_recall",
         "memory_store",
         "overview_export",
@@ -466,6 +469,7 @@ mod tests {
                 "core guide must expose the {heading} section"
             );
         }
+        assert!(content.contains("### Update checklist before finishing substantive work"));
         for tool in [
             "`batch_query_graph`",
             "`concept_clusters`",
@@ -502,6 +506,47 @@ mod tests {
         assert!(content.contains("`analyze_architecture`"));
         assert!(content.contains("`concept_clusters`"));
         assert!(content.contains("`cross_file_links`"));
+    }
+
+    #[test]
+    fn workflows_reference_documents_continuity_updates() {
+        let content = render_reference("workflows").expect("workflows reference");
+        for heading in [
+            "## Build and update memoir knowledge",
+            "## Maintain overview memory",
+            "## Keep durable memory current",
+            "## Recall and curate continuity",
+        ] {
+            assert!(
+                content.contains(heading),
+                "workflows reference must expose {heading}"
+            );
+        }
+        for needle in [
+            "`replaces`",
+            "`overview_refresh_plan`",
+            "`overview_ingest`",
+            "`patch_id`",
+            "`experience_inspect`",
+            "`memory_ops`",
+        ] {
+            assert!(
+                content.contains(needle),
+                "workflows reference must document {needle}"
+            );
+        }
+        assert!(content.contains("\"schema_version\": 1"));
+        assert!(content.contains("supersedes the prior active record"));
+        assert!(content.contains("Before finishing"));
+    }
+
+    #[test]
+    fn continuity_reference_documents_layer_updates() {
+        let content = render_reference("continuity").expect("continuity reference");
+        assert!(content.contains("Write and update by layer"));
+        assert!(content.contains("`replaces`"));
+        assert!(content.contains("supersedes the prior active record"));
+        assert!(content.contains("`patch_id`"));
     }
 
     #[test]

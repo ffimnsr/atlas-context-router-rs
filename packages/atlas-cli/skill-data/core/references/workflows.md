@@ -35,6 +35,135 @@ atlas content clusters src/lib.rs
 atlas content links src/lib.rs
 ```
 
+## Build and update memoir knowledge
+
+Use memoir for design, dependency, decision, and incident knowledge the code graph cannot express. Do not use it for callers, callees, impact, or current code shape; keep those in the code graph.
+
+1. Reconfirm code facts with `query_graph`, `get_context`, or `trace_calls`.
+2. Save supporting evidence with `save_context_artifact`; keep the returned `source_id`.
+3. `memoir_create` one bounded topic graph (`architecture`, `incident-1234`, `plan-auth-refresh`) with `scope: "project"`.
+4. `memoir_add_concept` with a stable `kind` (`component`, `decision`, `risk`, `plan-step`, `incident`) and `source_id` when evidence exists.
+5. `memoir_link` with the controlled vocabulary: `depends_on`, `part_of`, `contradicts`, `refines`, `replaces`, `caused_by`, `fixed_by`, `blocked_by`, `decided_by`, `related_to`.
+6. `memoir_inspect` before adding more; depth 1-2 is usually enough.
+
+Update rules:
+
+- Concept names are case-insensitive and unique per graph. Re-adding the same name fails; add a versioned concept and link it with `replaces` or `refines`.
+- Link revised decisions as `decision-v2 --replaces--> decision-v1`; link incidents as `incident --caused_by--> component` and `incident --fixed_by--> fix`.
+- Missing endpoints are not created automatically. Pass `create_missing: true` only when intentional.
+- Delete a graph only after `memoir_delete` with `dry_run: true`; deletion removes concepts and relations.
+- `.atlas/memoir/` is committed Markdown. Do not store secrets or raw transcripts.
+
+Before finishing, inspect the changed concept and confirm every relation direction. If this changed an active plan, patch the plan memory pointer so the next session sees the revised design rather than the old one.
+
+```bash
+atlas memoir create Architecture --description "service and dependency map"
+atlas memoir add-concept Architecture parser "Source parser" --kind component --source-id <source_id>
+atlas memoir add-concept Architecture parser-v2 "Parser with cached lexer" --kind component
+atlas memoir link Architecture parser-v2 parser --relation replaces
+atlas memoir link Architecture parser lexer --relation depends_on --confidence 0.9
+atlas memoir inspect parser --graph Architecture --depth 2
+```
+
+## Maintain overview memory
+
+Use overview for evidence-linked descriptions of projects, packages, modules, files, symbols, functions, and methods. It is not a decision log and not a substitute for freshness-checked graph facts.
+
+1. Refresh the graph first with `update_graph`.
+2. `overview_export` with `scope`, `subjects` or `subject`, optional `changed`/`since`, and optional `include_callers`, `include_callees`, `include_tests`, `include_code_spans`, `max_tokens`.
+3. An external analyzer or human returns `OverviewAnalysisInput`; echo `packet_id`, `evidence_ids`, and the packet `subject` unchanged.
+4. `overview_ingest` with the `analysis` object, or `path`/`input` for JSON on disk; the CLI reads a file or `-` for stdin.
+5. `overview_search` by query, subject kind, freshness, package, module, file, or source kind. `overview_show` one subject; start at `l1` and escalate to `l2` only when the full body is needed.
+6. After changes, run `overview_refresh_plan` read-only, then `apply: true` only after reviewing the plan.
+7. `get_context` and `get_review_context` include overviews through `include_overviews` and `overview_freshness`.
+
+Minimal ingest shape:
+
+```json
+{
+  "schema_version": 1,
+  "packet_id": "<from export>",
+  "evidence_ids": ["node:12"],
+  "subject": {
+    "kind": "function",
+    "repo_root": "/repo",
+    "commit_sha": "abc123",
+    "qualified_name": "src/parser.rs::fn::parse",
+    "canonical_file_path": "src/parser.rs",
+    "line_start": 10,
+    "line_end": 24
+  },
+  "title": "compute",
+  "summary": "computes values",
+  "description": "optional bounded body",
+  "responsibilities": [],
+  "flow": [],
+  "inputs": [],
+  "outputs": [],
+  "invariants": [],
+  "gotchas": [],
+  "examples": [],
+  "tags": ["parser"],
+  "confidence": 0.8,
+  "source_kind": "external_llm",
+  "analyzer_name": "external-tool",
+  "analyzer_version": "1",
+  "source_ids": [],
+  "metadata": {}
+}
+```
+
+Rules:
+
+- `schema_version` must be `1`; `summary` plus `description` or one non-empty detail array is required; unknown top-level fields are rejected.
+- `source_kind` is `external_llm`, `manual`, or `imported`.
+- Ingest re-validates canonical path, qualified name, line span, commit SHA, redaction, and body budget.
+- A newer ingest supersedes the prior active record. Stale, possibly stale, and orphaned records are excluded from context unless explicitly requested.
+- Large bodies route through the content store; the overview row keeps a bounded preview and `source_id`.
+- Use `atlas overview list` and `atlas overview stale` for maintenance, and `atlas overview run-external --dry-run` before enabling an external analyzer command.
+
+Before finishing, run `overview_refresh_plan` and report any stale, possibly stale, or orphaned subjects you did not refresh. If an overview supersedes an assumption in an active plan, update the plan artifact and its memory pointer as well.
+
+```bash
+atlas overview export --scope functions --include-callers --include-tests --max-tokens 2048 --json
+atlas overview ingest analysis.json --json
+atlas overview search "parser" --subject-kind function --freshness fresh --limit 10
+atlas overview show src/parser.rs --level l1
+atlas overview refresh-plan --since origin/main
+atlas overview refresh-plan --since origin/main --apply
+```
+
+## Keep durable memory current
+
+Use `memory_store` for facts that outlive a session: decisions, constraints, preferences, gotchas, and plan pointers. Use artifacts for verbatim evidence.
+
+- Choose `scope` deliberately: `project` for repo facts, `session` for scratch, and `frontend` only for host-specific behavior.
+- Keep `topic` stable; set `importance` honestly; link evidence with `source_id`.
+- Update an existing row with `patch_id` plus `patch_text` or `patch_file` instead of storing a duplicate.
+- Recall with `memory_recall`; use `shared: true` for project and global memories, and `hybrid: true` only when embeddings are configured.
+- Audit one row with `memory_ops`; inspect storage with `get_context_stats`.
+- `search_decisions` reads conclusions captured by session hooks. If no decision row exists, save a `decision` artifact and a project memory instead of assuming it was stored.
+- When an Atlas analysis prediction was wrong, call `feedback_record` with `predicted`, `actual`, and `correction`; search past mistakes with `atlas feedback search`.
+
+Before finishing, recall the new or patched topic and confirm the row is visible at the intended scope. If the memory is only a pointer, verify that `read_saved_context` still resolves its `source_id`.
+
+```bash
+atlas memory store "Parser cache must be invalidated per commit" --topic parser --scope project --importance high --source-id <source_id>
+atlas memory recall "parser cache" --shared
+atlas memory ops <memory_id>
+atlas feedback record --predicted "unused" --actual "called via plugin registry" --correction "keep parser hook" --analysis-kind dead_code --symbol src/plugin.rs::fn::register
+```
+
+## Recall and curate continuity
+
+- Start every session with `wake_up`; use `resume_session` only as the fallback.
+- `search_saved_context` searches the current session; `cross_session_search` searches all sessions for the repo; `read_saved_context` returns the full body by `source_id`.
+- `get_global_memory` surfaces frequently accessed symbols, files, and workflow patterns across sessions.
+- `compact_session` when the ledger grows; `purge_saved_context` removes session artifacts or artifacts older than `keep_days`.
+- `experience_inspect` reports query-conditioned experience edges for one `atlas://` URI; an empty ledger is a valid result, not an error.
+
+At the close of substantive work, record `stop` or `session-end` and compact only when the ledger is long. Do not finish with an updated artifact but a stale memory pointer, or with a revised design but no memoir or overview update.
+
 ## Review a change-set
 
 1. `detect_changes` when changed files are unknown.

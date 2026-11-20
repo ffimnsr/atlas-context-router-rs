@@ -133,6 +133,7 @@ fn core_skill_documents_workflow_patterns() {
             "core guide must expose the {heading} section"
         );
     }
+    assert!(GUIDE.contains("### Update checklist before finishing substantive work"));
     for tool in [
         "`batch_query_graph`",
         "`concept_clusters`",
@@ -192,6 +193,40 @@ fn continuity_reference_documents_session_memory_fallback() {
     }
     assert!(guide.contains("Do NOT store"));
     assert!(guide.contains("Never write any Atlas database directly"));
+    assert!(guide.contains("Write and update by layer"));
+    assert!(guide.contains("`replaces`"));
+    assert!(guide.contains("supersedes the prior active record"));
+}
+
+#[test]
+fn workflows_reference_documents_continuity_updates() {
+    let guide = guide_reference("workflows");
+    for heading in [
+        "## Build and update memoir knowledge",
+        "## Maintain overview memory",
+        "## Keep durable memory current",
+        "## Recall and curate continuity",
+    ] {
+        assert!(
+            guide.contains(heading),
+            "workflows reference must expose {heading}"
+        );
+    }
+    for needle in [
+        "`replaces`",
+        "`overview_refresh_plan`",
+        "`overview_ingest`",
+        "`patch_id`",
+        "`experience_inspect`",
+        "`memory_ops`",
+    ] {
+        assert!(
+            guide.contains(needle),
+            "workflows reference must document {needle}"
+        );
+    }
+    assert!(guide.contains("\"schema_version\": 1"));
+    assert!(guide.contains("Before finishing"));
 }
 
 #[test]
