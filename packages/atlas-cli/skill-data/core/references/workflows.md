@@ -138,29 +138,32 @@ atlas overview refresh-plan --since origin/main --apply
 Use `memory_store` for facts that outlive a session: decisions, constraints, preferences, gotchas, and plan pointers. Use artifacts for verbatim evidence.
 
 - Choose `scope` deliberately: `project` for repo facts, `session` for scratch, and `frontend` only for host-specific behavior.
-- Keep `topic` stable; set `importance` honestly; link evidence with `source_id`.
+- Keep `topic` stable; set `importance` honestly; add searchable `tags`; link evidence with `source_id`.
+- Use `links` at store time or `memory_link` afterward for directed memory-map edges. Relations accept the memoir vocabulary plus `supersedes`; a newer row linked with `supersedes` marks the target as replaced, so default recall stops surfacing the stale row. The target must already exist, duplicate links collapse, and self-links are rejected.
 - Update an existing row with `patch_id` plus `patch_text` or `patch_file` instead of storing a duplicate.
-- Recall with `memory_recall`; use `shared: true` for project and global memories, and `hybrid: true` only when embeddings are configured.
-- Audit one row with `memory_ops`; inspect storage with `get_context_stats`.
-- `search_decisions` reads conclusions captured by session hooks. If no decision row exists, save a `decision` artifact and a project memory instead of assuming it was stored.
+- Recall with `memory_recall`; use `shared: true` for project and global memories, `tags` to require every listed label, and `hybrid: true` only when embeddings are configured.
+- Audit one row with `memory_ops`; it returns the typed operator history and reports `found=false` for unknown ids. Inspect storage with `get_context_stats`.
+- `search_decisions` reads conclusions captured by session hooks and ranked by the query; restrict to one session when needed. It does not write, so if no decision row exists, save a `decision` artifact and a project memory instead of assuming it was stored.
 - When an Atlas analysis prediction was wrong, call `feedback_record` with `predicted`, `actual`, and `correction`; search past mistakes with `atlas feedback search`.
 
 Before finishing, recall the new or patched topic and confirm the row is visible at the intended scope. If the memory is only a pointer, verify that `read_saved_context` still resolves its `source_id`.
 
 ```bash
-atlas memory store "Parser cache must be invalidated per commit" --topic parser --scope project --importance high --source-id <source_id>
-atlas memory recall "parser cache" --shared
+atlas memory store "Parser cache must be invalidated per commit" --topic parser --scope project --importance high --source-id <source_id> --tag parser --tag cache
+atlas memory link <memory_id> <target_id> --relation supersedes
+atlas memory recall "parser cache" --shared --tag parser
 atlas memory ops <memory_id>
 atlas feedback record --predicted "unused" --actual "called via plugin registry" --correction "keep parser hook" --analysis-kind dead_code --symbol src/plugin.rs::fn::register
 ```
 
 ## Recall and curate continuity
 
-- Start every session with `wake_up`; use `resume_session` only as the fallback.
-- `search_saved_context` searches the current session; `cross_session_search` searches all sessions for the repo; `read_saved_context` returns the full body by `source_id`.
-- `get_global_memory` surfaces frequently accessed symbols, files, and workflow patterns across sessions.
-- `compact_session` when the ledger grows; `purge_saved_context` removes session artifacts or artifacts older than `keep_days`.
-- `experience_inspect` reports query-conditioned experience edges for one `atlas://` URI; an empty ledger is a valid result, not an error.
+- Start every session with `wake_up`; use `resume_session` only when `wake_up` is unavailable. `resume_session` returns or consumes the resume snapshot, so set `mark_consumed` deliberately instead of replaying the same snapshot twice.
+- Use `get_session_status` before deciding to compact or resume. It reports session identity, event count, last compaction time, and whether a resume snapshot exists, and it is read-only.
+- `search_saved_context` searches the current session; `cross_session_search` searches all sessions for the repo; `read_saved_context` returns the full body by `source_id`. If a search hit is a pointer, follow the `source_id` instead of guessing at the body.
+- `get_global_memory` surfaces frequently accessed symbols, files, and workflow patterns across sessions. Use it to orient on a repo you have not touched recently, not as a substitute for current graph queries.
+- `compact_session` when the ledger grows; `purge_saved_context` removes session artifacts or artifacts older than `keep_days`. Confirm destructive scope before purging.
+- `experience_inspect` reports query-conditioned experience edges for one `atlas://` URI, including direction, confidence, use count, and freshness. Only fresh edges activate in context assembly; an empty ledger is a valid result, not an error. Use it to audit a shortcut before trusting it, never as a write tool.
 
 At the close of substantive work, record `stop` or `session-end` and compact only when the ledger is long. Do not finish with an updated artifact but a stale memory pointer, or with a revised design but no memoir or overview update.
 
@@ -231,6 +234,24 @@ atlas insights label-components --files src/lib.rs
 ```
 
 Reports are deterministic and never call a model. They accept `--allow-stale` and `--allow-partial`; prefer refreshing the graph instead.
+
+## Historical and derived graph surfaces
+
+Some graph capabilities are CLI-only. Use them after the core graph workflow identifies the area, not as the first call, and run `atlas <group> <command> --help` for required flags.
+
+- `atlas history status` reports snapshot coverage; `atlas history build` and `atlas history update` populate bounded commit ranges, while `diff`, `symbol`, `file`, and `churn` answer regression and churn questions. Use history for trends across commits, not for current-state facts; refresh or rebuild the current graph first.
+- `atlas flows list` and `atlas flows trace` manage named ordered node sequences for recurring architecture paths. Create a flow only when the path repeats across sessions, and update its members after refactors so the sequence does not drift.
+- `atlas communities detect` runs deterministic Louvain clustering; `list`, `nodes`, and `for-node` inspect the result. Use communities to discover boundaries and coupling, not as authoritative architecture, and refresh after large restructuring.
+- `atlas repo list` and `atlas repo sync` manage the multi-repo registry. Inspect `repo_registry` before trusting cross-repo answers, and sync refs and trust state after adding or moving a repo.
+
+```bash
+atlas history status
+atlas history churn
+atlas flows list
+atlas communities detect
+atlas repo list
+atlas repo sync
+```
 
 ## Keep the graph fresh
 

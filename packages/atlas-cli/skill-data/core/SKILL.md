@@ -24,7 +24,7 @@ Continuity is not only a session-start read. Keep writing durable state while yo
 
 - `record_session_event` is the session ledger. Call it with `user-prompt` when a substantial task starts, `post-tool-use` or `file-changed` after files change, `tool-failure` when an error is resolved, `pre-compact` before compression, and `stop` or `session-end` before the final response. Include `payload.prompt`, `payload.tool_name`, and repo-relative `changed_files` when available so the next session can reconstruct what happened without rereading the transcript.
 - `save_context_artifact` is the verbatim evidence layer. Use it for a full plan, review, investigation, handoff, error fix, or preference summary that a future session should not have to regenerate. Set a stable `label`, a specific `source_type` (`plan`, `review`, `investigation`, `handoff`, `error_resolved`, `decision`, `preference`), and `content_type`; keep the returned `source_id` and reference symbols or files instead of pasting raw transcripts. Artifacts at or below 512 B return inline and are not persisted, so store short content in `memory_store` instead. When the body changes, save a new artifact and re-point the memory row; do not leave the old `source_id` as current.
-- `memory_store` is the durable fact and pointer layer. Use it for decisions, constraints, preferences, gotchas, and `source_id` pointers that must survive the session. Choose `scope: "project"` for repo facts, `session` for scratch, and `frontend` only for host-specific behavior; set `topic`, honest `importance`, and evidence `source_id`. Update a row with `patch_id` plus `patch_text` or `patch_file` instead of creating a duplicate, and verify the result with `memory_recall`.
+- `memory_store` is the durable fact and pointer layer. Use it for decisions, constraints, preferences, gotchas, and `source_id` pointers that must survive the session. Choose `scope: "project"` for repo facts, `session` for scratch, and `frontend` only for host-specific behavior; set `topic`, honest `importance`, evidence `source_id`, and searchable `tags`. Use `links` for related memory ids or `memory_link` for one directed edge after the fact; relations accept the memoir vocabulary plus `supersedes`, which marks the target row as replaced. Update a row with `patch_id` plus `patch_text` or `patch_file` instead of creating a duplicate, and verify the result with `memory_recall`.
 - `memoir_*` is the design knowledge layer. Use `memoir_create` for a bounded topic graph, `memoir_add_concept` for components, decisions, risks, plan steps, or incidents, and `memoir_link` for directed relations such as `depends_on`, `part_of`, `replaces`, `caused_by`, and `fixed_by`. Re-adding a concept name fails, so revise by adding a versioned concept and linking it with `replaces` or `refines`. Inspect with `memoir_inspect` before and after changes, and delete only after a dry run.
 - `overview_*` is the code documentation layer. Export bounded packets with `overview_export`, have an external analyzer or human return the documented `schema_version: 1` JSON, and persist it with `overview_ingest`. After code changes, run `overview_refresh_plan` and apply only after reviewing stale, possibly stale, and orphaned subjects. Read with `overview_search` or `overview_show`, starting at `l1` and escalating to `l2` only when the full body is needed.
 - `feedback_record` corrects future analysis. Pass the wrong `predicted` verdict, the real `actual` outcome, and a `correction` whenever dead-code, removal, or safety analysis was wrong. Search past corrections with `atlas feedback search` before repeating a questionable verdict; do not use feedback for user preference notes.
@@ -96,7 +96,7 @@ Use the shortest chain that answers the question, then stop. Each pattern below 
 ### Planning and continuity
 
 - **Multi-step plan.** Start with `wake_up` and the task topic, then read `recent_decisions`, `critical_memories`, `changed_files`, and `graph_readiness`. Reconfirm code facts with `query_graph` or `resolve_symbol`, `get_context`, and `cross_file_links` or `concept_clusters` before writing steps. Save the full plan and a project memory pointer as described in `## Plan and handoff`, then execute one step at a time and `update_graph` after edits. If the plan changes, save a new artifact and re-point the memory row; do not leave the old `source_id` as current.
-- **Durable decision, preference, or gotcha.** Record the fact with `memory_store` at `scope: "project"`, link the artifact or symbol with `source_id`, and choose `importance` honestly. Later sessions read it with `memory_recall`; update the same row with `patch_id` plus a patch body instead of adding a duplicate. Use `save_context_artifact` when the rationale or evidence must be preserved verbatim.
+- **Durable decision, preference, or gotcha.** Record the fact with `memory_store` at `scope: "project"`, link the artifact or symbol with `source_id`, and choose `importance` honestly. Later sessions read it with `memory_recall` and `search_decisions` for hook-captured conclusions; update the same row with `patch_id` plus a patch body instead of adding a duplicate. When one memory replaces another, link the newer row with `memory_link` using `supersedes` so default recall stops surfacing the stale one. Use `save_context_artifact` when the rationale or evidence must be preserved verbatim.
 - **Concept or design map.** Create one bounded memoir graph for the topic, add concepts with stable `kind` values and evidence `source_id`, then link them with the controlled relation vocabulary. Inspect the neighbourhood before adding more so you do not duplicate concepts or reverse relation direction. Revise with versioned concepts plus `replaces` or `refines`, and use `create_missing: true` only when the new endpoints are intentional.
 - **Code-area overview.** Export packets for the target subjects with callers, callees, tests, and code spans only when they fit the token budget. Have an external analyzer or human produce the documented ingest JSON, then persist it with `overview_ingest`. Search or show the record before relying on it, and run `overview_refresh_plan` after related changes so stale or orphaned subjects are not presented as fresh.
 - **Prior-session recall.** Search the current session with `search_saved_context`, search all sessions with `cross_session_search`, and fetch the full body with `read_saved_context` by `source_id`. Use `get_global_memory` for frequently accessed symbols, files, and workflow patterns. If the result is a plan pointer, follow the `source_id` instead of reconstructing the plan from chat history.
@@ -118,7 +118,7 @@ Use the shortest chain that answers the question, then stop. Each pattern below 
 
 ### Health and maintenance
 
-- **Stale or unhealthy graph.** Check `status`; use `doctor` or `db_check` for integrity and `list_graph_stats` or `debug_graph` for graph shape. Refresh with `update_graph` from the working tree or base ref, and use `build_graph` for a missing or corrupt database. Run `postprocess_graph` when derived analytics are missing, and `embed_chunks` only when an embedding backend is configured.
+- **Stale or unhealthy graph.** Check `status`; use `doctor` or `db_check` for integrity and `list_graph_stats` or `debug_graph` for graph shape. Refresh with `update_graph` from the working tree or base ref, and use `build_graph` for a missing or corrupt database. Run `postprocess_graph` when flows, communities, architecture metrics, query hints, or large-function summaries are stale, and `embed_chunks` with a dry run first only when an embedding backend is configured.
 - **MCP or multi-repo diagnostics.** Use `broker_status` or `get_metrics` to separate broker liveness from graph health, and `repo_registry` to inspect repo identity and trust states in multi-repo graphs. Use `tool_list`, `tool_search`, and `tool_help` when a tool name, argument, or output contract is uncertain. Report the exact failing tool and retry guidance instead of guessing.
 
 ## Plan and handoff
@@ -146,15 +146,16 @@ Use the shortest chain that answers the question, then stop. Each pattern below 
 
 Runtime docs are canonical for current arguments and output contracts. Do not treat this instruction block as exhaustive inventory.
 
-- `tool_list`: list visible Atlas MCP tools
-- `tool_search`: find tools by name or capability
-- `tool_help`: read exact runtime docs for one tool, including input contracts and minimal examples
-- `man`: legacy namespace-aware manual alias
+- `tool_list` lists the visible exported tools; call it when the registry may have changed or you need the exact tool name.
+- `tool_search` finds a tool by name or capability when the name is uncertain, and `tool_help` returns the exact input contract, output shape, and minimal example for one tool.
+- `man` is the legacy namespace-aware alias; prefer `tool_help` for current MCP tools.
+
+Call `tool_help` before first use of a tool with non-obvious arguments and after a structured error. Do not guess field names, and do not invent a tool when `tool_search` returns no match.
 
 ## Common tool map
 
 - continuity: `wake_up`, `get_session_status`, `resume_session`, `save_context_artifact`, `record_session_event`, `compact_session`, `get_context_stats`, `purge_saved_context`, `search_saved_context`, `cross_session_search`, `read_saved_context`, `search_decisions`
-- shared memory and notes: `memory_store`, `memory_recall`, `memory_ops`, `feedback_record`
+- shared memory and notes: `memory_store`, `memory_recall`, `memory_link`, `memory_ops`, `feedback_record`
 - memoir: `memoir_create`, `memoir_add_concept`, `memoir_link`, `memoir_inspect`, `memoir_delete`
 - overview: `overview_export`, `overview_ingest`, `overview_search`, `overview_show`, `overview_refresh_plan`
 - architecture and code health: `analyze_architecture`, `infer_modules`, `label_components`, `analyze_metrics`, `analyze_patterns`, `find_large_functions`, `find_complex_functions`, `find_similar_functions`, `find_duplicates`, `analyze_dead_code`, `analyze_dependency`, `analyze_remove`
@@ -205,5 +206,5 @@ atlas skills get core --ref mcp-tools
 | `continuity` | Session event protocol, saved artifacts, decisions, memories, memoir, overview, history, atlas:// URIs |
 | `cli` | Any subcommand, argument, or flag not shown here; full CLI surface generated from the installed binary |
 | `mcp-tools` | Full MCP tool inventory with input contracts, generated from the server |
-| `workflows` | Review a change-set, inspect a symbol, removal and rename safety, repo-wide analysis reports |
+| `workflows` | Plan and continuity layers, review, symbol inspection, safety, analysis, and historical graph trends |
 | `setup` | Install and init modes, skill commands, build/update, MCP server setup, health and config commands |

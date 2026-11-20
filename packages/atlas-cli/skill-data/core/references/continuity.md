@@ -68,7 +68,7 @@ Run `atlas session <command> --help` for flags; the skill `cli` reference has ev
 Write and update by layer:
 
 - Artifact: use for full plan bodies, reviews, investigations, error fixes, and handoffs that a future session should read verbatim. Artifacts are local under `.atlas/artifacts/` and gitignored, so link them from a committed memory row when they must survive across sessions or machines. A changed body creates a new `source_id`; update the memory pointer that references it and keep the old artifact only when its history matters.
-- Memory: use for durable facts, constraints, preferences, gotchas, and plan pointers. Project memories are committed under `.atlas/memories/`; session-scoped memories are scratch and frontend-scoped memories belong to one host only. Update an existing row with `patch_id` plus `patch_text` or `patch_file`, then verify with `memory_recall`; do not add a duplicate row for a changed fact.
+- Memory: use for durable facts, constraints, preferences, gotchas, and plan pointers. Project memories are committed under `.atlas/memories/`; session-scoped memories are scratch and frontend-scoped memories belong to one host only. Add searchable `tags`, link evidence with `source_id`, and connect related rows with `links` or `memory_link`; the `supersedes` relation marks the target row as replaced so default recall stops surfacing it. Update an existing row with `patch_id` plus `patch_text` or `patch_file`, then verify with `memory_recall`; do not add a duplicate row for a changed fact.
 - Memoir: use for design, dependency, decision, and incident graphs that the code graph cannot express. Memoir is committed under `.atlas/memoir/` and never merges into graph nodes or edges. Concept names are unique per graph, so revise with a versioned concept linked by `replaces` or `refines`; do not re-add the same name or silently reverse relation direction.
 - Overview: use for evidence-linked code-area documentation that an external analyzer or human produces from bounded packets. Overviews are committed under `.atlas/overview/`, and a newer ingest supersedes the prior active record instead of editing it in place. Run `overview_refresh_plan` after code changes and never present stale, possibly stale, or orphaned records as fresh.
 - Decision memory: use `search_decisions` for conclusions captured from session events and surfaced by `wake_up`. It is a read surface, not a replacement for durable notes; for decisions that must survive, also store a `decision` artifact and a project memory.
@@ -105,3 +105,17 @@ atlas uri search atlas://repo/{repo_id}/tree/src "retry policy"
 ```
 
 Use the canonical forms only; bare `atlas://file/<path>` is not part of the grammar.
+
+Resource URIs are read-only addresses for cross-tool and cross-session references. Use them instead of pasting the same body into multiple tools.
+
+| URI | Use |
+| --- | --- |
+| `atlas://repo/{repo_id}/tree/{dir}`, `file/{path}`, `symbol/{qualified_name}` | Graph-scoped tree, file, and symbol reads |
+| `atlas://docs/index`, `atlas://docs/{file}#{heading}` | Documentation index and one Markdown section |
+| `atlas://graph/provenance`, `atlas://health/status` | Trust and readiness metadata for the current graph |
+| `atlas://memories/topic/{topic}`, `atlas://memories/id/{memory_id}` | One durable memory by topic or exact id |
+| `atlas://memoir/{graph}/{concept}` | One memoir concept and its bounded neighbourhood |
+| `atlas://artifacts/{source_id}/{chunk_index}`, `atlas://saved-context/{source_id}` | Saved-context chunk or full artifact by `source_id` |
+| `atlas://tool-docs/{name}`, `atlas://prompt-docs/{name}` | Runtime tool manual and prompt-facing docs |
+
+Use `atlas uri` to read, list, grep, or search these addresses. Do not invent a new URI form when a canonical one exists.

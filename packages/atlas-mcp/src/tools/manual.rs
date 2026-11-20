@@ -1131,9 +1131,10 @@ pub(crate) fn tool_usage_guidance(tool_name: &str) -> Vec<String> {
             "Use saved-context tools for large tool outputs and cross-session recall: search before read, and page with chunk_offset for large artifacts.",
             "Artifacts are session- and repo-scoped; purge_saved_context is destructive and requires an explicit user-approved action.",
         ],
-        "memory_store" | "memory_recall" | "memory_ops" | "feedback_record" => vec![
-            "Use memory_store for durable repo facts, memory_recall for retrieval, and memory_ops to inspect typed-operator history.",
-            "Recall is read-only; store and feedback writes are state-changing. Respect project/session/frontend/global visibility scopes.",
+        "memory_store" | "memory_recall" | "memory_link" | "memory_ops" | "feedback_record" => vec![
+            "Use memory_store for durable repo facts, memory_recall for retrieval, memory_link for directed memory-map edges, and memory_ops to inspect typed-operator history.",
+            "Memory links accept the memoir vocabulary plus supersedes, which marks the target row as replaced; duplicate links collapse and self-links or unknown ids are rejected.",
+            "Recall is read-only; store, link, and feedback writes are state-changing. Respect project/session/frontend/global visibility scopes.",
         ],
         "memoir_create" | "memoir_add_concept" | "memoir_link" | "memoir_inspect"
         | "memoir_delete" => vec![
@@ -1407,6 +1408,14 @@ mod tests {
                 .iter()
                 .any(|field| field.name == "text" && !field.required)
         );
+    }
+
+    #[test]
+    fn memory_link_usage_guidance_documents_supersedes_and_validation() {
+        let guidance = tool_usage_guidance("memory_link").join(" ");
+        assert!(guidance.contains("supersedes"));
+        assert!(guidance.contains("self-links"));
+        assert!(guidance.contains("memory-map"));
     }
 
     #[test]

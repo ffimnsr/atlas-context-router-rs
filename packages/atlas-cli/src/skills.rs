@@ -303,6 +303,7 @@ mod tests {
         "memoir_delete",
         "memoir_inspect",
         "memoir_link",
+        "memory_link",
         "memory_ops",
         "memory_recall",
         "memory_store",
@@ -477,6 +478,7 @@ mod tests {
             "`cross_session_search`",
             "`analyze_architecture`",
             "`find_duplicates`",
+            "`memory_link`",
             "`read_saved_context`",
         ] {
             assert!(
@@ -527,6 +529,7 @@ mod tests {
             "`overview_refresh_plan`",
             "`overview_ingest`",
             "`patch_id`",
+            "`memory_link`",
             "`experience_inspect`",
             "`memory_ops`",
         ] {
@@ -538,6 +541,7 @@ mod tests {
         assert!(content.contains("\"schema_version\": 1"));
         assert!(content.contains("supersedes the prior active record"));
         assert!(content.contains("Before finishing"));
+        assert!(content.contains("`supersedes`"));
     }
 
     #[test]
@@ -547,6 +551,27 @@ mod tests {
         assert!(content.contains("`replaces`"));
         assert!(content.contains("supersedes the prior active record"));
         assert!(content.contains("`patch_id`"));
+        assert!(content.contains("atlas://artifacts/{source_id}/{chunk_index}"));
+        assert!(content.contains("atlas://memories/topic/{topic}"));
+        assert!(content.contains("atlas://tool-docs/{name}"));
+    }
+
+    #[test]
+    fn workflows_reference_documents_cli_only_surfaces() {
+        let content = render_reference("workflows").expect("workflows reference");
+        assert!(content.contains("## Historical and derived graph surfaces"));
+        for needle in [
+            "`atlas history status`",
+            "`atlas flows list`",
+            "`atlas communities detect`",
+            "`atlas repo sync`",
+            "`repo_registry`",
+        ] {
+            assert!(
+                content.contains(needle),
+                "workflows reference must document {needle}"
+            );
+        }
     }
 
     #[test]

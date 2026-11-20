@@ -196,6 +196,8 @@ fn continuity_reference_documents_session_memory_fallback() {
     assert!(guide.contains("Write and update by layer"));
     assert!(guide.contains("`replaces`"));
     assert!(guide.contains("supersedes the prior active record"));
+    assert!(guide.contains("atlas://artifacts/{source_id}/{chunk_index}"));
+    assert!(guide.contains("atlas://tool-docs/{name}"));
 }
 
 #[test]
@@ -217,6 +219,7 @@ fn workflows_reference_documents_continuity_updates() {
         "`overview_refresh_plan`",
         "`overview_ingest`",
         "`patch_id`",
+        "`memory_link`",
         "`experience_inspect`",
         "`memory_ops`",
     ] {
@@ -227,6 +230,8 @@ fn workflows_reference_documents_continuity_updates() {
     }
     assert!(guide.contains("\"schema_version\": 1"));
     assert!(guide.contains("Before finishing"));
+    assert!(guide.contains("`supersedes`"));
+    assert!(guide.contains("## Historical and derived graph surfaces"));
 }
 
 #[test]
