@@ -39,6 +39,7 @@ Call `record_session_event` when any of these happens:
 10. Atlas analysis prediction wrong (dead code, removal, safety verdict) → `feedback_record` with `predicted`, `actual`, and `correction`.
 11. Major work completed before your final response → `record_session_event` with `event: "stop"` (or `event: "session-end"`) and save a concise handoff artifact.
 12. Multi-step plan created or revised → save the full plan via `save_context_artifact` with `source_type: "plan"` and a durable pointer via `memory_store` with `scope: "project"` and the artifact `source_id`; recall it next session with `memory_recall` then `read_saved_context`.
+13. Upgrade, dependency bump, feature, or behavior fix completed → save a `decision` (or `handoff`) artifact with what changed, why, and how it was verified, then store a `memory_store` `scope: "project"` pointer row with recall tags (e.g. `upgrade`) and the artifact `source_id`, so any later session can trace back the change and its purpose.
 
 Do NOT store: trivial logs, raw secrets or credentials, duplicate facts, raw unbounded transcripts, or facts already present in repository instruction files. Prefer compact summaries and `source_id` references.
 

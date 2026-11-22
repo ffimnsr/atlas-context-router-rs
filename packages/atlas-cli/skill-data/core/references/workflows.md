@@ -138,6 +138,8 @@ atlas overview refresh-plan --since origin/main --apply
 
 Use `memory_store` for facts that outlive a session: decisions, constraints, preferences, gotchas, and plan pointers. Use artifacts for verbatim evidence.
 
+Every upgrade, dependency bump, feature, or behavior fix lands as a traceable pair: a `decision` or `handoff` artifact stating what changed, why, and how it was verified, plus a project-scope memory row with recall tags (e.g. `upgrade`) and the artifact `source_id`. Both families are committed, so `memory_recall` followed by `read_saved_context` answers what changed and why across sessions, clones, and machines. Skip the pair only when an edit changes no behavior.
+
 - Choose `scope` deliberately: `project` for repo facts, `session` for scratch, and `frontend` only for host-specific behavior.
 - Keep `topic` stable; set `importance` honestly; add searchable `tags`; link evidence with `source_id`.
 - Use `links` at store time or `memory_link` afterward for directed memory-map edges. Relations accept the memoir vocabulary plus `supersedes`; a newer row linked with `supersedes` marks the target as replaced, so default recall stops surfacing the stale row. The target must already exist, duplicate links collapse, and self-links are rejected.
@@ -151,6 +153,7 @@ Before finishing, recall the new or patched topic and confirm the row is visible
 
 ```bash
 atlas memory store "Parser cache must be invalidated per commit" --topic parser --scope project --importance high --source-id <source_id> --tag parser --tag cache
+atlas memory store "rmcp 3.11: pre-init EOF is clean shutdown" --topic mcp-transport --scope project --importance high --source-id <source_id> --tag upgrade
 atlas memory link <memory_id> <target_id> --relation supersedes
 atlas memory recall "parser cache" --shared --tag parser
 atlas memory ops <memory_id>

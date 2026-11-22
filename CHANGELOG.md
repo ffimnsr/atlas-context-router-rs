@@ -12,6 +12,7 @@ Versioning policy may evolve while Atlas is still moving quickly, but release no
 - `[insights] ignore_files` accepts glob patterns (`*.md`, `*.json`) in addition to legacy exact/prefix entries, with load-time glob validation; invalid globs are rejected at config load
 - accept repo-relative, repo-dir-prefixed, and absolute-under-root file paths on every MCP and CLI file-path surface (discovery tools, context/change-source tools, graph and analysis tools, `docs-section`, `context`, `impact`, `review-context`, `explain-change`, `update --files`, `insights --files`, `analyze dead-code --subpath`, `query --subpath`) with structured not-found/ambiguity errors
 - support canonical relative, `~`, `$HOME`, and `${HOME}` repository paths for portable editor configuration
+- make change traceability a mandatory capture rule in the served core workflow: every upgrade, dependency bump, feature, or behavior fix closes with a committed `decision`/`handoff` artifact (what changed, why, verification) plus a project memory row with `upgrade`-style recall tags and the artifact `source_id`, so `memory_recall` + `read_saved_context` trace the change back across sessions and clones
 
 ### Fixes
 

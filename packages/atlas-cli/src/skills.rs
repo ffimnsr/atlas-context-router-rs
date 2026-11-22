@@ -498,6 +498,30 @@ mod tests {
     }
 
     #[test]
+    fn change_traceability_rule_spans_guide_and_references() {
+        let core = CORE.content;
+        assert!(core.contains("**Change traceability.**"));
+        assert!(
+            core.contains(
+                "Every upgrade, dependency bump, feature, or behavior fix leaves a committed record"
+            ),
+            "core guide must mandate a traceable record for behavior changes"
+        );
+        assert!(core.contains("committed record before the session closes"));
+        assert!(core.contains("Skip only for trivial edits"));
+
+        let continuity = render_reference("continuity").expect("continuity reference");
+        assert!(
+            continuity.contains("13. Upgrade, dependency bump, feature, or behavior fix completed")
+        );
+        assert!(continuity.contains("trace back the change and its purpose"));
+
+        let workflows = render_reference("workflows").expect("workflows reference");
+        assert!(workflows.contains("traceable pair"));
+        assert!(workflows.contains("--tag upgrade"));
+    }
+
+    #[test]
     fn continuity_reference_documents_plan_capture() {
         let content = render_reference("continuity").expect("continuity reference");
         assert!(content.contains("source_type: \"plan\""));
