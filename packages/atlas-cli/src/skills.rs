@@ -494,7 +494,7 @@ mod tests {
         }
         assert!(content.contains("source_type: \"plan\""));
         assert!(content.contains("512 B"));
-        assert!(content.contains("gitignored"));
+        assert!(content.contains("Artifacts live under `.atlas/artifacts/` and are committed"));
     }
 
     #[test]

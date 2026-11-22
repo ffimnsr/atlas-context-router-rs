@@ -564,6 +564,7 @@ pub fn run_install(cli: &Cli) -> Result<()> {
                 "hook_runner_files": summary.hook_runner_files,
                 "instruction_files": summary.instruction_files,
                 "skill_files": summary.skill_files,
+                "gitignore_files": summary.gitignore_files,
                 "validation_checks": summary.validation_checks,
                 "mcp_setup": crate::install::GENERIC_MCP_SETUP,
             }),
@@ -587,6 +588,13 @@ pub fn run_install(cli: &Cli) -> Result<()> {
                 println!("  Agent skill (dry-run): {f}");
             } else {
                 println!("  Agent skill installed : {f}");
+            }
+        }
+        for f in &summary.gitignore_files {
+            if dry_run {
+                println!("  Atlas gitignore (dry-run): {f}");
+            } else {
+                println!("  Atlas gitignore written : {f}");
             }
         }
         for check in &summary.validation_checks {

@@ -11,7 +11,7 @@ Task recipes beyond the core loop. Each MCP call has a CLI mirror; run `atlas sk
 5. Execute one step at a time; after edits run `update_graph` with the working tree, then `detect_changes` and `get_minimal_context`.
 6. Close with `record_session_event` `stop` and `compact_session` when the session is long.
 
-Artifacts are local under `.atlas/artifacts/` and gitignored; project memories are committed under `.atlas/memories/`. Artifacts at or below 512 B return inline and are not persisted. Without an explicit `session_id`, artifacts attach to the derived MCP session; use `cross_session_search` or the memory pointer across sessions.
+Artifacts are committed under `.atlas/artifacts/`; project memories are committed under `.atlas/memories/`. Artifacts at or below 512 B return inline and are not persisted. Without an explicit `session_id`, artifacts attach to the derived MCP session; use `cross_session_search` or the memory pointer across sessions.
 
 ```bash
 atlas session save-artifact --label refactor-plan --source-type plan --content-type text/markdown "plan body"

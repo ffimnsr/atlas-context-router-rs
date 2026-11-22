@@ -167,7 +167,7 @@ Full design: `docs/PLAN-TOKENIZER.md`. Goal: standalone `atlas-tokenizer` crate 
 
 ### Markdown Continuity Storage Patch
 
-Full design: `docs/PLAN-MARKDOWN-STORAGE.md`. Goal: durable continuity records become markdown truth under `.atlas/`; sqlite keeps only derived, rebuildable indexes. `worldtree.db` unchanged. Resolved: commit only `memories/`, `decisions/`, `feedback/`, `memoir/`, `overview/` dirs; sessions/events, tasks, artifacts, and experience edges stay local. Global-scope memories stay in workspace `.atlas/`. Session events ledger is markdown.
+Full design: `docs/PLAN-MARKDOWN-STORAGE.md`. Goal: durable continuity records become markdown truth under `.atlas/`; sqlite keeps only derived, rebuildable indexes. `worldtree.db` unchanged. Resolved: commit `memories/`, `decisions/`, `feedback/`, `memoir/`, `overview/`, and `artifacts/` dirs; sessions/events, tasks, and experience edges stay local. Global-scope memories stay in workspace `.atlas/`. Session events ledger is markdown.
 
 Implementation note: SQLite tables for these families are retained as
 **derived, rebuildable indexes** (plan principle 2). Truth lives in markdown;

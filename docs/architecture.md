@@ -166,7 +166,7 @@ Store split exists so one subsystem can degrade without corrupting others.
 
 ## Mental model
 
-Use `worldtree.db` for code truth. Continuity state lives in markdown: `.atlas/memories/`, `.atlas/decisions/`, `.atlas/feedback/`, `.atlas/memoir/`, `.atlas/overview/` (committed), plus local-only `.atlas/sessions/`, `.atlas/tasks/`, `.atlas/experience/`, and `.atlas/artifacts/`. `context.db` and `session.db` are derived indexes that can be deleted and rebuilt from markdown; opening a store imports existing markdown back into its derived tables, and memory recall reconciles its index by file `(mtime, size)` identity. Frontends differ. Storage contract does not.
+Use `worldtree.db` for code truth. Continuity state lives in markdown: `.atlas/memories/`, `.atlas/decisions/`, `.atlas/feedback/`, `.atlas/memoir/`, `.atlas/overview/`, and `.atlas/artifacts/` (committed), plus local-only `.atlas/sessions/`, `.atlas/tasks/`, and `.atlas/experience/`. `context.db` and `session.db` are derived indexes that can be deleted and rebuilt from markdown; opening a store imports existing markdown back into its derived tables, and memory recall reconciles its index by file `(mtime, size)` identity. Tracking rules live in `.atlas/.gitignore`, written idempotently by `atlas init` and `atlas install`. Frontends differ. Storage contract does not.
 
 ## MCP stdio repo resolution in editors
 

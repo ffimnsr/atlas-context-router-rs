@@ -20,10 +20,10 @@ relational queries earn their keep.
 ## Resolved decisions
 
 1. **Committed to repo git:** `.atlas/memories/`, `.atlas/decisions/`,
-   `.atlas/feedback/`, `.atlas/memoir/`, `.atlas/overview/`.
+   `.atlas/feedback/`, `.atlas/memoir/`, `.atlas/overview/`, `.atlas/artifacts/`.
    **Not committed (local-only):** `.atlas/sessions/` (events and resume contain
-   tool output transcripts), `.atlas/artifacts/`, `.atlas/tasks/`,
-   `.atlas/experience/`, all `*.db` files, lock files.
+   tool output transcripts), `.atlas/tasks/`, `.atlas/experience/`, all `*.db`
+   files, lock files.
 2. **Global-scope memories stay in the workspace `.atlas/`** with
    `scope: global` frontmatter, matching today's per-repo storage; no home-dir root.
 3. **Session events ledger is markdown** (`events.md`), chosen because the ledger
@@ -67,7 +67,7 @@ relational queries earn their keep.
 │   └── <task-id>.md
 ├── experience/                # local-only
 │   └── <edge-slug>.md
-├── artifacts/                 # local-only — moved out of context.db
+├── artifacts/                 # committed — moved out of context.db
 │   └── <source-id>.md
 ├── locks/                     # local-only — central advisory lock files
 ├── tmp/                       # local-only — in-flight atomic-write temps
@@ -273,45 +273,37 @@ that mutates on a read or a background job lives in derived state.
    the topic's L0/L1 — not from generated abstract files, keeping committed
    directories free of derived content.
 
-## Git policy and `.gitignore`
+## Git policy and `.atlas/.gitignore`
 
-Replace the blanket `.atlas/` ignore with a root-contents ignore plus
-durable-directory re-includes, and whitelist plan docs:
+The root `.gitignore` keeps only repo-wide rules (the `*.md` whitelist for
+README, ISSUES, and plan docs). Atlas state tracking ships inside the state
+directory: `atlas init` and `atlas install` write `.atlas/.gitignore`
+idempotently, `--force` restores it after user edits, and
+`atlas install --validate-only` reports a missing or unmanaged file:
 
 ```gitignore
-# Ignore all markdown files except README.md and ISSUES.md
-*.md
-!README.md
-!ISSUES.md
-!COMPATIBILITY.md
-!SHIPPED.md
-!CHANGELOG.md
-!CONTRIBUTING.md
-!CODE_OF_CONDUCT.md
-!SECURITY.md
-!SUPPORT.md
-!MCP_TOOLS.md
-!AGENTS.md
-!AGENTS_MCP_TESTS.md
-!docs/PLAN-*.md
-
-# Atlas local state stays untracked except durable markdown continuity records
-.atlas/*
-!.atlas/memories/
-!.atlas/decisions/
-!.atlas/feedback/
-!.atlas/memoir/
-!.atlas/overview/
-!.atlas/memories/**/*.md
-!.atlas/decisions/**/*.md
-!.atlas/feedback/**/*.md
-!.atlas/memoir/**/*.md
-!.atlas/overview/**/*.md
+# atlas-managed local-state git policy v1 — durable markdown records stay committed.
+/*
+!/.gitignore
+!/memories/
+!/decisions/
+!/feedback/
+!/memoir/
+!/overview/
+!/artifacts/
+!/memories/**/*.md
+!/decisions/**/*.md
+!/feedback/**/*.md
+!/memoir/**/*.md
+!/overview/**/*.md
+!/artifacts/**/*.md
 ```
 
-`.atlas/config.toml` and `.atlas/hooks/` stay untracked (`.atlas/*` covers
-them). Global-scope memories commit inside the repo that stored them, per
-decision 2.
+`.atlas/config.toml`, `.atlas/hooks/`, `sessions/`, `tasks/`, `experience/`,
+lock and tmp files, and `*.db` indexes stay untracked (`/*` covers them).
+The deeper negations override a root `*.md` rule, so durable markdown records
+stay committed without root `.gitignore` entries. Global-scope memories commit
+inside the repo that stored them, per decision 2.
 
 ## Migration
 

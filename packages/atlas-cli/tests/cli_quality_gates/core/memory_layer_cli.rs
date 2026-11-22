@@ -171,10 +171,12 @@ fn init_mode_dry_run_reports_assets_and_writes_nothing() {
         .map(|entry| entry["path"].as_str().unwrap_or_default().to_owned())
         .collect::<Vec<_>>();
     assert!(paths.contains(&".atlas/agent/mcp.json".to_owned()));
+    assert!(paths.contains(&".atlas/.gitignore".to_owned()));
     assert!(paths.contains(&"AGENTS.md".to_owned()));
     assert!(paths.iter().any(|path| path.starts_with(".git/hooks/")));
 
     assert!(!repo.path().join(".atlas").join("agent").join("mcp.json").exists());
+    assert!(!repo.path().join(".atlas").join(".gitignore").exists());
     assert!(!repo.path().join("AGENTS.md").exists());
 }
 

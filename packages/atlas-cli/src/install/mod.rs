@@ -5,6 +5,7 @@ use serde::Serialize;
 
 mod agent_skill;
 mod git_hooks;
+mod gitignore;
 mod hook_runner;
 mod init_modes;
 mod instructions;
@@ -27,6 +28,7 @@ pub struct InstallSummary {
     pub hook_runner_files: Vec<String>,
     pub instruction_files: Vec<String>,
     pub skill_files: Vec<String>,
+    pub gitignore_files: Vec<String>,
     pub validation_checks: Vec<InstallValidation>,
     pub validate_only: bool,
 }
@@ -76,6 +78,13 @@ pub fn run_install(repo_root: &Path, options: InstallOptions) -> Result<InstallS
         )?;
         if let Some(path) = install_skill(repo_root, options.dry_run, options.force)? {
             summary.skill_files.push(path);
+        }
+    }
+
+    if !options.validate_only {
+        let written = gitignore::ensure_atlas_gitignore(repo_root, options.dry_run, options.force)?;
+        if let Some(path) = written {
+            summary.gitignore_files.push(path);
         }
     }
 

@@ -14,6 +14,7 @@ use serde::Serialize;
 
 use super::agent_skill::{SKILL_REL, SKILL_STUB, install_skill};
 use super::git_hooks::install_git_hooks;
+use super::gitignore::{ATLAS_GITIGNORE_CONTENT, ATLAS_GITIGNORE_REL, ensure_atlas_gitignore};
 use super::hook_runner::{ATLAS_HOOK_RUNNER_REL, install_hook_runner};
 use super::instructions::{
     AGENTS_FILE, INSTRUCTIONS_MARKER, InstructionsMode, inject_instructions,
@@ -47,7 +48,8 @@ const GIT_HOOK_NAMES: &[&str] = &[
 /// One planned asset write.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InitPlanEntry {
-    /// Asset family: `mcp`, `hook`, `hook_runner`, or `instructions`.
+    /// Asset family: `gitignore`, `mcp`, `hook`, `hook_runner`, `instructions`,
+    /// or `agent_skill`.
     pub asset: String,
     /// Repo-relative path the mode writes.
     pub path: String,
@@ -76,6 +78,21 @@ impl InitModeSummary {
 /// Enumerate every asset a mode would write, without touching the filesystem.
 pub fn plan_init_mode(repo_root: &Path, mode: InitMode) -> Vec<InitPlanEntry> {
     let mut entries = Vec::new();
+
+    // State-dir git policy is mode-independent: every mode ensures it.
+    {
+        let path = repo_root.join(ATLAS_GITIGNORE_REL);
+        let action = match fs::read_to_string(&path) {
+            Ok(existing) if existing == ATLAS_GITIGNORE_CONTENT => "unchanged",
+            Ok(_) => "refresh",
+            Err(_) => "create",
+        };
+        entries.push(InitPlanEntry {
+            asset: "gitignore".to_owned(),
+            path: ATLAS_GITIGNORE_REL.to_owned(),
+            action: action.to_owned(),
+        });
+    }
 
     if mode.includes_mcp() {
         let path = repo_root.join(MCP_ASSET_REL);
@@ -165,6 +182,26 @@ pub fn apply_init_mode(
     };
     if dry_run {
         return Ok(summary);
+    }
+
+    // The state-dir git policy ships with every mode; user edits are preserved
+    // unless --force restores the managed content.
+    {
+        let considered = plan
+            .iter()
+            .find(|entry| entry.asset == "gitignore")
+            .map(|entry| entry.action.as_str())
+            .unwrap_or("create");
+        let applied = match considered {
+            "unchanged" => "unchanged",
+            "refresh" if !force => "skipped",
+            _ => {
+                ensure_atlas_gitignore(repo_root, false, force)
+                    .context("cannot write the Atlas state-dir git policy")?;
+                "create"
+            }
+        };
+        set_action(&mut summary.files, ATLAS_GITIGNORE_REL, applied);
     }
 
     if mode.includes_mcp() {
@@ -265,9 +302,12 @@ mod tests {
     fn plan_lists_only_requested_assets() {
         let repo = repo();
         let mcp = plan_init_mode(repo.path(), InitMode::Mcp);
-        assert_eq!(mcp.len(), 1);
-        assert_eq!(mcp[0].path, MCP_ASSET_REL);
+        assert_eq!(mcp.len(), 2);
+        assert_eq!(mcp[0].asset, "gitignore");
+        assert_eq!(mcp[0].path, ATLAS_GITIGNORE_REL);
         assert_eq!(mcp[0].action, "create");
+        assert_eq!(mcp[1].path, MCP_ASSET_REL);
+        assert_eq!(mcp[1].action, "create");
 
         let hooks = plan_init_mode(repo.path(), InitMode::Hook);
         assert!(hooks.iter().all(|entry| entry.asset != "mcp"));
@@ -277,12 +317,13 @@ mod tests {
         );
 
         let cli = plan_init_mode(repo.path(), InitMode::Cli);
-        assert_eq!(cli.len(), 2);
-        assert_eq!(cli[0].path, AGENTS_FILE);
-        assert_eq!(cli[1].path, SKILL_REL);
+        assert_eq!(cli.len(), 3);
+        assert_eq!(cli[0].path, ATLAS_GITIGNORE_REL);
+        assert_eq!(cli[1].path, AGENTS_FILE);
+        assert_eq!(cli[2].path, SKILL_REL);
 
         let all = plan_init_mode(repo.path(), InitMode::All);
-        assert_eq!(all.len(), 1 + GIT_HOOK_NAMES.len() + 1 + 2);
+        assert_eq!(all.len(), 1 + GIT_HOOK_NAMES.len() + 1 + 2 + 1);
     }
 
     #[test]
@@ -294,6 +335,7 @@ mod tests {
         assert!(!repo.path().join(MCP_ASSET_REL).exists());
         assert!(!repo.path().join(AGENTS_FILE).exists());
         assert!(!repo.path().join(SKILL_REL).exists());
+        assert!(!repo.path().join(ATLAS_GITIGNORE_REL).exists());
         assert!(!summary.touched().is_empty());
     }
 
@@ -342,6 +384,55 @@ mod tests {
         assert_eq!(
             fs::read_to_string(repo.path().join(MCP_ASSET_REL)).expect("content"),
             MCP_ASSET_CONTENT
+        );
+    }
+
+    #[test]
+    fn gitignore_asset_is_idempotent_and_preserves_user_edits() {
+        let repo = repo();
+        let first = apply_init_mode(repo.path(), InitMode::Mcp, false, false).expect("apply");
+        assert_eq!(
+            first
+                .files
+                .iter()
+                .find(|entry| entry.asset == "gitignore")
+                .map(|entry| entry.action.as_str()),
+            Some("create")
+        );
+        assert_eq!(
+            fs::read_to_string(repo.path().join(ATLAS_GITIGNORE_REL)).expect("gitignore"),
+            ATLAS_GITIGNORE_CONTENT
+        );
+
+        let second = apply_init_mode(repo.path(), InitMode::Mcp, false, false).expect("re-apply");
+        assert_eq!(
+            second
+                .files
+                .iter()
+                .find(|entry| entry.asset == "gitignore")
+                .map(|entry| entry.action.as_str()),
+            Some("unchanged")
+        );
+
+        fs::write(repo.path().join(ATLAS_GITIGNORE_REL), "# user policy\n").expect("user edit");
+        let third = apply_init_mode(repo.path(), InitMode::Mcp, false, false).expect("re-apply");
+        assert_eq!(
+            third
+                .files
+                .iter()
+                .find(|entry| entry.asset == "gitignore")
+                .map(|entry| entry.action.as_str()),
+            Some("skipped")
+        );
+        assert_eq!(
+            fs::read_to_string(repo.path().join(ATLAS_GITIGNORE_REL)).expect("gitignore"),
+            "# user policy\n"
+        );
+
+        apply_init_mode(repo.path(), InitMode::Mcp, false, true).expect("forced apply");
+        assert_eq!(
+            fs::read_to_string(repo.path().join(ATLAS_GITIGNORE_REL)).expect("gitignore"),
+            ATLAS_GITIGNORE_CONTENT
         );
     }
 

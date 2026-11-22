@@ -27,8 +27,11 @@ Atlas scans repository code, builds graph structure, stores it in SQLite, and se
 Code graph facts stay in `.atlas/worldtree.db`. Durable continuity records are
 Markdown truth files under `.atlas/`:
 
-- committed: `memories/`, `decisions/`, `feedback/`, `memoir/`, `overview/`;
-- local-only: `sessions/`, `tasks/`, `experience/`, `artifacts/`.
+- committed: `memories/`, `decisions/`, `feedback/`, `memoir/`, `overview/`, `artifacts/`;
+- local-only: `sessions/`, `tasks/`, `experience/`.
+
+Tracking is governed by `.atlas/.gitignore`, written idempotently by
+`atlas init` and `atlas install`; the root `.gitignore` needs no `.atlas` rules.
 
 `session.db` and `context.db` are derived, rebuildable indexes. Recall and
 decay keep access bookkeeping in a derived index and never rewrite memory

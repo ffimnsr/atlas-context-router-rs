@@ -47,20 +47,6 @@ coverage/
 # Ignore logs
 *.log
 
-# Atlas local state stays untracked except durable markdown continuity records
-.atlas/*
-!.atlas/memories/
-!.atlas/decisions/
-!.atlas/feedback/
-!.atlas/memoir/
-!.atlas/overview/
-!.atlas/memories/**/*.md
-!.atlas/decisions/**/*.md
-!.atlas/feedback/**/*.md
-!.atlas/memoir/**/*.md
-!.atlas/overview/**/*.md
-
-
 .patches
 
 # GH Run artifacts

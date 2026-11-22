@@ -707,6 +707,13 @@ fn init_creates_graph_content_and_session_databases() {
         session_db.display()
     );
 
+    let gitignore = repo.path().join(".atlas").join(".gitignore");
+    assert!(
+        gitignore.is_file(),
+        "state-dir git policy missing: {}",
+        gitignore.display()
+    );
+
     assert_eq!(json_path(&data["db_path"]), canonical_path(&graph_db));
     assert_eq!(
         json_path(&data["content_db_path"]),

@@ -4,6 +4,7 @@ use std::path::Path;
 use anyhow::Result;
 
 use super::agent_skill::SKILL_REL;
+use super::gitignore::{ATLAS_GITIGNORE_MARKER, ATLAS_GITIGNORE_REL};
 use super::hook_runner::ATLAS_HOOK_RUNNER_REL;
 use super::instructions::{AGENTS_FILE, INSTRUCTIONS_END_MARKER, INSTRUCTIONS_MARKER};
 use super::{InstallValidation, git_hooks};
@@ -41,6 +42,11 @@ pub(super) fn validate_install(
         checks.push(validate_skill(&repo_root.join(SKILL_REL)));
     }
 
+    // State-dir git policy applies regardless of mode flags.
+    checks.push(validate_atlas_gitignore(
+        &repo_root.join(ATLAS_GITIGNORE_REL),
+    ));
+
     Ok(checks)
 }
 
@@ -71,6 +77,21 @@ fn validate_git_hook(path: &Path, hook_name: &str) -> InstallValidation {
             check: format!("git_hook_{hook_name}"),
             ok: false,
             detail: format!("{} (missing)", path.display()),
+        },
+    }
+}
+
+fn validate_atlas_gitignore(path: &Path) -> InstallValidation {
+    match fs::read_to_string(path) {
+        Ok(text) => InstallValidation {
+            check: "atlas_gitignore".to_owned(),
+            ok: text.contains(ATLAS_GITIGNORE_MARKER),
+            detail: ATLAS_GITIGNORE_REL.to_owned(),
+        },
+        Err(_) => InstallValidation {
+            check: "atlas_gitignore".to_owned(),
+            ok: false,
+            detail: format!("{ATLAS_GITIGNORE_REL} (missing)"),
         },
     }
 }

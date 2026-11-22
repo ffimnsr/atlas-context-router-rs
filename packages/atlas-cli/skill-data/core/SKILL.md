@@ -127,7 +127,7 @@ Use the shortest chain that answers the question, then stop. Each pattern below 
 - Recon before writing steps with `query_graph` or `resolve_symbol`, `get_context`, and `cross_file_links` or `concept_clusters` for area boundaries. Do not write steps against symbols you have not resolved or files you have not located.
 - Persist the full plan with `save_context_artifact` (`source_type: "plan"`, `content_type: "text/markdown"`) using a stable label. Keep the returned `source_id` and save the rationale, open questions, and verification steps, not only the task list.
 - Persist a durable pointer with `memory_store`: `scope: "project"`, task `topic`, the artifact `source_id`, and honest `importance`. Keep the memory body short; the artifact carries the full plan.
-- Artifacts live under `.atlas/artifacts/` and are gitignored; project memories live under `.atlas/memories/` and are committed. Use artifacts for verbatim plan bodies, memories for the cross-session pointer and summary.
+- Artifacts live under `.atlas/artifacts/` and are committed to the repo alongside project memories under `.atlas/memories/`. Use artifacts for verbatim plan bodies, memories for the cross-session pointer and summary.
 - Without an explicit `session_id`, artifacts attach to the derived MCP session. Recall them from another session with `cross_session_search` or through the memory pointer.
 - After the plan changes, save a new artifact and update the memory pointer. If the plan is abandoned or superseded, record that outcome in a new `decision` or `handoff` artifact so the next session does not follow the stale plan.
 - Before the final response, `record_session_event` `stop` (or `session-end`) and `compact_session` when the session is long.

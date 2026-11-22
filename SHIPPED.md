@@ -7,8 +7,9 @@ For active backlog, see ISSUES.md.
 ## Markdown Continuity Storage
 
 - Durable continuity truth lives in Markdown under `.atlas/`; SQLite is a derived, rebuildable index.
-- Committed families: `memories/`, `decisions/`, `feedback/`, `memoir/`, `overview/`.
-- Local-only families: `sessions/` (event ledgers and resume snapshots), `tasks/`, `experience/`, `artifacts/`.
+- Committed families: `memories/`, `decisions/`, `feedback/`, `memoir/`, `overview/`, `artifacts/`.
+- Local-only families: `sessions/` (event ledgers and resume snapshots), `tasks/`, `experience/`.
+- `.atlas/.gitignore` governs state tracking; `atlas init` and `atlas install` write it idempotently, and the root `.gitignore` carries no `.atlas` rules.
 - Memory map: frontmatter `tags` and `links`, with the memoir controlled relation vocabulary plus `supersedes`.
 - Read-path purity: access counts, `last_accessed_at`, and decay scores live in a derived `memory_access` index, so recall never rewrites truth files.
 - Active memory records are derived from `supersedes` links; consolidation writes only the new consolidated file.
