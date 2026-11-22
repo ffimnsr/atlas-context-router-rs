@@ -1,6 +1,6 @@
 [package]
 name = "atlas-contentstore"
-version = "1.7.14"
+version = "1.7.15"
 license.workspace = true
 rust-version.workspace = true
 edition = "2024"
@@ -11,7 +11,7 @@ publish = false
 atlas-core.workspace = true
 atlas-db-utils.workspace = true
 atlas-store-markdown.workspace = true
-atlas-repo = { path = "../atlas-repo", version = "1.7.14" }
+atlas-repo = { path = "../atlas-repo", version = "1.7.15" }
 camino.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

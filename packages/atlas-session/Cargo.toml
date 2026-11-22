@@ -1,6 +1,6 @@
 [package]
 name = "atlas-session"
-version = "1.7.14"
+version = "1.7.15"
 license.workspace = true
 rust-version.workspace = true
 edition = "2024"
@@ -10,7 +10,7 @@ publish = false
 [dependencies]
 atlas-core.workspace = true
 atlas-db-utils.workspace = true
-atlas-repo = { path = "../atlas-repo" , version = "1.7.14"}
+atlas-repo = { path = "../atlas-repo" , version = "1.7.15"}
 atlas-store-markdown.workspace = true
 camino.workspace = true
 rusqlite.workspace = true

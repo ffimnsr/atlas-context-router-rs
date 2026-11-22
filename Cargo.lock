@@ -115,7 +115,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-adapters"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "anyhow",
  "atlas-contentstore",
@@ -135,7 +135,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-agent-events"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "anyhow",
  "atlas-adapters",
@@ -158,7 +158,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-cli"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "anyhow",
  "atlas-adapters",
@@ -204,7 +204,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-contentstore"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "atlas-core",
  "atlas-db-utils",
@@ -224,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-contextsave"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "atlas-contentstore",
  "atlas-core",
@@ -237,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-core"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "serde",
  "serde_json",
@@ -247,7 +247,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-db-utils"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "atlas-core",
  "rusqlite",
@@ -255,7 +255,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-docs"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "anyhow",
  "atlas-core",
@@ -269,7 +269,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-engine"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "anyhow",
  "atlas-adapters",
@@ -301,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-history"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "anyhow",
  "atlas-core",
@@ -320,7 +320,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-impact"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "atlas-core",
  "serde_json",
@@ -328,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-mcp"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "anyhow",
  "atlas-adapters",
@@ -377,7 +377,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-metrics"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "serde",
  "serde_json",
@@ -385,7 +385,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-parser"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "anyhow",
  "atlas-core",
@@ -421,7 +421,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-reasoning"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "atlas-core",
  "atlas-engine",
@@ -439,7 +439,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-refactor"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "atlas-core",
  "atlas-parser",
@@ -456,7 +456,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-repo"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "anyhow",
  "atlas-core",
@@ -474,7 +474,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-review"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "atlas-adapters",
  "atlas-contentstore",
@@ -499,7 +499,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-search"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "anyhow",
  "atlas-core",
@@ -520,7 +520,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-session"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "atlas-core",
  "atlas-db-utils",
@@ -541,7 +541,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-store-markdown"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "fs2",
  "sha2 0.10.9",
@@ -552,7 +552,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-store-sqlite"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "anyhow",
  "atlas-core",
@@ -575,7 +575,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-token-count"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "anyhow",
  "atlas-tokenizer",
@@ -586,7 +586,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-tokenizer"
-version = "1.7.14"
+version = "1.7.15"
 dependencies = [
  "base64 0.22.1",
  "criterion",

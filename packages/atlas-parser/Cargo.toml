@@ -1,6 +1,6 @@
 [package]
 name = "atlas-parser"
-version = "1.7.14"
+version = "1.7.15"
 license.workspace = true
 rust-version.workspace = true
 edition = "2024"
@@ -10,7 +10,7 @@ publish = false
 [dependencies]
 atlas-core.workspace = true
 atlas-metrics.workspace = true
-atlas-repo = { path = "../atlas-repo", version = "1.7.14" }
+atlas-repo = { path = "../atlas-repo", version = "1.7.15" }
 tracing.workspace = true
 anyhow.workspace = true
 serde.workspace = true

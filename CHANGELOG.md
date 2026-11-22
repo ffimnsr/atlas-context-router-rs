@@ -40,6 +40,35 @@ Versioning policy may evolve while Atlas is still moving quickly, but release no
 - drop the unused `windows-sys` target dependency from `atlas-cli` and the stale `#[allow(deprecated)]` around `std::env::home_dir`; allow `Zlib` in `deny.toml` for `foldhash` 0.2 and remove the obsolete `number_prefix` advisory ignore now that `indicatif` 0.18 no longer pulls it
 - extract the Unix stdio broker (daemon attach/spawn, stdio relay, reconnect loop) and its signal handling into `commands/platform/broker.rs` / `commands/platform/broker_signals.rs`, bringing `platform.rs` back under the 1K LOC threshold
 
+## 1.7.15 - 2026-11-22
+
+### Features
+
+- port tiktoken and switch context accounting default (`2aa41a8`)
+- upgrade rmcp to 3.11 and fix MCP transport lifecycle (`58f632c`)
+- ship .atlas/.gitignore state policy via init/install (`e068f13`)
+- mandate change traceability for every behavior change (`cddaa14`)
+- serve seven failure-triage and lifecycle workflows (`db9c80e`)
+- migrate Go parser to query-backed extraction (`c4a0984`)
+- migrate Go parser to query-backed extraction (`f12c9b2`)
+
+
+### Fixes
+
+- require a digit in base64-like redaction heuristic (`e1d9082`)
+- find out io::copy probability and fixes (`728987a`)
+
+
+### Maintenance
+
+- bump version of tokenizer (`5764170`)
+
+
+### Other Changes
+
+- add skill to ship issues (`d2b0379`)
+
+
 ## 1.7.14 - 2026-11-21
 
 ### Features
