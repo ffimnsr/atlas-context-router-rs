@@ -541,6 +541,7 @@ For active backlog, see ISSUES.md.
 - `read_saved_context` returns non-empty content with a strictly advancing offset even when the requested page is smaller than one chunk, clips at UTF-8-safe boundaries, and flags the clipped chunk.
 - Saved structured payloads round-trip byte-for-byte: the verbatim payload is persisted at save time and served back exactly as stored, instead of being reconstructed lossily from search chunks.
 - `save_context_artifact` reports when automatic redaction rewrote a payload so silent rewrites are visible, and its inline-versus-stored size threshold is documented accurately.
+- Base64-like redaction requires at least one digit, so digit-free 40+-character runs (repo paths such as `packages/atlas-cli/skill-data/core/SKILL.md`) survive text and JSON redaction while real base64 secrets stay redacted; prefixed and pure-hex secret detection are unchanged.
 - `search_saved_context` no longer writes a decision memory per query, so wake-up and decision recall surface real decisions instead of lookup bookkeeping.
 
 ## Graph Traversal and Impact Correctness

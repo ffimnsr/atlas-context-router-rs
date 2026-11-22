@@ -24,6 +24,7 @@ Versioning policy may evolve while Atlas is still moving quickly, but release no
 - publish `serve-daemon` runtime metadata only after the socket transport installs shutdown signals, closing a startup race where a fast SIGTERM killed the daemon with the default disposition and failed `serve_daemon_clears_runtime_state_on_sigterm`
 - install broker SIGINT/SIGTERM handling before lock acquisition and daemon startup so a signal during `atlas serve` startup exits cleanly instead of dying by default disposition; the relay registers its socket for interruption and the SIGINT test no longer pads with a fixed sleep
 - make the broker daemon spawn helper shared between the Unix and Windows brokers so `win_spawn_and_wait_for_daemon` resolves it; the helper was `#[cfg(unix)]` while already being called from Windows-gated code
+- require at least one digit in the base64-like redaction heuristic so long digit-free runs such as `packages/atlas-cli/skill-data/core/SKILL.md` survive artifact redaction while real base64 secrets (which virtually always contain digits) stay redacted
 
 ### Maintenance
 

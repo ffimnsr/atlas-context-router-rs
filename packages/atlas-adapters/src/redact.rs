@@ -142,7 +142,8 @@ fn is_secret_key(key: &str, rules: &RedactionRules) -> bool {
 /// Heuristics (applied in order; any match returns true):
 /// 1. Starts with a well-known token prefix.
 /// 2. Long opaque hex string (≥ configured chars of hex digits only).
-/// 3. Long base64-ish string (≥ configured chars, no spaces, only b64 chars).
+/// 3. Long base64-ish string (≥ configured chars, no spaces, only b64 chars,
+///    and at least one digit).
 fn looks_like_token(value: &str, rules: &RedactionRules) -> bool {
     if value.len() < rules.token_min_len {
         return false;
@@ -158,6 +159,11 @@ fn looks_like_token(value: &str, rules: &RedactionRules) -> bool {
     if value.len() >= rules.hex_secret_min_len && value.chars().all(|c| c.is_ascii_hexdigit()) {
         return true;
     }
+    // Require at least one digit so long, symbol-bearing but digit-free runs
+    // (repo paths such as `packages/atlas-cli/skill-data/core/SKILL`) stay
+    // readable in artifacts and event text; real base64 secrets of this
+    // length virtually always contain digits, and prefixed or pure-hex
+    // secrets are caught by the branches above.
     if value.len() >= rules.base64_secret_min_len
         && !value.contains(' ')
         && value
@@ -166,6 +172,7 @@ fn looks_like_token(value: &str, rules: &RedactionRules) -> bool {
         && value
             .chars()
             .any(|c| c.is_ascii_digit() || matches!(c, '+' | '/' | '=' | '-' | '_'))
+        && value.chars().any(|c| c.is_ascii_digit())
     {
         return true;
     }
@@ -360,6 +367,33 @@ mod tests {
             out["short_hex"], "deadbeef",
             "short hex should be preserved"
         );
+    }
+
+    #[test]
+    fn base64_redaction_requires_a_digit() {
+        // 40 chars, base64 alphabet, no digits: a repo path, not a secret.
+        let path = "packages/atlas-cli/skill-data/core/SKILL";
+        assert_eq!(path.len(), 40);
+        let text = format!("see `{path}.md` for the rule");
+        let out = redact_text(&text);
+        assert!(
+            out.contains(path),
+            "digit-free path must survive text redaction"
+        );
+
+        let payload = json!({ "value": path });
+        let out = redact_payload(payload);
+        assert_eq!(
+            out["value"], path,
+            "digit-free path must survive JSON redaction"
+        );
+
+        // Same shape with a digit still redacts: real base64 secrets carry
+        // digits far more often than file paths do.
+        let secret = "c2VjcmV0LXZhbHVlLWluYmFzZTY0LTEyMzQ1Njc4OTA=";
+        let out = redact_text(&format!("boundary {secret} end"));
+        assert!(out.contains(REDACTED), "digit-bearing b64 must be redacted");
+        assert!(!out.contains(secret));
     }
 
     #[test]
