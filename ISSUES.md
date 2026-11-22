@@ -39,7 +39,7 @@ For terms that are easy to misread in this document:
 
 ## Roadmap Layout
 
-- Remaining focused follow-up patches: Shared Parser Query Migration Patch remainder and Minimal-Context Escalation Metadata Patch. The retrieval follow-up, runtime classification, reachability, SQLite index audit, tokenizer, and markdown continuity storage patches are shipped; see SHIPPED.md. Runtime policy surface is deferred.
+- Remaining focused follow-up patches: Minimal-Context Escalation Metadata Patch. The retrieval follow-up, runtime classification, reachability, SQLite index audit, tokenizer, markdown continuity storage, and shared parser query migration patches are shipped; see SHIPPED.md. Runtime policy surface is deferred.
 
 ---
 
@@ -47,20 +47,6 @@ For terms that are easy to misread in this document:
 
 Use these patch sections for focused improvements that cut across existing roadmap phases without rewriting phase scope.
 
-### Shared Parser Query Migration Patch
-
-Query-backed extraction shipped for C, C++, C#, Java, Scala, JavaScript, TypeScript, Python, Ruby, PHP, Bash, HTML, and CSS. See SHIPPED.md for the shared query contract and language coverage. JSON, TOML, and Markdown are documented manual exceptions.
-
-Remaining:
-
-- [ ] migrate the Go parser to `packages/atlas-parser/queries/go.scm` with shared `@atlas.*` captures
-- [ ] document why Go remains manual if query migration cannot preserve current qualified names, receiver/call behavior, or golden outputs
-- [ ] confirm every non-Rust parser has either an Atlas-owned query file or a documented reason to remain manual
-- [ ] run `cargo test -p atlas-parser` after the final migration batch
-- [ ] run `cargo clippy --workspace --all-targets --all-features -- -D warnings` after the final migration batch
-- [ ] run `cargo fmt --all` after the final migration batch
-
----
 
 ### Minimal-Context Escalation Metadata Patch
 

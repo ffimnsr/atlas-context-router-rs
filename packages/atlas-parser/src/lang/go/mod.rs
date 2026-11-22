@@ -6,6 +6,7 @@ use crate::traits::{LangParser, ParseContext};
 
 mod calls;
 mod declarations;
+mod facts;
 
 #[cfg(test)]
 mod tests;
@@ -15,6 +16,7 @@ use declarations::{
     find_package, package_node, visit_function, visit_imports, visit_method, visit_type_decl,
     visit_value_decl,
 };
+use facts::{GoSyntaxFacts, node_key};
 
 // SQ1 migration checklist:
 // - manual extraction below owns package, declaration, import, call-edge, scope, and qualified-name semantics
@@ -46,7 +48,9 @@ impl LangParser for GoParser {
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
-            let package = find_package(root, ctx.source);
+            let facts = GoSyntaxFacts::extract(root, ctx.source)
+                .unwrap_or_else(|err| panic!("go query extraction failed: {err}"));
+            let package = find_package(root, ctx.source, &facts);
             let package_qn = format!("{}::package::{}", ctx.rel_path, package.name);
 
             nodes.push(package_node(
@@ -65,47 +69,40 @@ impl LangParser for GoParser {
 
             let mut cursor = root.walk();
             for child in root.children(&mut cursor) {
-                match child.kind() {
-                    "function_declaration" => {
-                        visit_function(child, ctx, &package_qn, &mut nodes, &mut edges);
-                    }
-                    "method_declaration" => {
-                        visit_method(child, ctx, &package_qn, &mut nodes, &mut edges);
-                    }
-                    "type_declaration" => {
-                        visit_type_decl(child, ctx, &package_qn, &mut nodes, &mut edges);
-                    }
-                    "import_declaration" => {
-                        visit_imports(child, ctx, &package_qn, &mut nodes, &mut edges);
-                    }
-                    "const_declaration" => {
-                        visit_value_decl(
-                            child,
-                            ctx,
-                            &package_qn,
-                            NodeKind::Constant,
-                            "const",
-                            &mut nodes,
-                            &mut edges,
-                        );
-                    }
-                    "var_declaration" => {
-                        visit_value_decl(
-                            child,
-                            ctx,
-                            &package_qn,
-                            NodeKind::Variable,
-                            "var",
-                            &mut nodes,
-                            &mut edges,
-                        );
-                    }
-                    _ => {}
+                let key = node_key(child);
+                if facts.functions.contains(&key) {
+                    visit_function(child, ctx, &package_qn, &mut nodes, &mut edges);
+                } else if facts.methods.contains(&key) {
+                    visit_method(child, ctx, &package_qn, &mut nodes, &mut edges);
+                } else if facts.types.contains(&key) {
+                    visit_type_decl(child, ctx, &package_qn, &mut nodes, &mut edges);
+                } else if facts.imports.contains(&key) {
+                    visit_imports(child, ctx, &package_qn, &mut nodes, &mut edges);
+                } else if facts.constants.contains(&key) {
+                    visit_value_decl(
+                        child,
+                        ctx,
+                        &package_qn,
+                        NodeKind::Constant,
+                        "const",
+                        &mut nodes,
+                        &mut edges,
+                    );
+                } else if facts.variables.contains(&key) {
+                    visit_value_decl(
+                        child,
+                        ctx,
+                        &package_qn,
+                        NodeKind::Variable,
+                        "var",
+                        &mut nodes,
+                        &mut edges,
+                    );
                 }
             }
 
             // Second pass: same-file call resolution.
-            let mut call_edges = resolve_go_calls(root, ctx.source, ctx.rel_path, &nodes);
+            let mut call_edges = resolve_go_calls(root, ctx.source, ctx.rel_path, &nodes, &facts);
             edges.append(&mut call_edges);
         }
 

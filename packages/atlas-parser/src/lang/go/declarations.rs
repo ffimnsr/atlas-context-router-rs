@@ -6,6 +6,8 @@ use crate::ast_helpers::{end_line, field_text, node_text, start_line};
 use crate::lang::common::contains_edge;
 use crate::traits::ParseContext;
 
+use super::facts::{GoSyntaxFacts, node_key};
+
 // SQ1 migration checklist:
 // - manual extraction below owns Go declaration, import, package, scope, and qualified-name semantics
 // - keep parser API and graph output unchanged while query captures replace syntax-node walks
@@ -46,10 +48,10 @@ pub(super) fn package_node(
     }
 }
 
-pub(super) fn find_package(root: TsNode<'_>, source: &[u8]) -> GoPackage {
+pub(super) fn find_package(root: TsNode<'_>, source: &[u8], facts: &GoSyntaxFacts) -> GoPackage {
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
-        if child.kind() == "package_clause" {
+        if facts.modules.contains(&node_key(child)) {
             // package_clause: `package <identifier>`
             let mut cc = child.walk();
             for c in child.children(&mut cc) {

@@ -381,3 +381,33 @@ func (f Foo) B() {}
         pf.edges
     );
 }
+
+#[test]
+fn query_extracts_go_syntax_facts() {
+    let src = r#"package main
+import "fmt"
+type Foo struct{}
+const A = 1
+var b string
+func helper() {}
+func (f *Foo) Baz() { alias := f; alias.Baz(); helper() }"#;
+    let p = GoParser;
+    let (_, tree) = p.parse(&ParseContext {
+        rel_path: "cmd/main.go",
+        file_hash: "cafebabe",
+        source: src.as_bytes(),
+        old_tree: None,
+    });
+    let tree = tree.expect("go fixture should parse");
+    let root = tree.root_node();
+    let facts = super::facts::GoSyntaxFacts::extract(root, src.as_bytes())
+        .expect("go query extraction should succeed");
+    assert_eq!(facts.modules.len(), 1);
+    assert_eq!(facts.functions.len(), 1);
+    assert_eq!(facts.methods.len(), 1);
+    assert_eq!(facts.types.len(), 1);
+    assert_eq!(facts.imports.len(), 1);
+    assert_eq!(facts.constants.len(), 1);
+    assert_eq!(facts.variables.len(), 2);
+    assert_eq!(facts.calls.len(), 2);
+}

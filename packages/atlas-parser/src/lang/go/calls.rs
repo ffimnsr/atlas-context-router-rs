@@ -7,6 +7,7 @@ use crate::ast_helpers::{field_text, node_text, start_line};
 use crate::lang::common::{call_target, caller_simple_name};
 
 use super::declarations::{find_descendant_kind, method_receiver, normalize_receiver_type};
+use super::facts::{GoSyntaxFacts, node_key};
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -24,11 +25,12 @@ pub(super) fn resolve_go_calls(
     source: &[u8],
     rel_path: &str,
     nodes: &[Node],
+    facts: &GoSyntaxFacts,
 ) -> Vec<Edge> {
     let mut functions: HashMap<String, String> = HashMap::new();
     let mut methods: HashMap<String, Vec<(String, String)>> = HashMap::new();
     let mut return_types: HashMap<String, String> = HashMap::new();
-    let struct_types = collect_struct_types(root, source);
+    let struct_types = collect_struct_types(root, source, facts);
     for n in nodes {
         match n.kind {
             NodeKind::Function | NodeKind::Test => {
@@ -63,6 +65,7 @@ pub(super) fn resolve_go_calls(
         &methods,
         &struct_types,
         &return_types,
+        facts,
         &mut scope,
         &mut edges,
     );
@@ -75,11 +78,15 @@ struct StructTypeInfo {
     embedded_types: Vec<String>,
 }
 
-fn collect_struct_types(root: TsNode<'_>, source: &[u8]) -> HashMap<String, StructTypeInfo> {
+fn collect_struct_types(
+    root: TsNode<'_>,
+    source: &[u8],
+    facts: &GoSyntaxFacts,
+) -> HashMap<String, StructTypeInfo> {
     let mut struct_types = HashMap::new();
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
-        if child.kind() != "type_declaration" {
+        if !facts.types.contains(&node_key(child)) {
             continue;
         }
         let mut type_cursor = child.walk();
@@ -185,137 +192,135 @@ fn walk_go_calls<'a>(
     methods: &HashMap<String, Vec<(String, String)>>,
     struct_types: &HashMap<String, StructTypeInfo>,
     return_types: &HashMap<String, String>,
+    facts: &GoSyntaxFacts,
     scope: &mut Vec<CallableScope>,
     edges: &mut Vec<Edge>,
 ) {
-    match node.kind() {
-        "function_declaration" | "method_declaration" => {
-            let pushed = if let Some(name_node) = node.child_by_field_name("name") {
-                let name = node_text(name_node, source);
-                if let Some(qn) = functions.get(name).cloned().or_else(|| {
-                    methods.get(name).and_then(|candidates| {
-                        if candidates.len() == 1 {
-                            Some(candidates[0].1.clone())
-                        } else {
-                            None
-                        }
-                    })
-                }) {
-                    let (receiver_name, receiver_type) = if node.kind() == "method_declaration" {
-                        method_receiver(node, source)
+    let key = node_key(node);
+    if facts.functions.contains(&key) || facts.methods.contains(&key) {
+        let pushed = if let Some(name_node) = node.child_by_field_name("name") {
+            let name = node_text(name_node, source);
+            if let Some(qn) = functions.get(name).cloned().or_else(|| {
+                methods.get(name).and_then(|candidates| {
+                    if candidates.len() == 1 {
+                        Some(candidates[0].1.clone())
                     } else {
-                        (None, String::new())
-                    };
-                    let mut local_types = node
-                        .child_by_field_name("parameters")
-                        .map(|parameters| collect_parameter_types(parameters, source))
-                        .unwrap_or_default();
-                    if let (Some(receiver_name), false) =
-                        (receiver_name.as_ref(), receiver_type.is_empty())
-                    {
-                        local_types.insert(receiver_name.clone(), receiver_type.clone());
+                        None
                     }
-                    scope.push(CallableScope {
-                        qn,
-                        receiver_type: (!receiver_type.is_empty()).then_some(receiver_type),
-                        local_types,
-                    });
-                    true
+                })
+            }) {
+                let (receiver_name, receiver_type) = if facts.methods.contains(&key) {
+                    method_receiver(node, source)
                 } else {
-                    false
+                    (None, String::new())
+                };
+                let mut local_types = node
+                    .child_by_field_name("parameters")
+                    .map(|parameters| collect_parameter_types(parameters, source))
+                    .unwrap_or_default();
+                if let (Some(receiver_name), false) =
+                    (receiver_name.as_ref(), receiver_type.is_empty())
+                {
+                    local_types.insert(receiver_name.clone(), receiver_type.clone());
                 }
+                scope.push(CallableScope {
+                    qn,
+                    receiver_type: (!receiver_type.is_empty()).then_some(receiver_type),
+                    local_types,
+                });
+                true
             } else {
                 false
-            };
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                walk_go_calls(
-                    child,
+            }
+        } else {
+            false
+        };
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            walk_go_calls(
+                child,
+                source,
+                rel_path,
+                functions,
+                methods,
+                struct_types,
+                return_types,
+                facts,
+                scope,
+                edges,
+            );
+        }
+        if pushed {
+            scope.pop();
+        }
+        return;
+    }
+    if facts.variables.contains(&key) {
+        if let Some(caller_scope) = scope.last_mut() {
+            record_local_types(
+                node,
+                source,
+                functions,
+                methods,
+                struct_types,
+                return_types,
+                caller_scope,
+            );
+        }
+    } else if facts.calls.contains(&key)
+        && let Some(caller_scope) = scope.last().cloned()
+    {
+        // In Go, call_expression.function can be identifier or selector_expression.
+        let function = node.child_by_field_name("function");
+        let called = function
+            .and_then(|f| call_target(f, source, "selector_expression", "field", "operand"));
+        if let Some((text, name, receiver)) = called {
+            let receiver_type = function.and_then(|function_node| {
+                selector_receiver_type(
+                    function_node,
                     source,
-                    rel_path,
                     functions,
                     methods,
                     struct_types,
                     return_types,
-                    scope,
-                    edges,
-                );
-            }
-            if pushed {
-                scope.pop();
-            }
-            return;
-        }
-        "var_declaration" | "short_var_declaration" | "assignment_statement" => {
-            if let Some(caller_scope) = scope.last_mut() {
-                record_local_types(
-                    node,
-                    source,
-                    functions,
-                    methods,
-                    struct_types,
-                    return_types,
-                    caller_scope,
-                );
-            }
-        }
-        "call_expression" => {
-            if let Some(caller_scope) = scope.last().cloned() {
-                // In Go, call_expression.function can be identifier or selector_expression.
-                let function = node.child_by_field_name("function");
-                let called = function.and_then(|f| {
-                    call_target(f, source, "selector_expression", "field", "operand")
-                });
-                if let Some((text, name, receiver)) = called {
-                    let receiver_type = function.and_then(|function_node| {
-                        selector_receiver_type(
-                            function_node,
-                            source,
-                            functions,
-                            methods,
-                            struct_types,
-                            return_types,
-                            &caller_scope,
-                        )
-                    });
-                    if let Some(callee_qn) = resolve_callable(
-                        &caller_scope,
-                        &name,
-                        receiver.as_deref(),
-                        receiver_type.as_deref(),
-                        functions,
-                        methods,
-                        struct_types,
-                    ) {
-                        if callee_qn == caller_scope.qn {
-                            return;
-                        }
-                        edges.push(go_call_edge(
-                            &caller_scope.qn,
-                            callee_qn,
-                            rel_path,
-                            start_line(node),
-                            &text,
-                            receiver.as_deref(),
-                            None,
-                            true,
-                        ));
-                    } else if !text.is_empty() {
-                        edges.push(go_call_edge(
-                            &caller_scope.qn,
-                            &text,
-                            rel_path,
-                            start_line(node),
-                            &text,
-                            receiver.as_deref(),
-                            receiver_type.as_deref(),
-                            false,
-                        ));
-                    }
+                    &caller_scope,
+                )
+            });
+            if let Some(callee_qn) = resolve_callable(
+                &caller_scope,
+                &name,
+                receiver.as_deref(),
+                receiver_type.as_deref(),
+                functions,
+                methods,
+                struct_types,
+            ) {
+                if callee_qn == caller_scope.qn {
+                    return;
                 }
+                edges.push(go_call_edge(
+                    &caller_scope.qn,
+                    callee_qn,
+                    rel_path,
+                    start_line(node),
+                    &text,
+                    receiver.as_deref(),
+                    None,
+                    true,
+                ));
+            } else if !text.is_empty() {
+                edges.push(go_call_edge(
+                    &caller_scope.qn,
+                    &text,
+                    rel_path,
+                    start_line(node),
+                    &text,
+                    receiver.as_deref(),
+                    receiver_type.as_deref(),
+                    false,
+                ));
             }
         }
-        _ => {}
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -327,6 +332,7 @@ fn walk_go_calls<'a>(
             methods,
             struct_types,
             return_types,
+            facts,
             scope,
             edges,
         );
