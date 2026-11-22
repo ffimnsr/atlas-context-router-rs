@@ -622,7 +622,7 @@ For active backlog, see ISSUES.md.
 
 - Graph-backed MCP call latency is bounded: the readiness gate uses a time-cached lightweight integrity probe instead of running full integrity checks and metadata scans on every call, and read paths no longer mutate the database.
 - Protocol negotiation is verified spec-correct for the current MCP revision with an automated negotiation test.
-- Serve-broker session relay is deterministic end to end: the broker stdout relay forwards daemon responses through an explicit chunk loop, and the daemon readiness handshake uses a bounded shutdown-aware window instead of a fixed short deadline, so pipelined sessions never stall with responses written but never forwarded.
+- Serve-broker session relay is deterministic end to end: the broker stdout relay forwards daemon responses through an explicit chunk loop, because the bulk-copy helper's Linux kernel-copy specialization splices the socket straight into the stdout pipe and stalls nondeterministically while responses sit written-but-unread; the daemon readiness handshake also uses a bounded shutdown-aware window instead of a fixed short deadline.
 - JSON-RPC harness sessions keep stdin open until every requested response id is observed before signaling EOF, so the daemon never cancels in-flight tool calls mid-session; assertion failures report the seen ids plus the broker stderr tail for triage.
 - Quality-gate fixture repos drop through a guard that kills their MCP daemons even when a test panics, so failing serve tests no longer leak `serve-daemon` processes that accumulate across runs and poison later ones.
 

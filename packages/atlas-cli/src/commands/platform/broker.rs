@@ -222,9 +222,10 @@ fn relay_stdio(
 
     let stdout = io::stdout();
     let mut output = stdout.lock();
-    // Explicit chunk loop instead of io::copy: pipelined stdio sessions
-    // stalled inside io::copy while daemon responses sat written-but-unread
-    // on the socket; the manual loop forwards each chunk deterministically.
+    // Explicit chunk loop instead of io::copy: io::copy's Linux kernel-copy
+    // specialization (splice from the socket straight into the stdout pipe)
+    // stalls nondeterministically while daemon responses sit written-but-
+    // unread; plain read/write chunks forward every response deterministically.
     let stdout_result = (|| {
         let mut buffer = [0u8; 8192];
         loop {
