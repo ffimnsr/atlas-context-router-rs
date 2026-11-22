@@ -152,6 +152,9 @@ fn core_skill_documents_workflow_patterns() {
     assert!(GUIDE.contains("512 B"));
     assert!(GUIDE.contains("Artifacts live under `.atlas/artifacts/` and are committed"));
     assert!(GUIDE.contains("**Change traceability.**"));
+    assert!(GUIDE.contains("### Failure triage and lifecycle"));
+    assert!(GUIDE.contains("**Debug a failure.**"));
+    assert!(GUIDE.contains("**Run periodic hygiene.**"));
 }
 
 #[test]

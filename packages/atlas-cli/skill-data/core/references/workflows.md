@@ -189,6 +189,77 @@ atlas review-context --files src/lib.rs src/session.rs
 
 Add `--staged` to `detect-changes` or `explain-change` for staged diffs, or pass `--files` explicitly. Pass `--allow-stale` or `--allow-partial` only when a freshness warning is acceptable; otherwise refresh first.
 
+## Debug a failure
+
+Fix the root cause, not the symptom. Reproduce before changing anything.
+
+- Run the failing command or test and capture the exact error text and exit status; do not theorize before reproducing.
+- Locate the code path: `query_graph` or `resolve_symbol` on the failing symbol, `symbol_neighbors` for callers and test adjacency, then `get_context` for a bounded view. Read exact files only after Atlas names them.
+- Check prior incidents before debugging blind: `wake_up` surfaces recent runtime failures, and `memory_recall` plus `search_decisions` may already hold the same-symbol fix.
+- Isolate by evidence: bisect with git when the failure appeared after a range of edits, and use `detect_changes` to see what actually moved in the working tree.
+- Fix the root cause, add a regression test that fails without the fix, and rerun the narrowest suite, then the wider one.
+- Record `record_session_event` with `event: "tool-failure"` (or `error`) and save the fix with `save_context_artifact` `source_type: "error_resolved"`. A lesson that applies repo-wide goes to `memory_store` at `scope: "project"`.
+
+## Test alongside a change
+
+A behavior change is not done until a test pins it.
+
+- Find existing coverage before writing new tests: `symbol_neighbors` returns adjacent test nodes, `query_graph` accepts `tests for <symbol>`, and `get_context` with `tests: true` includes test nodes.
+- Write the regression test together with the fix, in the project's existing test layout; prefer per-test owned state over shared globals and fixed sleeps.
+- Escalate outward: the narrowest suite covering the change first, then the package, then the workspace only when the narrow runs pass.
+- A flaky test is a bug: root-cause scheduling, leaked state, or a real race. Never hide it behind retries or longer timeouts.
+- When the failure exposed a wrong Atlas verdict, correct future analysis with `feedback_record`.
+
+## Perform an upgrade or dependency bump
+
+Recon first, then bump, then prove nothing broke.
+
+- Map dependents before touching the manifest: `symbol_neighbors` or `get_impact_radius` on the code that consumes the dependency, plus `search_content` for version pins in config files.
+- Apply the bump, refresh the lockfile, and read the changelog or migration notes of the upgraded component for breaking edges.
+- Run the project's dependency audit when one exists (advisory scanner, license gate) and treat new advisories as blockers.
+- Sweep for breakage with `explain_change` or `get_review_context` on the changed files, then run fmt, clippy, and the test gates.
+- Close with the traceability pair: a `decision` or `handoff` artifact (what, why, verification) plus a project memory row tagged `upgrade`.
+
+## Prepare a release
+
+Atlas covers verification and the durable record; repository files stay repo policy.
+
+- Confirm the gates: fmt, clippy, tests, and any project-specific release checks are green in a clean working tree.
+- Confirm the paper trail: `memory_recall` by the change tags (`upgrade`, `feature`, `fix`) shows a traceability record for every behavior change in release scope.
+- Save one `decision` artifact for the release itself — scope, verified gates, notable changes, known caveats — with a project memory row pointing at it.
+- Changelog files, agent instruction files, and version constants belong to the repository's own policy; follow the repo's conventions when it has them, but this workflow neither writes nor mandates them.
+
+## Scaffold a new component
+
+Place it in the architecture before writing the first line.
+
+- Find the right layer with `analyze_architecture` and `infer_modules`, and confirm nothing already does the job with `find_duplicates` or `find_similar_functions` before creating new code.
+- Keep the surface minimal: prefer crate-internal exposure over public, composition over type hierarchies, and one responsibility per module.
+- New code goes in new files or modules rather than growing an already-large file; add unit tests alongside and integration tests for the end-to-end path.
+- After creating files, `update_graph` with the explicit file list so graph answers about the new area are current; export an `overview_export` packet if the area deserves durable docs.
+- Close with the traceability pair tagged `feature`.
+
+## Coordinate parallel agents
+
+Delegate only what can run alone; keep write scopes disjoint.
+
+- Delegate self-contained subtasks: each sub-agent gets full context (files, requirements, constraints) because it cannot see this conversation.
+- Split work so write scopes do not overlap; the parent coordinates and synthesizes rather than duplicating sub-agent work.
+- Each sub-agent runs the same Atlas loop — `wake_up` through `stop` — and records into its own `agent_id` partition when the host supports one.
+- Merge partitions only at deliberate merge points (`merge_agent_partitions` flags); read cross-partition state only then.
+- The parent closes with one combined `handoff` artifact plus a memory pointer so the next session sees the merged outcome.
+
+## Run periodic hygiene
+
+Tie upkeep to events, not to wall-clock schedules.
+
+- After a big landing or release: `overview_refresh_plan`, and apply only after reviewing stale, possibly stale, and orphaned subjects.
+- Under storage pressure: `get_context_stats` first, then `compact_session` for a long ledger or `purge_saved_context` for old or session-scoped artifacts.
+- On suspected corruption or after a hard crash: `doctor`, then `db_check` for orphan and dangling rows.
+- On memory drift: `atlas memory health` for noisy, duplicated, orphaned, or oversized rows, and `memory_recall` to confirm important topics stay visible.
+- When history snapshots grow: `atlas history prune` with an explicit retention policy.
+- Before repeating a questionable analysis verdict: `atlas feedback search` so a known false positive lowers confidence instead of being rediscovered.
+
 ## Inspect one symbol
 
 1. `query_graph` or `resolve_symbol` to land on the canonical qualified name.

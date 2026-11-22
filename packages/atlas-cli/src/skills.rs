@@ -522,6 +522,53 @@ mod tests {
     }
 
     #[test]
+    fn workflows_reference_documents_failure_and_lifecycle_sections() {
+        let content = render_reference("workflows").expect("workflows reference");
+        for heading in [
+            "## Debug a failure",
+            "## Test alongside a change",
+            "## Perform an upgrade or dependency bump",
+            "## Prepare a release",
+            "## Scaffold a new component",
+            "## Coordinate parallel agents",
+            "## Run periodic hygiene",
+        ] {
+            assert!(
+                content.contains(heading),
+                "workflows reference must expose {heading}"
+            );
+        }
+        assert!(content.contains("Fix the root cause, not the symptom"));
+        assert!(content.contains("A flaky test is a bug"));
+        assert!(content.contains("repository files stay repo policy"));
+        assert!(content.contains("keep write scopes disjoint"));
+        assert!(content.contains("Tie upkeep to events, not to wall-clock schedules"));
+    }
+
+    #[test]
+    fn core_guide_documents_failure_triage_and_lifecycle() {
+        let content = CORE.content;
+        assert!(content.contains("### Failure triage and lifecycle"));
+        for bullet in [
+            "**Debug a failure.**",
+            "**Test alongside a change.**",
+            "**Upgrade a dependency.**",
+            "**Prepare a release.**",
+            "**Scaffold a new component.**",
+            "**Delegate to parallel agents.**",
+            "**Run periodic hygiene.**",
+        ] {
+            assert!(
+                content.contains(bullet),
+                "core guide must document {bullet}"
+            );
+        }
+        assert!(content.contains(
+            "Repository changelog and agent-instruction files are repo policy, not part of this workflow"
+        ));
+    }
+
+    #[test]
     fn continuity_reference_documents_plan_capture() {
         let content = render_reference("continuity").expect("continuity reference");
         assert!(content.contains("source_type: \"plan\""));
