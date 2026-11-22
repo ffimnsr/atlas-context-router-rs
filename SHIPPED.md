@@ -19,6 +19,9 @@ For active backlog, see ISSUES.md.
 - Store open imports markdown into the derived session tables, so hand edits survive and deleting `session.db` rebuilds events, resume snapshots, decisions, feedback, memoir graphs, overviews, tasks, and experience edges from `.atlas/`.
 - Memory recall reconciles the derived index from file `(mtime, size)` identity, picking up new, edited, and deleted memory files without rewriting truth files.
 - Memoir deletion removes its committed markdown directory; artifact payloads are written before chunk indexing.
+- Resume snapshot and wake-up builds read a bounded ledger tail instead of parsing the full events file, and global access counters are derived from the session ledger so session cleanup expires that session's contributions.
+- Artifact chunk indexing is deferred through a bounded dirty-set flushed on the next search, with a persisted mtime watermark that reconciles cheaply after a crash.
+- `doctor` and `db_check` validate the markdown tree itself: orphan links, dangling artifact and `source_id` references, and malformed frontmatter are reported per file path without failing the whole check.
 
 ## Technical Scope Implemented
 
@@ -634,5 +637,5 @@ For active backlog, see ISSUES.md.
 
 ## Still Open
 
-- Shared parser query migration remainder (Go migration and final validation pass), minimal-context escalation metadata, tokenizer implementation phases, and markdown continuity storage remain in ISSUES.md.
+- Shared parser query migration remainder (Go migration and final validation pass) and minimal-context escalation metadata remain in ISSUES.md.
 - Remaining Additional Backlog items (parser-cache CI gate, LSP shim).
