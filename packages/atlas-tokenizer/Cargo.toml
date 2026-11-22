@@ -1,6 +1,6 @@
 [package]
 name = "atlas-tokenizer"
-version = "0.1.0"
+version = "1.7.14"
 license.workspace = true
 rust-version.workspace = true
 edition = "2024"
