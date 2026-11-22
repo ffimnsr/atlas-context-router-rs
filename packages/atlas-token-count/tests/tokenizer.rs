@@ -1,8 +1,9 @@
-//! Integration tests for tokenizer-backed counting from a local fixture.
+//! Integration tests for `tiktoken` counting from a local rank fixture.
 
 use std::path::PathBuf;
 
 use atlas_token_count::{TokenCountMethod, TokenCounter};
+use atlas_tokenizer::EncodingName;
 
 fn fixture_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -13,12 +14,12 @@ fn fixture_path(name: &str) -> PathBuf {
 
 #[test]
 fn loads_fixture_and_counts_deterministic_text() {
-    let counter = TokenCounter::from_file(
-        fixture_path("simple-tokenizer.json"),
-        "fixture",
-        Some("simple-bpe".to_owned()),
+    let counter = TokenCounter::from_tiktoken_file_with_encoding(
+        fixture_path("tiny.tiktoken"),
+        EncodingName::Cl100kBase,
+        Some("fixture-model".to_owned()),
     )
-    .expect("fixture tokenizer should load");
+    .expect("fixture encoding should load");
 
     let first = counter
         .count_text("hello world")
@@ -27,57 +28,57 @@ fn loads_fixture_and_counts_deterministic_text() {
         .count_text("hello world")
         .expect("counting should succeed");
 
-    assert_eq!(first.tokens, 2);
+    // The synthetic fixture has one rank per byte and no merges.
+    assert_eq!(first.tokens, "hello world".len());
     assert_eq!(first.tokens, second.tokens);
     assert_eq!(
         first.method,
-        TokenCountMethod::Tokenizer {
-            provider: "fixture".to_owned(),
-            model: Some("simple-bpe".to_owned()),
+        TokenCountMethod::Tiktoken {
+            encoding: "cl100k_base".to_owned(),
+            model: Some("fixture-model".to_owned()),
         }
     );
     assert!(first.fallback_reason.is_none());
 }
 
 #[test]
-fn missing_tokenizer_path_mentions_path_in_error() {
-    let missing = fixture_path("does-not-exist.json");
-    let err = TokenCounter::from_file(&missing, "fixture", None)
+fn missing_rank_path_mentions_path_in_error() {
+    let missing = fixture_path("does-not-exist.tiktoken");
+    let err = TokenCounter::from_tiktoken_file(&missing, None)
         .expect_err("missing fixture must fail")
         .to_string();
     assert!(
-        err.contains("does-not-exist.json"),
-        "error should include the tokenizer path: {err}"
+        err.contains("does-not-exist.tiktoken"),
+        "error should include the rank file path: {err}"
     );
 }
 
 #[test]
-fn tokenizer_budget_fixture_counts_known_samples() {
-    let counter = TokenCounter::from_file(
-        fixture_path("tokenizer_budget.json"),
-        "tokenizers",
-        Some("tokenizer_budget".to_owned()),
+fn fixture_counts_known_samples() {
+    let counter = TokenCounter::from_tiktoken_file_with_encoding(
+        fixture_path("tiny.tiktoken"),
+        EncodingName::Cl100kBase,
+        None,
     )
-    .expect("tokenizer_budget fixture should load");
+    .expect("tiny fixture should load");
 
-    // Character-level WordPiece: one token per known character.
-    assert_eq!(counter.count_text("hello world").expect("count").tokens, 10);
+    assert_eq!(counter.count_text("hello world").expect("count").tokens, 11);
     assert_eq!(
         counter.count_text("hello, world!").expect("count").tokens,
-        12
+        13
     );
     assert_eq!(
         counter
             .count_text("hello world hello world")
             .expect("count")
             .tokens,
-        20
+        23
     );
     assert_eq!(counter.count_text("").expect("count").tokens, 0);
     assert_eq!(counter.count_text("a").expect("count").tokens, 1);
 
-    // The tokenizer count must differ from the byte heuristic so regressions
-    // back to bytes.div_ceil(4) stay detectable.
+    // The fixture token count must differ from the byte heuristic so
+    // regressions back to bytes.div_ceil(4) stay detectable.
     assert_ne!(
         counter.count_text("hello world").expect("count").tokens,
         "hello world".len().div_ceil(4)

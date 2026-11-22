@@ -1,18 +1,23 @@
-//! Deterministic tokenizer-backed budget tests (Phase XI.5).
+//! Deterministic tokenizer-backed budget tests.
 //!
-//! Uses the committed character-level WordPiece fixture in `atlas-token-count`
-//! whose token counts differ from `bytes.div_ceil(4)`, so any regression back
-//! to byte-only accounting fails these tests.
+//! Uses the committed synthetic `.tiktoken` fixture in `atlas-token-count`
+//! whose byte-level token counts differ from `bytes.div_ceil(4)`, so any
+//! regression back to byte-only accounting fails these tests.
 
 use super::*;
 use atlas_token_count::TokenCounter;
+use atlas_tokenizer::EncodingName;
 use std::path::PathBuf;
 
 fn tokenizer_budget_fixture() -> TokenCounter {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../atlas-token-count/tests/fixtures/tokenizer_budget.json");
-    TokenCounter::from_file(&path, "tokenizers", Some("tokenizer_budget".to_owned()))
-        .expect("tokenizer_budget fixture should load")
+        .join("../atlas-token-count/tests/fixtures/tiny.tiktoken");
+    TokenCounter::from_tiktoken_file_with_encoding(
+        &path,
+        EncodingName::Cl100kBase,
+        Some("tokenizer_budget".to_owned()),
+    )
+    .expect("tiny tiktoken fixture should load")
 }
 
 fn serialized_payload(result: &ContextResult) -> Vec<u8> {

@@ -22,6 +22,7 @@ members = [
   "packages/atlas-agent-events",
   "packages/atlas-docs",
   "packages/atlas-token-count",
+  "packages/atlas-tokenizer",
   "packages/atlas-metrics",
 ]
 exclude = ["fuzz"]
@@ -108,6 +109,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 # test utilities
 static_assertions = "1"
 proptest = "1"
+tempfile = "3"
 
 # HTTP client
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
@@ -119,6 +121,12 @@ regex = { version = "1", default-features = false, features = ["std", "unicode-p
 # fuzzy matching
 strsim = "0.11"
 
+# tokenizer rank files
+base64 = "0.22"
+# tiktoken patterns use lookahead; `regex` cannot compile them.
+fancy-regex = "0.17"
+sha1 = "0.10"
+
 # bitmap indexes (VR2 stage 2 TrieHI)
 roaring = "0.10"
 
@@ -126,16 +134,12 @@ roaring = "0.10"
 rayon = "1"
 notify = "7"
 
-# token counting
-# `fancy-regex` backend required: pre-tokenizer regexes are compiled from
-# tokenizer JSON, and tokenizers requires one of `onig`/`fancy-regex`.
-tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
-
 # internal crates
 atlas-core      = { path = "packages/atlas-core", version = "1.7.6" }
 atlas-engine    = { path = "packages/atlas-engine", version = "1.7.6" }
 atlas-mcp       = { path = "packages/atlas-mcp", version = "1.7.6" }
 atlas-token-count = { path = "packages/atlas-token-count", version = "1.7.6" }
+atlas-tokenizer = { path = "packages/atlas-tokenizer", version = "0.1.0" }
 atlas-metrics   = { path = "packages/atlas-metrics", version = "1.7.6" }
 
 [profile.dev]

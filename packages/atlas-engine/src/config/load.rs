@@ -3,12 +3,14 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use anyhow::{Context, Result};
+use atlas_tokenizer::EncodingName;
 use camino::Utf8Path;
 
 use super::Config;
-use super::context::{TokenizerFallbackMode, TokenizerProvider};
+use super::context::TokenizerFallbackMode;
 use super::template::ConfigTemplateProfile;
 
 /// Result of building a runtime token counter from config.
@@ -54,52 +56,55 @@ impl Config {
     /// Build a runtime token counter from `context.tokenizer`.
     ///
     /// Relative `tokenizer_file` values resolve from `atlas_dir` (`.atlas/`),
-    /// matching external config file resolution. When the configured
-    /// tokenizer cannot be loaded, `fallback` decides between a heuristic
-    /// counter with fallback metadata and a hard error.
+    /// matching external config file resolution. Counting is always
+    /// `tiktoken`; when the configured encoding cannot load, `fallback`
+    /// decides between a heuristic counter with fallback metadata and a hard
+    /// error.
     pub fn token_counter(&self, atlas_dir: &Utf8Path) -> Result<TokenCounterLoadResult> {
-        self.context.tokenizer.validate()?;
         let tokenizer = &self.context.tokenizer;
-        match tokenizer.provider {
-            TokenizerProvider::Heuristic => Ok(TokenCounterLoadResult {
-                counter: atlas_token_count::TokenCounter::heuristic(tokenizer.bytes_per_token)?,
+        tokenizer.validate()?;
+        let encoding_name = resolve_tiktoken_encoding(tokenizer)?;
+        let loaded: Result<atlas_token_count::TokenCounter> = if let Some(file) =
+            tokenizer.tokenizer_file.as_deref()
+        {
+            let path = resolve_tokenizer_file(atlas_dir, file);
+            atlas_token_count::TokenCounter::from_tiktoken_file_with_encoding(
+                &path,
+                encoding_name,
+                tokenizer.model.clone(),
+            )
+            .with_context(|| {
+                format!(
+                    "invalid config: context.tokenizer.tokenizer_file={file} failed to load tiktoken ranks from {}",
+                    path.display()
+                )
+            })
+        } else if tokenizer.encoding.is_some() {
+            atlas_token_count::TokenCounter::from_encoding(encoding_name, tokenizer.model.clone())
+        } else if let Some(model) = tokenizer.model.as_deref() {
+            atlas_token_count::TokenCounter::from_model(model)
+        } else {
+            atlas_token_count::TokenCounter::from_encoding(encoding_name, None)
+        };
+        match loaded {
+            Ok(counter) => Ok(TokenCounterLoadResult {
+                counter,
                 fallback_used: false,
                 fallback_reason: None,
             }),
-            TokenizerProvider::Tokenizers => {
-                let Some(file) = tokenizer.tokenizer_file.as_deref() else {
-                    anyhow::bail!(
-                        "invalid config: context.tokenizer.tokenizer_file is required when context.tokenizer.provider = \"tokenizers\""
-                    );
-                };
-                let path = resolve_tokenizer_file(atlas_dir, file);
-                match atlas_token_count::TokenCounter::from_file(
-                    &path,
-                    "tokenizers",
-                    tokenizer.model.clone(),
-                ) {
-                    Ok(counter) => Ok(TokenCounterLoadResult {
-                        counter,
-                        fallback_used: false,
-                        fallback_reason: None,
-                    }),
-                    Err(err) => match tokenizer.fallback {
-                        TokenizerFallbackMode::Heuristic => Ok(TokenCounterLoadResult {
-                            counter: atlas_token_count::TokenCounter::heuristic(
-                                tokenizer.bytes_per_token,
-                            )?,
-                            fallback_used: true,
-                            fallback_reason: Some(err.to_string()),
-                        }),
-                        TokenizerFallbackMode::FailClosed => Err(err).with_context(|| {
-                            format!(
-                                "invalid config: context.tokenizer.tokenizer_file={file} failed to load from {}",
-                                path.display()
-                            )
-                        }),
-                    },
+            Err(err) => match tokenizer.fallback {
+                TokenizerFallbackMode::Heuristic => Ok(TokenCounterLoadResult {
+                    counter: atlas_token_count::TokenCounter::heuristic(tokenizer.bytes_per_token)?,
+                    fallback_used: true,
+                    fallback_reason: Some(err.to_string()),
+                }),
+                TokenizerFallbackMode::FailClosed => {
+                    let detail = tiktoken_config_detail(tokenizer);
+                    Err(err).with_context(|| {
+                        format!("invalid config: {detail} failed to load a tiktoken encoding")
+                    })
                 }
-            }
+            },
         }
     }
 
@@ -154,5 +159,37 @@ fn resolve_tokenizer_file(atlas_dir: &Utf8Path, file: &str) -> PathBuf {
         candidate.to_path_buf()
     } else {
         atlas_dir.as_std_path().join(candidate)
+    }
+}
+
+fn resolve_tiktoken_encoding(
+    tokenizer: &super::context::ContextTokenizerConfig,
+) -> Result<EncodingName> {
+    if let Some(encoding) = tokenizer.encoding.as_deref() {
+        return EncodingName::from_str(encoding).map_err(|_| {
+            anyhow::anyhow!(
+                "invalid config: context.tokenizer.encoding = \"{encoding}\" is not a known tiktoken encoding"
+            )
+        });
+    }
+    if let Some(model) = tokenizer.model.as_deref() {
+        return atlas_tokenizer::encoding_name_for_model(model).with_context(|| {
+            format!(
+                "invalid config: context.tokenizer.model = \"{model}\" does not map to a tiktoken encoding"
+            )
+        });
+    }
+    Ok(EncodingName::default())
+}
+
+fn tiktoken_config_detail(tokenizer: &super::context::ContextTokenizerConfig) -> String {
+    if let Some(file) = tokenizer.tokenizer_file.as_deref() {
+        format!("context.tokenizer.tokenizer_file={file}")
+    } else if let Some(encoding) = tokenizer.encoding.as_deref() {
+        format!("context.tokenizer.encoding={encoding}")
+    } else if let Some(model) = tokenizer.model.as_deref() {
+        format!("context.tokenizer.model={model}")
+    } else {
+        "context.tokenizer".to_owned()
     }
 }

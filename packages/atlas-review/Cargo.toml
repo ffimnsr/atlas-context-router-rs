@@ -24,6 +24,8 @@ serde_json.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+atlas-tokenizer.workspace = true
+base64.workspace = true
 criterion.workspace = true
 proptest.workspace = true
 tempfile = "3"

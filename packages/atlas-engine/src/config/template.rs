@@ -441,8 +441,15 @@ impl Config {
             "context.tokenizer",
             &[
                 (
-                    "provider",
-                    format!("\"{}\"", active.context.tokenizer.provider.as_str()),
+                    "encoding",
+                    if active_mode {
+                        render_optional_string(active.context.tokenizer.encoding.as_deref())
+                    } else {
+                        render_optional_example_string(
+                            active.context.tokenizer.encoding.as_deref(),
+                            "o200k_base",
+                        )
+                    },
                 ),
                 (
                     "model",
@@ -477,12 +484,14 @@ impl Config {
             ],
             active_mode,
         ));
-        // Tokenizer-backed example: keep commented unless a real local file
+        // Local rank-file example: keep commented unless a real local file
         // exists, so generated templates never activate a missing file.
         lines.push(
-            "# To count with a local tokenizer instead of the byte heuristic, activate:".to_owned(),
+            "# To count with a local .tiktoken rank file instead of the first-use".to_owned(),
         );
-        lines.push("# provider = \"tokenizers\"".to_owned());
+        lines.push("# download, activate:".to_owned());
+        lines.push("# encoding = \"o200k_base\"".to_owned());
+        lines.push("# tokenizer_file = \"tokenizers/custom.tiktoken\"".to_owned());
         lines.push(String::new());
 
         lines.extend(render_section(

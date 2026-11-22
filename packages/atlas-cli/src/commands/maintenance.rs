@@ -115,7 +115,7 @@ fn config_runtime_json(config: &atlas_engine::Config) -> serde_json::Value {
             "max_file_excerpt_bytes": config.context.max_file_excerpt_bytes,
             "max_saved_context_bytes": config.context.max_saved_context_bytes,
             "tokenizer": {
-                "provider": config.context.tokenizer.provider.as_str(),
+                "encoding": config.context.tokenizer.encoding,
                 "model": config.context.tokenizer.model,
                 "tokenizer_file": config.context.tokenizer.tokenizer_file,
                 "fallback": config.context.tokenizer.fallback.as_str(),

@@ -264,10 +264,15 @@ fn build_token_accounting_meta(
     emitted: &PayloadMeasurement,
     fallback: &TokenFallbackInfo,
 ) -> TokenAccountingMeta {
-    let (provider, model, bytes_per_token) = match &emitted.method {
-        TokenCountMethod::Tokenizer { provider, model } => (provider.clone(), model.clone(), None),
+    let (provider, encoding, model, bytes_per_token) = match &emitted.method {
+        TokenCountMethod::Tiktoken { encoding, model } => (
+            "tiktoken".to_owned(),
+            Some(encoding.clone()),
+            model.clone(),
+            None,
+        ),
         TokenCountMethod::HeuristicBytes { bytes_per_token } => {
-            ("heuristic".to_owned(), None, Some(*bytes_per_token))
+            ("heuristic".to_owned(), None, None, Some(*bytes_per_token))
         }
     };
     let fallback_used = fallback.used || emitted.fallback_reason.is_some();
@@ -277,6 +282,7 @@ fn build_token_accounting_meta(
         .or_else(|| emitted.fallback_reason.clone());
     TokenAccountingMeta {
         provider,
+        encoding,
         model,
         fallback_used,
         fallback_reason,

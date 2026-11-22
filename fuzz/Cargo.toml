@@ -14,6 +14,8 @@ atlas-engine = { path = "../packages/atlas-engine" }
 atlas-parser = { path = "../packages/atlas-parser" }
 atlas-refactor = { path = "../packages/atlas-refactor" }
 atlas-store-sqlite = { path = "../packages/atlas-store-sqlite" }
+atlas-tokenizer = { path = "../packages/atlas-tokenizer" }
+base64 = "0.22"
 camino = "1"
 libfuzzer-sys = "0.4"
 sha2 = "0.10"
@@ -72,6 +74,13 @@ bench = false
 [[bin]]
 name = "refactor_parse_validation"
 path = "fuzz_targets/refactor_parse_validation.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tokenizer"
+path = "fuzz_targets/tokenizer.rs"
 test = false
 doc = false
 bench = false

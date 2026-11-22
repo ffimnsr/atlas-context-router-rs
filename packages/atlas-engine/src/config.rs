@@ -34,7 +34,7 @@ pub use auto::{
 pub use build::{BuildConfig, BuildRunBudget, DEFAULT_PARSE_BATCH_SIZE};
 pub use context::{
     ContextConfig, ContextEscalationConfig, ContextExperienceConfig, ContextTokenizerConfig,
-    TokenizerFallbackMode, TokenizerProvider,
+    TokenizerFallbackMode,
 };
 pub use insights::{InsightsConfig, InsightsLayerRule};
 pub use load::TokenCounterLoadResult;

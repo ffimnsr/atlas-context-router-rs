@@ -1,0 +1,50 @@
+[package]
+name = "atlas-tokenizer"
+version = "0.1.0"
+license.workspace = true
+rust-version.workspace = true
+edition = "2024"
+description = "OpenAI tiktoken-compatible byte-pair tokenizer for Atlas"
+publish = false
+
+[dependencies]
+base64.workspace = true
+fancy-regex.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+reqwest = { workspace = true, features = ["blocking"], optional = true }
+rayon = { workspace = true, optional = true }
+
+[dev-dependencies]
+base64.workspace = true
+criterion.workspace = true
+proptest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+
+[[bench]]
+name = "encode"
+harness = false
+
+[features]
+default = [
+  "encoding-r50k",
+  "encoding-p50k",
+  "encoding-cl100k",
+  "encoding-o200k",
+  "download",
+  "file-assets",
+]
+encoding-r50k = []
+encoding-p50k = []
+encoding-cl100k = []
+encoding-o200k = []
+encoding-o200k-harmony = ["encoding-o200k"]
+download = ["dep:reqwest"]
+file-assets = []
+batch = ["dep:rayon"]
+
+[lints]
+workspace = true

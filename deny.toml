@@ -8,8 +8,19 @@ ignore = [
     # Unmaintained, no safe upgrade; transitive pins tracked for upstream bumps:
     # instant via notify-types -> notify (atlas-engine)
     "RUSTSEC-2024-0384",
-    # paste via tokenizers (atlas-token-count)
-    "RUSTSEC-2024-0436",
+    # Unrelated pre-existing advisories; upstream/tracked separately from the
+    # tokenizer work:
+    # rmcp 3.5 Streamable HTTP findings; upgrading past 3.5 breaks the MCP
+    # 2026-07-28 server/discover-before-initialize transport tests and is
+    # tracked as a separate MCP transport migration.
+    "RUSTSEC-2026-0457",
+    "RUSTSEC-2026-0461",
+    "RUSTSEC-2026-0462",
+    # chrono unmaintained via rmcp's transitive dependencies
+    "RUSTSEC-2026-0543",
+    # bundled SQLite < 3.54 via rusqlite 0.32; requires a rusqlite 0.41 major
+    # bump that is tracked separately from the tokenizer change
+    "RUSTSEC-2026-0459",
 ]
 
 [licenses]

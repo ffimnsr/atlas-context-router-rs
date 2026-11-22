@@ -549,15 +549,15 @@ Exit: opt-in `provider = "tiktoken"` works end to end; heuristic still default.
 
 Run only after all stability gates in §7.3 pass.
 
-- [ ] Choose the default encoding from parity and bench results.
-- [ ] Change `ContextTokenizerConfig::default()` to `tiktoken` + chosen encoding.
-- [ ] Remove `provider = "heuristic"` as a selectable provider.
-- [ ] Keep byte-based counting only as automatic fallback; verify fallback metadata.
-- [ ] Remove `provider = "tokenizers"` and the `tokenizers` dependency.
-- [ ] Remove the `paste` advisory ignore in `deny.toml`.
-- [ ] Update template, README, security docs, and docs drift guard.
-- [ ] Update `SHIPPED.md` and changelog.
-- [ ] Run full workspace tests, clippy, fmt, deny, and bench regression check.
+- [x] Choose the default encoding from parity and bench results.
+- [x] Change `ContextTokenizerConfig::default()` to `tiktoken` + chosen encoding.
+- [x] Remove `provider = "heuristic"` as a selectable provider.
+- [x] Keep byte-based counting only as automatic fallback; verify fallback metadata.
+- [x] Remove `provider = "tokenizers"` and the `tokenizers` dependency.
+- [x] Remove the `paste` advisory ignore in `deny.toml`.
+- [x] Update template, README, security docs, and docs drift guard.
+- [x] Update `SHIPPED.md` and changelog.
+- [x] Run full workspace tests, clippy, fmt, deny, and bench regression check.
 
 Exit: legacy heuristic and tokenizers providers removed; default is OpenAI-compatible, warm cache offline, cold start documents first-use download.
 

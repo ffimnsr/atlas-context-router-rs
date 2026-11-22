@@ -512,8 +512,11 @@ pub struct PayloadTruncationMeta {
 /// How tokens were counted for a truncated payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenAccountingMeta {
-    /// Counting provider: `"tokenizers"` or `"heuristic"`.
+    /// Counting provider: `"tiktoken"` or `"heuristic"`.
     pub provider: String,
+    /// `tiktoken` encoding name when the provider is `"tiktoken"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<String>,
     /// Configured model identifier when a tokenizer was used.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -961,6 +964,7 @@ mod tests {
     fn payload_truncation_keeps_tokens_estimated_and_emits_token_accounting() {
         let meta = payload_meta(Some(TokenAccountingMeta {
             provider: "heuristic".to_owned(),
+            encoding: None,
             model: None,
             fallback_used: true,
             fallback_reason: Some("tokenizer file missing".to_owned()),
@@ -991,6 +995,7 @@ mod tests {
     fn token_accounting_skips_none_fields() {
         let meta = payload_meta(Some(TokenAccountingMeta {
             provider: "tokenizers".to_owned(),
+            encoding: None,
             model: Some("simple-bpe".to_owned()),
             fallback_used: false,
             fallback_reason: None,
@@ -999,8 +1004,26 @@ mod tests {
         let value = serde_json::to_value(&meta).expect("serialize");
         let accounting = &value["token_accounting"];
         assert_eq!(accounting["model"], serde_json::json!("simple-bpe"));
+        assert!(accounting.get("encoding").is_none());
         assert!(accounting.get("fallback_reason").is_none());
         assert!(accounting.get("bytes_per_token").is_none());
+    }
+
+    #[test]
+    fn token_accounting_emits_tiktoken_encoding() {
+        let meta = payload_meta(Some(TokenAccountingMeta {
+            provider: "tiktoken".to_owned(),
+            encoding: Some("o200k_base".to_owned()),
+            model: Some("gpt-4o".to_owned()),
+            fallback_used: false,
+            fallback_reason: None,
+            bytes_per_token: None,
+        }));
+        let value = serde_json::to_value(&meta).expect("serialize");
+        let accounting = &value["token_accounting"];
+        assert_eq!(accounting["provider"], serde_json::json!("tiktoken"));
+        assert_eq!(accounting["encoding"], serde_json::json!("o200k_base"));
+        assert_eq!(accounting["model"], serde_json::json!("gpt-4o"));
     }
 
     #[test]

@@ -54,12 +54,13 @@ fn render_template_full_activates_keys() {
     assert!(!template.contains("redaction_rules_file ="));
     assert!(template.contains("[mcp.http_auth]\nenabled = true"));
     assert!(template.contains("required_scopes = { mcp = [\"atlas:mcp\", \"atlas:read\"] }"));
-    // Tokenizer accounting: active heuristic defaults in the full profile;
+    // Tokenizer accounting: active tiktoken defaults in the full profile;
     // unset optional model/tokenizer_file keys are omitted.
     assert!(template.contains(
-        "[context.tokenizer]\nprovider = \"heuristic\"\nfallback = \"heuristic\"\nbytes_per_token = 4"
+        "[context.tokenizer]\nencoding = \"o200k_base\"\nfallback = \"heuristic\"\nbytes_per_token = 4"
     ));
     assert!(!template.contains("tokenizer_file = \"\""));
+    assert!(!template.contains("[context.tokenizer]\nprovider"));
 }
 
 #[test]
@@ -91,12 +92,13 @@ fn full_and_auto_templates_round_trip_through_config_load() {
 
 #[test]
 fn tokenizer_template_block_snapshot_matches_minimal_profile() {
-    // Snapshot of the generated [context.tokenizer] block: active heuristic
-    // defaults commented out, tokenizer-backed example values never active.
+    // Snapshot of the generated [context.tokenizer] block: active tiktoken
+    // defaults commented out, local rank-file example never active.
     let template = Config::render_template(ConfigTemplateProfile::Minimal).expect("template");
     assert!(template.contains(
-        "[context.tokenizer]\n# provider = \"heuristic\"\n# model = \"cl100k_base\"\n# tokenizer_file = \"tokenizer.json\"\n# fallback = \"heuristic\"\n# bytes_per_token = 4"
+        "[context.tokenizer]\n# encoding = \"o200k_base\"\n# model = \"cl100k_base\"\n# tokenizer_file = \"tokenizer.json\"\n# fallback = \"heuristic\"\n# bytes_per_token = 4"
     ));
+    assert!(template.contains("# tokenizer_file = \"tokenizers/custom.tiktoken\""));
 }
 
 #[test]
@@ -114,8 +116,12 @@ fn readme_describes_tokenizer_budget_accounting() {
         "README tokenizer config block"
     );
     assert!(
-        readme.contains("provider = \"tokenizers\""),
-        "README tokenizer mode"
+        readme.contains("encoding = \"o200k_base\""),
+        "README encoding default"
+    );
+    assert!(
+        readme.contains("tiktoken` mode (default)"),
+        "README tiktoken default mode"
     );
     assert!(
         readme.contains("fail_closed"),
@@ -126,8 +132,8 @@ fn readme_describes_tokenizer_budget_accounting() {
         "README fallback metadata"
     );
     assert!(
-        readme.contains("never downloads"),
-        "README local-file-only rule"
+        readme.contains("downloaded on first use"),
+        "README first-use download rule"
     );
 }
 

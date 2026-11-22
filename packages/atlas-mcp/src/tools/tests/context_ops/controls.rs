@@ -357,6 +357,20 @@ fn get_context_applies_mcp_response_byte_cap() {
 #[test]
 fn get_context_reports_token_accounting_metadata() {
     let fixture = setup_mcp_fixture();
+    let atlas_dir = fixture._dir.path().join(".atlas");
+    let tokenizers_dir = atlas_dir.join("tokenizers");
+    std::fs::create_dir_all(&tokenizers_dir).expect("create tokenizers dir");
+    std::fs::copy(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../atlas-token-count/tests/fixtures/tiny.tiktoken"),
+        tokenizers_dir.join("tiny.tiktoken"),
+    )
+    .expect("copy tiktoken fixture");
+    std::fs::write(
+        atlas_dir.join("config.toml"),
+        "[context.tokenizer]\nencoding = \"cl100k_base\"\ntokenizer_file = \"tokenizers/tiny.tiktoken\"\nfallback = \"fail_closed\"\n",
+    )
+    .expect("write tokenizer config");
     let repo_root = fixture._dir.path().to_string_lossy().to_string();
     let args = serde_json::json!({
         "target": { "kind": "query", "query": "compute" },
@@ -367,8 +381,8 @@ fn get_context_reports_token_accounting_metadata() {
 
     let value = resp["structuredContent"].clone();
     let accounting = value["payload_truncation"]["token_accounting"].clone();
-    assert_eq!(accounting["provider"], serde_json::json!("heuristic"));
-    assert_eq!(accounting["bytes_per_token"], serde_json::json!(4));
+    assert_eq!(accounting["provider"], serde_json::json!("tiktoken"));
+    assert_eq!(accounting["encoding"], serde_json::json!("cl100k_base"));
     assert_eq!(accounting["fallback_used"], serde_json::json!(false));
     assert!(
         value["payload_truncation"]["tokens_estimated"]

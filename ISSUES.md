@@ -111,57 +111,57 @@ Full design: `docs/PLAN-TOKENIZER.md`. Goal: standalone `atlas-tokenizer` crate 
 
 #### Phase 1 — Crate Scaffold
 
-- [ ] add `packages/atlas-tokenizer` with `Cargo.toml`, `README.md`, and `LICENSE-TIKTOKEN`
-- [ ] add `atlas-tokenizer` to workspace members and `[workspace.dependencies]`
-- [ ] add `#![forbid(unsafe_code)]` and `#![deny(missing_docs)]` to `packages/atlas-tokenizer/src/lib.rs`
-- [ ] add `cargo check -p atlas-tokenizer --no-default-features` gate
+- [x] add `packages/atlas-tokenizer` with `Cargo.toml`, `README.md`, and `LICENSE-TIKTOKEN`
+- [x] add `atlas-tokenizer` to workspace members and `[workspace.dependencies]`
+- [x] add `#![forbid(unsafe_code)]` and `#![deny(missing_docs)]` to `packages/atlas-tokenizer/src/lib.rs`
+- [x] add `cargo check -p atlas-tokenizer --no-default-features` gate
 
 #### Phase 2 — BPE Core
 
-- [ ] add `packages/atlas-tokenizer/src/rank_file.rs` parser with malformed-input and size-cap tests
-- [ ] add `packages/atlas-tokenizer/src/bpe.rs` byte-pair encode/decode with merge edge-case tests
-- [ ] add property test asserting `decode_bytes(encode_ordinary(x)) == x.as_bytes()`
+- [x] add `packages/atlas-tokenizer/src/rank_file.rs` parser with malformed-input and size-cap tests
+- [x] add `packages/atlas-tokenizer/src/bpe.rs` byte-pair encode/decode with merge edge-case tests
+- [x] add property test asserting `decode_bytes(encode_ordinary(x)) == x.as_bytes()`
 
 #### Phase 3 — Encodings and Model Map
 
-- [ ] add encoding constants with exact upstream regex patterns and special tokens
-- [ ] add `model.rs` longest-prefix model-to-encoding map
-- [ ] add `registry.rs` explicit registry plus `OnceLock` default
-- [ ] add `special_tokens.rs` and `model_map.rs` tests
+- [x] add encoding constants with exact upstream regex patterns and special tokens
+- [x] add `model.rs` longest-prefix model-to-encoding map
+- [x] add `registry.rs` explicit registry plus `OnceLock` default
+- [x] add `special_tokens.rs` and `model_map.rs` tests
 
 #### Phase 4 — Download and Cache
 
-- [ ] add `packages/atlas-tokenizer/src/assets.rs` with `UPSTREAM_COMMIT`, per-encoding URL + sha256, and exact upstream GitHub file references
-- [ ] add `packages/atlas-tokenizer/src/download.rs` with HTTPS-only fetch, timeouts, redirect scheme check, 32 MiB cap, and sha256 verification
-- [ ] add `packages/atlas-tokenizer/src/cache.rs` with upstream-compatible `sha1(url)` key, env dir precedence, atomic temp+rename, and corrupt-entry recovery
-- [ ] add `download_cache.rs` tests with a local fixture HTTP server; no real network
-- [ ] add `tokenizer_file` local path and `download` feature-off behavior
-- [ ] add ignored upstream smoke test; verify warm-cache run works with networking disabled
+- [x] add `packages/atlas-tokenizer/src/assets.rs` with `UPSTREAM_COMMIT`, per-encoding URL + sha256, and exact upstream GitHub file references
+- [x] add `packages/atlas-tokenizer/src/download.rs` with HTTPS-only fetch, timeouts, redirect scheme check, 32 MiB cap, and sha256 verification
+- [x] add `packages/atlas-tokenizer/src/cache.rs` with upstream-compatible `sha1(url)` key, env dir precedence, atomic temp+rename, and corrupt-entry recovery
+- [x] add `download_cache.rs` tests with a local fixture HTTP server; no real network
+- [x] add `tokenizer_file` local path and `download` feature-off behavior
+- [x] add ignored upstream smoke test; verify warm-cache run works with networking disabled
 
 #### Phase 5 — Parity and Bench
 
-- [ ] add maintainer golden generator for official Python `tiktoken` at the pinned commit
-- [ ] commit golden JSONL for all supported encodings
-- [ ] add `tests/parity.rs` and reach zero mismatches for `cl100k_base` and `o200k_base`
-- [ ] add criterion encode/decode bench and record baselines
-- [ ] add tokenizer fuzz target under workspace `fuzz/`
+- [x] add maintainer golden generator for official Python `tiktoken` at the pinned commit
+- [x] commit golden JSONL for all supported encodings
+- [x] add `tests/parity.rs` and reach zero mismatches for `cl100k_base` and `o200k_base`
+- [x] add criterion encode/decode bench and record baselines
+- [x] add tokenizer fuzz target under workspace `fuzz/`
 
 #### Phase 6 — Integration
 
-- [ ] add `Tiktoken` variants to `atlas_token_count::TokenCounter` and `TokenCountMethod`
-- [ ] add `provider = "tiktoken"` to `ContextTokenizerConfig` with encoding/model/file validation
-- [ ] build tiktoken counter in `Config::token_counter` with existing fallback semantics
-- [ ] add optional `encoding` field to token accounting in `atlas-review/src/context/payload.rs`
-- [ ] update config template, runtime config JSON, README, and `SHIPPED.md`
-- [ ] add CLI and MCP tokenizer quality-gate cases for `provider = "tiktoken"`
+- [x] add `Tiktoken` variants to `atlas_token_count::TokenCounter` and `TokenCountMethod`
+- [x] add `provider = "tiktoken"` to `ContextTokenizerConfig` with encoding/model/file validation
+- [x] build tiktoken counter in `Config::token_counter` with existing fallback semantics
+- [x] add optional `encoding` field to token accounting in `atlas-review/src/context/payload.rs`
+- [x] update config template, runtime config JSON, README, and `SHIPPED.md`
+- [x] add CLI and MCP tokenizer quality-gate cases for `provider = "tiktoken"`
 
 #### Phase 7 — Stability Switch and Legacy Removal
 
-- [ ] once atlas-tokenizer is stable, change `ContextTokenizerConfig::default()` to tiktoken and pick the default encoding from parity and bench results
-- [ ] remove `provider = "heuristic"` as a selectable provider; keep byte-based counting only as automatic fallback unless stability review says otherwise
-- [ ] remove `provider = "tokenizers"` and the `tokenizers` dependency
-- [ ] remove the `paste` advisory ignore from `deny.toml` after dependency removal
-- [ ] run full workspace tests, clippy, fmt, deny, and bench regression check
+- [x] once atlas-tokenizer is stable, change `ContextTokenizerConfig::default()` to tiktoken and pick the default encoding from parity and bench results
+- [x] remove `provider = "heuristic"` as a selectable provider; keep byte-based counting only as automatic fallback unless stability review says otherwise
+- [x] remove `provider = "tokenizers"` and the `tokenizers` dependency
+- [x] remove the `paste` advisory ignore from `deny.toml` after dependency removal
+- [x] run full workspace tests, clippy, fmt, deny, and bench regression check
 
 ---
 

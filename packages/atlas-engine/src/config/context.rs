@@ -1,30 +1,13 @@
 //! Context-engine configuration (symbol/file/review context bounds).
 
+use std::str::FromStr;
+
 use anyhow::Result;
 use atlas_core::BudgetPolicy;
+use atlas_tokenizer::{EncodingName, encoding_name_for_model};
 use serde::{Deserialize, Serialize};
 
 use super::validate_nonempty_string;
-
-/// Tokenizer accounting provider for context payload budgets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum TokenizerProvider {
-    /// Byte heuristic: `bytes.div_ceil(bytes_per_token)`.
-    #[default]
-    Heuristic,
-    /// Local tokenizer JSON file loaded via `atlas-token-count`.
-    Tokenizers,
-}
-
-impl TokenizerProvider {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Heuristic => "heuristic",
-            Self::Tokenizers => "tokenizers",
-        }
-    }
-}
 
 /// Behavior when tokenizer loading fails at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -47,25 +30,31 @@ impl TokenizerFallbackMode {
 }
 
 /// Token counting configuration (`context.tokenizer`).
+///
+/// Counting is always OpenAI-compatible `tiktoken`. The byte heuristic is
+/// retained only as the automatic `fallback` path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ContextTokenizerConfig {
-    /// Counting provider: byte heuristic (default) or local tokenizer file.
-    pub provider: TokenizerProvider,
-    /// Optional model identifier preserved as count-method metadata.
+    /// `tiktoken` encoding name, e.g. `o200k_base`. Defaults to
+    /// `o200k_base` when neither `encoding` nor `model` is set.
+    pub encoding: Option<String>,
+    /// Optional model identifier preserved as count-method metadata and used
+    /// to infer the encoding when `encoding` is unset.
     pub model: Option<String>,
-    /// Local tokenizer JSON path; relative paths resolve from `.atlas/`.
+    /// Optional local `.tiktoken` path; relative paths resolve from `.atlas/`.
+    /// Use this for air-gapped deployments instead of the first-use download.
     pub tokenizer_file: Option<String>,
     /// Behavior when tokenizer loading fails.
     pub fallback: TokenizerFallbackMode,
-    /// Bytes per token for the heuristic (`bytes.div_ceil(bytes_per_token)`).
+    /// Bytes per token for the automatic heuristic fallback.
     pub bytes_per_token: usize,
 }
 
 impl Default for ContextTokenizerConfig {
     fn default() -> Self {
         Self {
-            provider: TokenizerProvider::Heuristic,
+            encoding: Some("o200k_base".to_owned()),
             model: None,
             tokenizer_file: None,
             fallback: TokenizerFallbackMode::Heuristic,
@@ -90,20 +79,29 @@ impl ContextTokenizerConfig {
         if let Some(file) = self.tokenizer_file.as_deref() {
             validate_nonempty_string("context.tokenizer.tokenizer_file", file)?;
         }
-        match self.provider {
-            TokenizerProvider::Tokenizers => {
-                if self.tokenizer_file.is_none() {
-                    anyhow::bail!(
-                        "invalid config: context.tokenizer.tokenizer_file is required when context.tokenizer.provider = \"tokenizers\""
-                    );
-                }
+        let explicit_encoding = match self.encoding.as_deref() {
+            Some(value) => {
+                validate_nonempty_string("context.tokenizer.encoding", value)?;
+                Some(EncodingName::from_str(value).map_err(|_| {
+                    anyhow::anyhow!(
+                        "invalid config: context.tokenizer.encoding = \"{value}\" is not a known tiktoken encoding"
+                    )
+                })?)
             }
-            TokenizerProvider::Heuristic => {
-                if self.tokenizer_file.is_some() {
-                    anyhow::bail!(
-                        "invalid config: context.tokenizer.tokenizer_file must not be set when context.tokenizer.provider = \"heuristic\""
-                    );
-                }
+            None => None,
+        };
+        if let (Some(model), Some(encoding)) = (self.model.as_deref(), explicit_encoding) {
+            let model_encoding = encoding_name_for_model(model).map_err(|_| {
+                anyhow::anyhow!(
+                    "invalid config: context.tokenizer.model = \"{model}\" does not map to a tiktoken encoding"
+                )
+            })?;
+            if model_encoding != encoding {
+                anyhow::bail!(
+                    "invalid config: context.tokenizer.encoding = \"{}\" does not match context.tokenizer.model = \"{model}\" (model resolves to \"{}\")",
+                    encoding.as_str(),
+                    model_encoding.as_str()
+                );
             }
         }
         Ok(())

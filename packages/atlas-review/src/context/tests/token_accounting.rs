@@ -2,32 +2,10 @@
 
 use super::*;
 use atlas_token_count::TokenCounter;
-use std::fs;
-
-/// Minimal valid WordPiece tokenizer JSON used as a local fixture.
-const SIMPLE_TOKENIZER_JSON: &str = r#"{
-  "version": "1.0",
-  "truncation": null,
-  "padding": null,
-  "added_tokens": [],
-  "normalizer": null,
-  "pre_tokenizer": {
-    "type": "Whitespace"
-  },
-  "post_processor": null,
-  "decoder": null,
-  "model": {
-    "type": "WordPiece",
-    "vocab": {
-      "[UNK]": 0,
-      "hello": 1,
-      "world": 2
-    },
-    "unk_token": "[UNK]",
-    "continuing_subword_prefix": "??",
-    "max_input_chars_per_word": 100
-  }
-}"#;
+use atlas_tokenizer::{Encoding, EncodingName};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use std::sync::Arc;
 
 fn apply_with(
     result: &mut ContextResult,
@@ -72,6 +50,7 @@ fn heuristic_mode_emits_provider_and_bytes_per_token() {
     let accounting = payload.token_accounting.expect("token accounting metadata");
     assert_eq!(accounting.provider, "heuristic");
     assert_eq!(accounting.bytes_per_token, Some(4));
+    assert!(accounting.encoding.is_none());
     assert!(!accounting.fallback_used);
     assert!(accounting.model.is_none());
     assert!(accounting.fallback_reason.is_none());
@@ -79,19 +58,33 @@ fn heuristic_mode_emits_provider_and_bytes_per_token() {
     assert!(payload.tokens_estimated > 0);
 }
 
+fn tiktoken_fixture_encoding() -> Arc<Encoding> {
+    let mut entries: Vec<(Vec<u8>, u32)> = (0..=u8::MAX)
+        .map(|byte| (vec![byte], u32::from(byte)))
+        .collect();
+    entries.push((b"ab".to_vec(), 256));
+    entries.push((b"cd".to_vec(), 257));
+    let mut input = String::new();
+    for (token, rank) in entries {
+        input.push_str(&format!("{0} {rank}\n", BASE64.encode(token)));
+    }
+    Arc::new(
+        Encoding::from_rank_bytes(
+            input.as_bytes(),
+            atlas_tokenizer::EncodingSpec::for_name(EncodingName::Cl100kBase),
+        )
+        .expect("synthetic tiktoken encoding"),
+    )
+}
+
 #[test]
-fn tokenizer_mode_emits_provider_and_model() {
+fn tiktoken_mode_emits_encoding_and_model() {
     let mut store = open_store();
     seed_graph(&mut store);
     let mut result = seed_result(&store, Some(1));
 
-    let dir = tempfile::tempdir().expect("tempdir");
-    let tokenizer_path = dir.path().join("simple-tokenizer.json");
-    fs::write(&tokenizer_path, SIMPLE_TOKENIZER_JSON).expect("write fixture");
     let counter =
-        TokenCounter::from_file(&tokenizer_path, "tokenizers", Some("simple-bpe".to_owned()))
-            .expect("load tokenizer");
-
+        TokenCounter::from_tiktoken(tiktoken_fixture_encoding(), Some("gpt-4o".to_owned()));
     apply_with(
         &mut result,
         &counter,
@@ -104,8 +97,9 @@ fn tokenizer_mode_emits_provider_and_model() {
         .expect("payload metadata")
         .token_accounting
         .expect("token accounting metadata");
-    assert_eq!(accounting.provider, "tokenizers");
-    assert_eq!(accounting.model.as_deref(), Some("simple-bpe"));
+    assert_eq!(accounting.provider, "tiktoken");
+    assert_eq!(accounting.encoding.as_deref(), Some("cl100k_base"));
+    assert_eq!(accounting.model.as_deref(), Some("gpt-4o"));
     assert_eq!(accounting.bytes_per_token, None);
     assert!(!accounting.fallback_used);
 }
@@ -118,7 +112,7 @@ fn fallback_mode_emits_used_and_reason() {
 
     let fallback = super::payload::TokenFallbackInfo {
         used: true,
-        reason: Some("failed to load tokenizer from .atlas/missing-tokenizer.json".to_owned()),
+        reason: Some("failed to load tokenizer from .atlas/missing.tiktoken".to_owned()),
     };
     apply_with(
         &mut result,
@@ -135,7 +129,7 @@ fn fallback_mode_emits_used_and_reason() {
     assert!(accounting.fallback_used);
     let reason = accounting.fallback_reason.expect("fallback reason");
     assert!(
-        reason.contains("missing-tokenizer.json"),
+        reason.contains("missing.tiktoken"),
         "reason should carry the load error summary: {reason}"
     );
     assert_eq!(accounting.provider, "heuristic");

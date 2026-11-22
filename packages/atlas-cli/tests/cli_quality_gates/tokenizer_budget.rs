@@ -1,20 +1,19 @@
-//! Phase XI.5: tokenizer-backed budget accounting through the CLI.
+//! Tokenizer-backed budget accounting through the CLI.
 //!
-//! Uses the committed character-level WordPiece fixture in
-//! `atlas-token-count` (token count ≈ char count, much higher than
-//! `bytes.div_ceil(4)`) so these tests fail if accounting regresses to the
-//! byte heuristic.
+//! Uses a committed synthetic `.tiktoken` fixture whose byte-level token count
+//! is much higher than `bytes.div_ceil(4)`, so these tests fail if accounting
+//! regresses to the byte heuristic.
 
 use super::*;
 
-fn tokenizer_fixture_path() -> PathBuf {
+fn tiktoken_fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../atlas-token-count/tests/fixtures/tokenizer_budget.json")
+        .join("../atlas-token-count/tests/fixtures/tiny.tiktoken")
 }
 
 /// Temp repo with a small graph and a `[context.tokenizer]` config pointing
-/// at a local tokenizer file under `.atlas/tokenizers/`.
-fn setup_tokenizer_repo(tokenizer_file: &str, fallback: &str, place_fixture: bool) -> TempDir {
+/// at a local `.tiktoken` file under `.atlas/tokenizers/`.
+fn setup_tiktoken_repo(tokenizer_file: &str, fallback: &str, place_fixture: bool) -> TempDir {
     let repo = setup_repo(&[(
         "src/lib.rs",
         "pub fn alpha() {\n    beta();\n}\n\npub fn beta() {}\n",
@@ -25,26 +24,23 @@ fn setup_tokenizer_repo(tokenizer_file: &str, fallback: &str, place_fixture: boo
     let tokenizers_dir = atlas_dir.join("tokenizers");
     fs::create_dir_all(&tokenizers_dir).expect("create tokenizers dir");
     if place_fixture {
-        fs::copy(
-            tokenizer_fixture_path(),
-            tokenizers_dir.join(tokenizer_file),
-        )
-        .expect("copy tokenizer fixture");
+        fs::copy(tiktoken_fixture_path(), tokenizers_dir.join(tokenizer_file))
+            .expect("copy tiktoken fixture");
     }
     fs::write(
         atlas_dir.join("config.toml"),
         format!(
-            "[context.tokenizer]\nprovider = \"tokenizers\"\ntokenizer_file = \"tokenizers/{tokenizer_file}\"\nfallback = \"{fallback}\"\n"
+            "[context.tokenizer]\nencoding = \"cl100k_base\"\ntokenizer_file = \"tokenizers/{tokenizer_file}\"\nfallback = \"{fallback}\"\n"
         ),
     )
-    .expect("write tokenizer config");
+    .expect("write tiktoken config");
 
     repo
 }
 
 #[test]
-fn tokenizer_budget_cli_context_reports_tokenizer_accounting() {
-    let repo = setup_tokenizer_repo("tokenizer_budget.json", "fail_closed", true);
+fn tokenizer_budget_cli_tiktoken_reports_encoding_accounting() {
+    let repo = setup_tiktoken_repo("tiny.tiktoken", "fail_closed", true);
     run_atlas(repo.path(), &["build"]);
 
     let data = read_json_data_output(
@@ -57,7 +53,8 @@ fn tokenizer_budget_cli_context_reports_tokenizer_accounting() {
 
     let payload = &data["truncation"]["payload"];
     let accounting = &payload["token_accounting"];
-    assert_eq!(accounting["provider"], json!("tokenizers"));
+    assert_eq!(accounting["provider"], json!("tiktoken"));
+    assert_eq!(accounting["encoding"], json!("cl100k_base"));
     assert_eq!(accounting["fallback_used"], json!(false));
 
     let tokens_estimated = payload["tokens_estimated"]
@@ -66,17 +63,14 @@ fn tokenizer_budget_cli_context_reports_tokenizer_accounting() {
     let bytes_emitted = payload["bytes_emitted"].as_u64().expect("bytes_emitted");
     assert!(
         tokens_estimated != bytes_emitted.div_ceil(4),
-        "tokenizer-backed count must differ from the byte heuristic (tokens={tokens_estimated}, bytes={bytes_emitted})"
+        "tiktoken count must differ from the byte heuristic (tokens={tokens_estimated}, bytes={bytes_emitted})"
     );
-    assert!(
-        tokens_estimated > 0,
-        "tokenizer-backed count must be non-zero"
-    );
+    assert!(tokens_estimated > 0);
 }
 
 #[test]
-fn tokenizer_budget_cli_heuristic_fallback_reports_fallback() {
-    let repo = setup_tokenizer_repo("missing.json", "heuristic", false);
+fn tokenizer_budget_cli_tiktoken_fallback_reports_fallback() {
+    let repo = setup_tiktoken_repo("missing.tiktoken", "heuristic", false);
     run_atlas(repo.path(), &["build"]);
 
     let output = run_atlas(
@@ -100,8 +94,8 @@ fn tokenizer_budget_cli_heuristic_fallback_reports_fallback() {
 }
 
 #[test]
-fn tokenizer_budget_cli_fail_closed_errors_with_config_key() {
-    let repo = setup_tokenizer_repo("missing.json", "fail_closed", false);
+fn tokenizer_budget_cli_tiktoken_fail_closed_errors_with_config_key() {
+    let repo = setup_tiktoken_repo("missing.tiktoken", "fail_closed", false);
     run_atlas(repo.path(), &["build"]);
 
     let output = run_command_capture(

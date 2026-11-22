@@ -626,37 +626,38 @@ Serialized context payloads are bounded by two independent caps:
   `--token-budget`, capped by the policy ceiling) limits how many tokens the
   serialized payload counts as.
 
-Token accounting has two modes, selected under `.atlas/config.toml`:
+Token accounting uses OpenAI-compatible `tiktoken` encodings by default,
+configured under `.atlas/config.toml`:
 
 ```toml
 [context.tokenizer]
-provider = "heuristic"   # default: bytes.div_ceil(bytes_per_token)
-bytes_per_token = 4
+encoding = "o200k_base"   # default; or cl100k_base / p50k_base / r50k_base
+# model = "gpt-4o"        # optional metadata + encoding inference
+# tokenizer_file = "tokenizers/custom.tiktoken"  # optional local ranks
 fallback = "heuristic"   # or "fail_closed"
+bytes_per_token = 4      # automatic fallback only
 ```
 
-- **Heuristic mode (default)** — counts `bytes / bytes_per_token` (4 bytes per
-  token), deterministic and always available. This is the historical Atlas
-  behavior.
-- **Tokenizer mode** — counts with a local tokenizer JSON file:
-
-  ```toml
-  [context.tokenizer]
-  provider = "tokenizers"
-  model = "cl100k_base"            # optional metadata label
-  tokenizer_file = "tokenizers/tokenizer.json"   # relative to .atlas/
-  fallback = "heuristic"
-  ```
-
-  Tokenizer JSON files are local inputs only; Atlas never downloads them.
-  Relative `tokenizer_file` paths resolve from `.atlas/`.
+- **`tiktoken` mode (default)** — counts with OpenAI-compatible encodings.
+  If `encoding` is unset, `model` resolves it (for example `gpt-4o` →
+  `o200k_base`); with neither set, Atlas uses `o200k_base`. If both
+  `encoding` and `model` are set, they must resolve to the same encoding.
+  Vocabulary assets are downloaded on first use from pinned upstream HTTPS
+  URLs, verified with sha256, and cached using the upstream `sha1(url)` key
+  (`TIKTOKEN_CACHE_DIR`, then `DATA_GYM_CACHE_DIR`, then
+  `<temp>/data-gym-cache`). Warm-cache use is fully offline. For air-gapped
+  deployments, point `tokenizer_file` at a local `.tiktoken` file; relative
+  paths resolve from `.atlas/`.
+- **Heuristic fallback (automatic only)** — when the configured encoding
+  cannot load, `fallback = "heuristic"` counts `bytes / bytes_per_token` and
+  records fallback metadata. The heuristic is not a selectable provider.
 
 When the configured tokenizer cannot be loaded:
 
 - `fallback = "heuristic"` (default) counts with the byte heuristic and marks
   the result as a fallback.
 - `fallback = "fail_closed"` fails the command before payload truncation with
-  an error naming `context.tokenizer.tokenizer_file` and the resolved path.
+  an error naming the relevant `context.tokenizer.*` key and resolved path.
 
 Truncation metadata (`truncation.payload`) reports how tokens were counted so
 agents can tell tokenizer-backed counts from heuristic fallback:
@@ -666,18 +667,18 @@ agents can tell tokenizer-backed counts from heuristic fallback:
   "bytes_emitted": 1234,
   "tokens_estimated": 300,
   "token_accounting": {
-    "provider": "heuristic",
-    "fallback_used": true,
-    "fallback_reason": "failed to load tokenizer from ...",
-    "bytes_per_token": 4
+    "provider": "tiktoken",
+    "encoding": "o200k_base",
+    "model": "gpt-4o",
+    "fallback_used": false
   }
 }
 ```
 
 `tokens_estimated` stays present for compatibility; `token_accounting`
-`provider` is `"tokenizers"` (with `model` when configured) or `"heuristic"`
-(with `bytes_per_token`). `fallback_used`/`fallback_reason` are set whenever
-heuristic counting replaced a failed tokenizer load or count.
+`provider` is `"tiktoken"` (with `encoding` and optional `model`) or
+`"heuristic"` (with `bytes_per_token`). `fallback_used`/`fallback_reason` are
+set whenever heuristic counting replaced a failed tokenizer load or count.
 
 ## Output Modes
 

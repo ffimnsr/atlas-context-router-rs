@@ -119,6 +119,9 @@ pub(crate) fn payload_accounting_text(payload: &PayloadTruncationMeta) -> String
     let mut detail = Vec::new();
     if let Some(meta) = &payload.token_accounting {
         detail.push(format!("provider: {}", meta.provider));
+        if let Some(encoding) = &meta.encoding {
+            detail.push(format!("encoding: {encoding}"));
+        }
         if let Some(model) = &meta.model {
             detail.push(format!("model: {model}"));
         }

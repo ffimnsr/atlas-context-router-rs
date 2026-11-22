@@ -343,6 +343,7 @@ pub(crate) fn token_accounting_schema() -> Value {
         "additionalProperties": false,
         "properties": {
             "provider": { "type": "string" },
+            "encoding": { "type": "string" },
             "model": { "type": "string" },
             "fallback_used": { "type": "boolean" },
             "fallback_reason": { "type": "string" },
