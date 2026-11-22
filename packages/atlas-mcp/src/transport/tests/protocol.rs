@@ -69,6 +69,22 @@ fn previous_request_protocol_version_is_supported() {
 }
 
 #[test]
+fn stdio_eof_without_initialize_exits_cleanly() {
+    let fixture = setup_fixture();
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+
+    let result =
+        run_rmcp_script_capture(&repo_root, &fixture.db_path, "", ServerOptions::default());
+
+    assert!(result.output.is_empty());
+    assert!(
+        result.server_error.is_none(),
+        "EOF before any MCP lifecycle message must not be a server error: {:?}",
+        result.server_error
+    );
+}
+
+#[test]
 fn server_discover_works_without_initialize_and_matches_initialize_capabilities() {
     let fixture = setup_fixture();
     let repo_root = fixture._dir.path().to_string_lossy().into_owned();

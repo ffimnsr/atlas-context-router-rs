@@ -37,6 +37,8 @@ const MCP_NAME_HEADER: &str = "Mcp-Name";
 const MCP_SESSION_ID_HEADER: &str = "Mcp-Session-Id";
 const PROTECTED_RESOURCE_METADATA_PATH: &str = "/.well-known/oauth-protected-resource";
 
+mod test_support;
+
 #[derive(Clone)]
 struct AppState {
     repo_root: Arc<String>,
@@ -214,18 +216,18 @@ impl HttpTestHarness {
         let (mut parts, body) = request.into_parts();
         parts.headers = headers;
         let request = axum::http::Request::from_parts(parts, body);
-        let response = tokio::runtime::Builder::new_current_thread()
+        tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .context("cannot build tokio runtime for HTTP test harness")?
             .block_on(async move {
                 use tower::util::ServiceExt;
-                build_router(self.state.clone())
+                let response = build_router(self.state.clone())
                     .oneshot(request)
                     .await
-                    .expect("router response")
-            });
-        response_to_test_output(response)
+                    .expect("router response");
+                test_support::response_to_test_output(response).await
+            })
     }
 
     pub fn get_metadata(&self, headers: &[(&str, &str)]) -> Result<TestHttpResponse> {
@@ -238,18 +240,18 @@ impl HttpTestHarness {
         let (mut parts, body) = request.into_parts();
         parts.headers = headers;
         let request = axum::http::Request::from_parts(parts, body);
-        let response = tokio::runtime::Builder::new_current_thread()
+        tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .context("cannot build tokio runtime for HTTP test harness")?
             .block_on(async move {
                 use tower::util::ServiceExt;
-                build_router(self.state.clone())
+                let response = build_router(self.state.clone())
                     .oneshot(request)
                     .await
-                    .expect("router response")
-            });
-        response_to_test_output(response)
+                    .expect("router response");
+                test_support::response_to_test_output(response).await
+            })
     }
 
     pub fn make_test_bearer_token(&self, scopes: &[&str]) -> Option<String> {
@@ -474,53 +476,6 @@ fn maybe_insert_test_request_headers(headers: &mut HeaderMap, body: &Value) -> R
         }
     }
     Ok(())
-}
-
-fn response_to_test_output(response: Response) -> Result<TestHttpResponse> {
-    let status = response.status().as_u16();
-    let headers = response
-        .headers()
-        .iter()
-        .map(|(name, value)| {
-            Ok((
-                name.as_str().to_owned(),
-                value
-                    .to_str()
-                    .context("HTTP test header must be utf-8")?
-                    .to_owned(),
-            ))
-        })
-        .collect::<Result<BTreeMap<_, _>>>()?;
-    let body_text = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("cannot build tokio runtime for HTTP test body read")?
-        .block_on(async move {
-            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .context("cannot read HTTP test response body")?;
-            String::from_utf8(bytes.to_vec()).context("HTTP test response body must be utf-8")
-        })?;
-    let json_body = serde_json::from_str(&body_text).ok().or_else(|| {
-        let messages = body_text
-            .lines()
-            .filter_map(|line| line.strip_prefix("data:"))
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-            .collect::<Vec<_>>();
-        match messages.len() {
-            0 => None,
-            1 => messages.into_iter().next(),
-            _ => messages.into_iter().last(),
-        }
-    });
-    Ok(TestHttpResponse {
-        status,
-        headers,
-        body_text,
-        json_body,
-    })
 }
 
 fn validate_origin(

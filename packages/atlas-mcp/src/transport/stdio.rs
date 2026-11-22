@@ -9,6 +9,7 @@ use tokio::sync::mpsc as tokio_mpsc;
 
 use crate::rmcp_server::AtlasRmcpServer;
 
+use super::helpers::is_clean_preinit_transport_close;
 use super::types::ServerOptions;
 #[cfg(unix)]
 use super::worker::install_stdio_shutdown_handler;
@@ -93,9 +94,16 @@ fn run_rmcp_stdio_server(repo_root: &str, db_path: &str, options: ServerOptions)
         .context("cannot build tokio runtime for rmcp stdio server")?;
     runtime.block_on(async move {
         let server = AtlasRmcpServer::new(repo_root, db_path, options);
-        let running = serve_server(server, rmcp::transport::stdio())
-            .await
-            .map_err(|error| anyhow::anyhow!("rmcp stdio initialize failed: {error}"))?;
+        // `stdio_pipes` uses the non-blocking Linux pipe transport when stdin
+        // and stdout are FIFOs, avoiding a blocking-thread hand-off per message.
+        let transport = rmcp::transport::stdio_pipes();
+        let running = match serve_server(server, transport).await {
+            Ok(running) => running,
+            Err(error) if is_clean_preinit_transport_close(&error) => return Ok(()),
+            Err(error) => {
+                return Err(anyhow::anyhow!("rmcp stdio initialize failed: {error}"));
+            }
+        };
         running
             .waiting()
             .await
@@ -197,9 +205,13 @@ fn run_rmcp_stdio_test_script(
         let (server_io, client_io) = tokio::io::duplex(1024 * 1024);
         let server = AtlasRmcpServer::new(repo_root, db_path, options);
         let server_task = tokio::spawn(async move {
-            let running = serve_server(server, server_io)
-                .await
-                .map_err(|error| anyhow::anyhow!("rmcp stdio initialize failed: {error}"))?;
+            let running = match serve_server(server, server_io).await {
+                Ok(running) => running,
+                Err(error) if is_clean_preinit_transport_close(&error) => return Ok(()),
+                Err(error) => {
+                    return Err(anyhow::anyhow!("rmcp stdio initialize failed: {error}"));
+                }
+            };
             running
                 .waiting()
                 .await
@@ -237,9 +249,13 @@ fn run_rmcp_stdio_test_session(
         let (server_io, client_io) = tokio::io::duplex(1024 * 1024);
         let server = AtlasRmcpServer::new(repo_root, db_path, options);
         let server_task = tokio::spawn(async move {
-            let running = serve_server(server, server_io)
-                .await
-                .map_err(|error| anyhow::anyhow!("rmcp stdio initialize failed: {error}"))?;
+            let running = match serve_server(server, server_io).await {
+                Ok(running) => running,
+                Err(error) if is_clean_preinit_transport_close(&error) => return Ok(()),
+                Err(error) => {
+                    return Err(anyhow::anyhow!("rmcp stdio initialize failed: {error}"));
+                }
+            };
             running
                 .waiting()
                 .await

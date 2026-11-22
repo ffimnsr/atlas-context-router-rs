@@ -14,7 +14,17 @@
       ["file", 1],
       ["function", 1]
     ],
-    "languages": ["rust"],
+    "languages": {
+      "rust": {
+        "nodes": 2
+      }
+    },
+    "language_node_counts": {
+      "rust": 2
+    },
+    "edge_kinds": {
+      "contains": 1
+    },
     "last_indexed_at": "<timestamp>"
   }
 }

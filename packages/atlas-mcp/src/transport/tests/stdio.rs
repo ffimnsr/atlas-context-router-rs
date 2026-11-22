@@ -449,7 +449,7 @@ fn stdio_transport_rejects_jsonrpc_batch_requests() {
 }
 
 #[test]
-fn stdio_transport_reports_malformed_first_frame_through_rmcp_setup_error() {
+fn stdio_transport_ignores_malformed_first_frame_and_exits_cleanly() {
     let fixture = setup_fixture();
     let repo_root = fixture._dir.path().to_string_lossy().into_owned();
     let result = run_rmcp_script_capture(
@@ -459,9 +459,14 @@ fn stdio_transport_reports_malformed_first_frame_through_rmcp_setup_error() {
         ServerOptions::default(),
     );
 
+    // rmcp ignores unparsable frames per the MCP SDK guidance: there is no
+    // request id to correlate an error response to. EOF then ends the
+    // discovery-only session cleanly.
+    assert!(result.output.is_empty());
     assert!(
-        result.output.is_empty() || result.server_error.is_some(),
-        "rmcp transport must reject malformed first frame"
+        result.server_error.is_none(),
+        "unparsable frames must not surface as a server setup error: {:?}",
+        result.server_error
     );
 }
 

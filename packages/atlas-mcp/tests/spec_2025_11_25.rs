@@ -191,13 +191,18 @@ fn build_fixture_graph(repo_root: &str, db_path: &str) {
             "method": "tools/call",
             "params": {
                 "name": "build_graph",
-                "arguments": { "operation": { "kind": "build" } }
+                "arguments": {}
             }
         }),
     );
     assert!(
         response.get("result").is_some(),
         "build response missing result: {response:#}"
+    );
+    assert_ne!(
+        response["result"]["isError"],
+        json!(true),
+        "build response must not be an error: {response:#}"
     );
 }
 
@@ -277,6 +282,7 @@ fn normalize_dynamic(value: &mut Value) {
                     "taskId" => *child = json!("<task-id>"),
                     "pid" => *child = json!("<pid>"),
                     "uptime_secs" => *child = json!("<uptime-secs>"),
+                    "handler_duration_us" => *child = json!("<handler-duration-us>"),
                     _ => normalize_dynamic(child),
                 }
             }
@@ -428,6 +434,12 @@ fn initialize_success_http_snapshot(response: &atlas_mcp::testing::TestHttpRespo
         "has_session_header": response.headers.contains_key("mcp-session-id"),
         "body": normalize_http_body(response.json_body.as_ref().expect("json body")),
     })
+}
+
+fn initialize_rejection_stdio_snapshot(response: &Value) -> Value {
+    let mut body = response.clone();
+    normalize_dynamic(&mut body);
+    json!({ "body": body })
 }
 
 fn initialize_rejection_http_snapshot(response: &atlas_mcp::testing::TestHttpResponse) -> Value {
@@ -791,12 +803,13 @@ fn spec_fixture_stdio_initialize_rejection_matches_golden() {
             }
         }))
         .expect("send invalid initialize");
-    assert!(
-        session
-            .recv_json(Duration::from_millis(250))
-            .expect("recv stdio rejection")
-            .is_none(),
-        "rmcp stdio invalid initialize should close without json-rpc response"
+    let rejection = session
+        .recv_json(Duration::from_secs(1))
+        .expect("recv stdio rejection")
+        .expect("rmcp stdio invalid initialize must return a typed error response");
+    assert_eq!(
+        initialize_rejection_stdio_snapshot(&rejection),
+        read_fixture("initialize_rejection.stdio.json")
     );
     let _ = session.finish();
 }

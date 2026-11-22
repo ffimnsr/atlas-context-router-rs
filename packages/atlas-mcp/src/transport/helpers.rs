@@ -55,6 +55,22 @@ impl RepoSelectionError {
     }
 }
 
+/// Returns true when the peer closed the transport before completing the MCP
+/// lifecycle handshake.
+///
+/// MCP 2026-07-28 allows a discovery-only probe: a client may send
+/// `server/discover` and disconnect without ever sending `initialize`. rmcp
+/// reports the resulting EOF as a server initialization error, but it is a
+/// normal session end, not a server failure.
+pub(crate) fn is_clean_preinit_transport_close(
+    error: &rmcp::service::ServerInitializeError,
+) -> bool {
+    matches!(
+        error,
+        rmcp::service::ServerInitializeError::ConnectionClosed(_)
+    )
+}
+
 pub(crate) struct ToolRepoResolutionContext;
 
 pub(crate) fn resolve_repo_context_for_tool_call(

@@ -119,12 +119,16 @@ fn serve_http_streamable_headers_match_protocol_surface() {
         )
         .expect("streamable post");
     assert_eq!(sse.status, 200);
+    // rmcp falls back to SSE when a handler emits progress before the final
+    // response. The progressToken above forces that path so the progress
+    // notification is not dropped, even though json_response is enabled.
     assert_eq!(
         sse.headers.get("content-type"),
-        Some(&"application/json".to_owned())
+        Some(&"text/event-stream".to_owned())
     );
     assert!(!sse.headers.contains_key("mcp-session-id"));
     assert!(!sse.headers.contains_key("x-sse-url"));
+    assert!(sse.body_text.contains("data:"));
     assert!(sse.body_text.contains("\"result\""));
 
     cleanup_mcp_daemons(repo.path());

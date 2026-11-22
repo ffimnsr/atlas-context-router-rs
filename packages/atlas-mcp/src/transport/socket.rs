@@ -13,6 +13,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::rmcp_server::AtlasRmcpServer;
 
+use super::helpers::is_clean_preinit_transport_close;
 use super::types::ServerOptions;
 use super::worker::{ActiveStreamGuard, install_socket_shutdown_handler};
 
@@ -395,9 +396,13 @@ where
     W: AsyncWrite + Send + Unpin + 'static,
 {
     let server = AtlasRmcpServer::new(repo_root, db_path, options);
-    let running = serve_server(server, (read, write))
-        .await
-        .map_err(|error| anyhow::anyhow!("rmcp socket initialize failed: {error}"))?;
+    let running = match serve_server(server, (read, write)).await {
+        Ok(running) => running,
+        Err(error) if is_clean_preinit_transport_close(&error) => return Ok(()),
+        Err(error) => {
+            return Err(anyhow::anyhow!("rmcp socket initialize failed: {error}"));
+        }
+    };
     running
         .waiting()
         .await
