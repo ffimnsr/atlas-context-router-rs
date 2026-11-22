@@ -135,7 +135,12 @@ fn wait_for_daemon_ready(
     instance: &crate::mcp_instance::McpInstance,
     shutdown: &BrokerShutdown,
 ) -> Result<Option<std::os::unix::net::UnixStream>> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    // Bounded handshake window: daemon cold-start (spawn, SQLite open, metadata
+    // write, socket listen) is CPU-starved when many brokers spawn at once, so
+    // a short deadline flakes under load. Poll stays shutdown-aware for
+    // instant Ctrl+C and the happy path returns as soon as the socket accepts.
+    const DAEMON_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + DAEMON_READY_TIMEOUT;
     let mut last_error: Option<anyhow::Error> = None;
 
     while std::time::Instant::now() < deadline {
@@ -175,7 +180,7 @@ fn relay_stdio(
     mut stream: std::os::unix::net::UnixStream,
     shutdown: &BrokerShutdown,
 ) -> Result<RelayOutcome> {
-    use std::io::{self, Write};
+    use std::io::{self, Read, Write};
     use std::net::Shutdown;
     use std::os::fd::AsRawFd;
     use std::sync::Arc;
@@ -217,7 +222,19 @@ fn relay_stdio(
 
     let stdout = io::stdout();
     let mut output = stdout.lock();
-    let stdout_result = io::copy(&mut stream, &mut output);
+    // Explicit chunk loop instead of io::copy: pipelined stdio sessions
+    // stalled inside io::copy while daemon responses sat written-but-unread
+    // on the socket; the manual loop forwards each chunk deterministically.
+    let stdout_result = (|| {
+        let mut buffer = [0u8; 8192];
+        loop {
+            match stream.read(&mut buffer) {
+                Ok(0) => return Ok(0),
+                Ok(n) => output.write_all(&buffer[..n])?,
+                Err(error) => return Err(error),
+            }
+        }
+    })();
     output.flush().context("cannot flush broker stdout")?;
 
     // Determine the outcome before joining the stdin thread.

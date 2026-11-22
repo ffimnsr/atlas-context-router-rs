@@ -13,7 +13,7 @@ fn tiktoken_fixture_path() -> PathBuf {
 
 /// Temp repo with a small graph and a `[context.tokenizer]` config pointing
 /// at a local `.tiktoken` file under `.atlas/tokenizers/`.
-fn setup_tiktoken_repo(tokenizer_file: &str, fallback: &str, place_fixture: bool) -> TempDir {
+fn setup_tiktoken_repo(tokenizer_file: &str, fallback: &str, place_fixture: bool) -> FixtureRepo {
     let repo = setup_repo(&[(
         "src/lib.rs",
         "pub fn alpha() {\n    beta();\n}\n\npub fn beta() {}\n",

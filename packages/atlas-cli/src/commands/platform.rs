@@ -289,7 +289,11 @@ fn win_spawn_and_wait_for_daemon(
 fn win_wait_for_daemon_ready(
     instance: &crate::mcp_instance::McpInstance,
 ) -> Result<(std::io::BufReader<std::fs::File>, std::fs::File)> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    // Bounded handshake window: daemon cold-start is CPU-starved when many
+    // brokers spawn at once, so a short deadline flakes under load. The poll
+    // returns as soon as the pipe accepts.
+    const DAEMON_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + DAEMON_READY_TIMEOUT;
     let mut last_error: Option<anyhow::Error> = None;
 
     while std::time::Instant::now() < deadline {

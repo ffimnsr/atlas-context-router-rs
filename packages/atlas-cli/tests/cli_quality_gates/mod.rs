@@ -78,14 +78,38 @@ fn run_shell_with_input(repo_path: &Path, input: &[u8]) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
-fn setup_fixture_repo() -> TempDir {
+/// Owned fixture-repo guard.
+///
+/// Dereferences to the underlying `TempDir` so existing call sites keep
+/// working, and `Drop` kills any MCP daemons the spawned `atlas serve` brokers
+/// left behind. Without this guard a panicking test leaks `serve-daemon`
+/// processes that survive the test binary and poison later runs.
+struct FixtureRepo {
+    temp: TempDir,
+}
+
+impl std::ops::Deref for FixtureRepo {
+    type Target = TempDir;
+
+    fn deref(&self) -> &Self::Target {
+        &self.temp
+    }
+}
+
+impl Drop for FixtureRepo {
+    fn drop(&mut self) {
+        kill_mcp_daemons_best_effort(self.temp.path());
+    }
+}
+
+fn setup_fixture_repo() -> FixtureRepo {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     copy_dir_all(&fixture_repo_root(), temp_dir.path());
     init_git_repo(temp_dir.path());
-    temp_dir
+    FixtureRepo { temp: temp_dir }
 }
 
-fn setup_repo(files: &[(&str, &str)]) -> TempDir {
+fn setup_repo(files: &[(&str, &str)]) -> FixtureRepo {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     for (relative_path, content) in files {
         let path = temp_dir.path().join(relative_path);
@@ -95,14 +119,46 @@ fn setup_repo(files: &[(&str, &str)]) -> TempDir {
         fs::write(path, content).expect("write test file");
     }
     init_git_repo(temp_dir.path());
-    temp_dir
+    FixtureRepo { temp: temp_dir }
+}
+
+/// Best-effort daemon cleanup used from `Drop`: never panics, never asserts,
+/// so unwinding tests cannot abort during cleanup.
+fn kill_mcp_daemons_best_effort(repo_root: &Path) {
+    let instances_dir = repo_root.join(".atlas").join("mcp");
+    let Ok(entries) = fs::read_dir(&instances_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let metadata_path = entry.path().join("mcp.instance.json");
+        let Ok(text) = fs::read_to_string(&metadata_path) else {
+            continue;
+        };
+        let Ok(metadata) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        let Some(pid) = metadata["pid"].as_u64().filter(|pid| *pid != 0) else {
+            continue;
+        };
+        let pid = pid as u32;
+        if !pid_exists(pid) {
+            continue;
+        }
+        let _ = sanitized_command("kill")
+            .args(["-9", &pid.to_string()])
+            .output();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline && pid_exists(pid) {
+            thread::sleep(Duration::from_millis(25));
+        }
+    }
 }
 
 fn setup_repo_with_submodule(
     files: &[(&str, &str)],
     submodule_path: &str,
     submodule_files: &[(&str, &str)],
-) -> TempDir {
+) -> FixtureRepo {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     for (relative_path, content) in files {
         let path = temp_dir.path().join(relative_path);
@@ -113,7 +169,7 @@ fn setup_repo_with_submodule(
     }
     init_git_repo(temp_dir.path());
     let _submodule = init_committed_submodule(temp_dir.path(), submodule_path, submodule_files);
-    temp_dir
+    FixtureRepo { temp: temp_dir }
 }
 
 fn init_committed_submodule(parent: &Path, path: &str, files: &[(&str, &str)]) -> TempDir {
@@ -148,7 +204,7 @@ fn init_committed_submodule(parent: &Path, path: &str, files: &[(&str, &str)]) -
     submodule_dir
 }
 
-fn setup_large_rust_fixture_repo(file_count: usize) -> TempDir {
+fn setup_large_rust_fixture_repo(file_count: usize) -> FixtureRepo {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     fs::write(
         temp_dir.path().join("Cargo.toml"),
@@ -188,7 +244,7 @@ pub fn caller_{index}() -> usize {{
     }
 
     init_git_repo(temp_dir.path());
-    temp_dir
+    FixtureRepo { temp: temp_dir }
 }
 
 fn init_git_repo(path: &Path) {

@@ -131,32 +131,122 @@ fn run_serve_jsonrpc_session(
     args: &[&str],
     requests: impl AsRef<[u8]>,
 ) -> Output {
-    let mut child = spawn_serve_child(repo_root, args);
-    // Write stdin in a separate thread so the write end of the pipe stays open
-    // until after the write completes. On macOS, closing the write end inside
-    // wait_with_output (which happens before the broker relay loop has a chance
-    // to read) causes the relay to see EOF before any data arrives. Keeping
-    // stdin open in the writer thread until write_all returns avoids that race.
     let data = normalize_mcp_request_stream(requests);
+    let expected_ids = jsonrpc_request_ids(&data);
+    assert!(
+        !expected_ids.is_empty(),
+        "serve session must include at least one JSON-RPC request"
+    );
+
+    let mut child = spawn_serve_child(repo_root, args);
+
+    // Write every request, then keep stdin open until all responses arrive:
+    // closing the write half signals EOF, the daemon treats EOF as the end of
+    // the session and cancels in-flight tool calls, so closing early races
+    // heavy tools and drops their responses.
     let mut stdin = child.stdin.take().expect("serve stdin");
-    let writer = std::thread::spawn(move || {
-        stdin.write_all(&data).expect("write serve requests");
-        // stdin (the write end) is explicitly dropped here, after the write
-        // completes, signaling EOF to the broker relay loop.
-    });
-    // wait_with_output will not try to close stdin since child.stdin is None.
-    let output = child
-        .wait_with_output()
-        .expect("wait for atlas serve output");
-    let _ = writer.join();
-    output
+    stdin.write_all(&data).expect("write serve requests");
+    stdin.flush().expect("flush serve requests");
+
+    let stdout_rx = spawn_line_reader(child.stdout.take().expect("serve stdout"));
+    let stderr_rx = spawn_line_reader(child.stderr.take().expect("serve stderr"));
+
+    // Bounded wait for the exact observable condition: every requested id
+    // answered. Panics carry the missing ids plus broker stderr for triage.
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let mut stdout_lines: Vec<String> = Vec::new();
+    let mut seen_ids: Vec<u64> = Vec::new();
+    loop {
+        if expected_ids.iter().all(|id| seen_ids.contains(id)) {
+            break;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            let stderr = drain_lines(&stderr_rx).join("\n");
+            panic!(
+                "serve responses incomplete: expected ids={expected_ids:?}, seen={seen_ids:?}; broker stderr:\n{stderr}"
+            );
+        }
+        match stdout_rx.recv_timeout(remaining) {
+            Ok(line) => {
+                if let Ok(response) = serde_json::from_str::<Value>(&line)
+                    && let Some(id) = response["id"].as_u64()
+                    && !seen_ids.contains(&id)
+                {
+                    seen_ids.push(id);
+                }
+                stdout_lines.push(line);
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+    }
+    drop(stdin);
+
+    // Drain broker-owned lines until its relay exits so output stays complete.
+    loop {
+        match stdout_rx.recv_timeout(Duration::from_millis(250)) {
+            Ok(line) => stdout_lines.push(line),
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => break,
+        }
+    }
+    let status = child.wait().expect("wait for atlas serve");
+    let stderr_lines = drain_lines(&stderr_rx);
+
+    let stdout = stdout_lines.join("\n");
+    let mut stdout_bytes = stdout.into_bytes();
+    if !stdout_bytes.is_empty() {
+        stdout_bytes.push(b'\n');
+    }
+    let stderr = stderr_lines.join("\n");
+    let mut stderr_bytes = stderr.into_bytes();
+    if !stderr_bytes.is_empty() {
+        stderr_bytes.push(b'\n');
+    }
+    Output {
+        status,
+        stdout: stdout_bytes,
+        stderr: stderr_bytes,
+    }
+}
+
+fn jsonrpc_request_ids(requests: &[u8]) -> Vec<u64> {
+    String::from_utf8(requests.to_vec())
+        .expect("utf8 request stream")
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| {
+            let value: Value = serde_json::from_str(line).expect("parse request line");
+            value["id"].as_u64()
+        })
+        .collect()
 }
 
 pub(super) fn read_json_tool_result(output: &Output, id: u64) -> Value {
-    let response = parse_jsonrpc_lines(&output.stdout)
-        .into_iter()
+    let responses = parse_jsonrpc_lines(&output.stdout);
+    let response = responses
+        .iter()
         .find(|response| response["id"] == json!(id))
-        .unwrap_or_else(|| panic!("missing JSON-RPC response id={id}"));
+        .cloned()
+        .unwrap_or_else(|| {
+            let seen_ids: Vec<u64> = responses
+                .iter()
+                .filter_map(|response| response["id"].as_u64())
+                .collect();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr_tail: String = stderr
+                .chars()
+                .rev()
+                .take(2_000)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            panic!(
+                "missing JSON-RPC response id={id}; seen response ids={seen_ids:?}; broker stderr tail:\n{stderr_tail}"
+            );
+        });
 
     let text = response["result"]["content"][0]["text"]
         .as_str()

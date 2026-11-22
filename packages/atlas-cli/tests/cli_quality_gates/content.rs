@@ -1,6 +1,6 @@
 use super::*;
 
-fn setup_content_repo() -> TempDir {
+fn setup_content_repo() -> FixtureRepo {
     let repo = setup_repo(&[
         (
             "src/lib.rs",

@@ -1,6 +1,6 @@
 use super::*;
 
-fn repo_with_large_function() -> TempDir {
+fn repo_with_large_function() -> FixtureRepo {
     setup_repo(&[(
         "src/lib.rs",
         &("pub fn helper() -> i32 {\n".to_string()
