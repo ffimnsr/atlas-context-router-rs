@@ -11,8 +11,10 @@ use crate::session_tools;
 use crate::transport::ServerOptions;
 use crate::transport::repo_selection::strip_repo_selector_fields;
 use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind};
+use atlas_repo::canonical_filesystem_path;
 use atlas_session::{DurableTaskStatus, DurableTaskUpdate, NewDurableTask, SessionStore};
 use atlas_store_sqlite::Store;
+use camino::Utf8Path;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CompleteRequestParams, ReadResourceResponse,
 };
@@ -211,7 +213,14 @@ struct RepoSelectionFixture {
 impl ToolFixture {
     fn new() -> Self {
         let (dir, _db_path_path, db_path) = setup_repo();
-        let repo_root = dir.path().to_string_lossy().into_owned();
+        // Build state and parser fingerprints are keyed by the git-canonical
+        // repo root. Canonicalize the fixture root so macOS tempdirs
+        // (`/var` -> `/private/var`) resolve to the same repo id.
+        let repo_root =
+            canonical_filesystem_path(Utf8Path::from_path(dir.path()).expect("utf8 tempdir"))
+                .expect("canonical repo root")
+                .as_str()
+                .to_owned();
         crate::tools::call(
             "build_graph",
             Some(&json!({"output_format": "json"})),

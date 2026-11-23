@@ -174,6 +174,24 @@ mod tests {
     }
 
     #[test]
+    fn validate_file_parse_for_refactor_skips_offloaded_language_paths() {
+        for path in [
+            "src/fuzz.cpp",
+            "src/Main.java",
+            "src/App.cs",
+            "src/index.php",
+            "src/Fuzz.scala",
+            "src/fuzz.rb",
+            "src/fuzz.sh",
+        ] {
+            assert!(
+                validate_file_parse_for_refactor(path, "fn main() {}").is_none(),
+                "offloaded language path `{path}` must be skipped by the default registry"
+            );
+        }
+    }
+
+    #[test]
     fn validate_file_parse_for_refactor_warns_on_empty_supported_file() {
         let outcome = validate_file_parse_for_refactor("src/lib.rs", "")
             .expect("supported path should produce validation outcome");
