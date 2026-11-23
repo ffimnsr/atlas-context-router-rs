@@ -10,7 +10,7 @@ publish = false
 [features]
 default = []
 # Enable optional HTTP + SSE transport (requires tokio + axum).
-http-transport = ["dep:axum", "dep:tower", "dep:tower-http", "dep:tokio-stream", "dep:reqwest", "dep:jsonwebtoken"]
+http-transport = ["dep:axum", "dep:tower", "dep:tower-http", "dep:tokio-stream", "dep:reqwest", "dep:rustls", "dep:jsonwebtoken"]
 
 [dependencies]
 atlas-core.workspace = true
@@ -52,7 +52,9 @@ tower         = { version = "0.5", optional = true }
 tower-http    = { version = "0.6", features = ["cors"], optional = true }
 tokio-stream  = { version = "0.1", features = ["sync"], optional = true }
 reqwest       = { workspace = true, optional = true }
-jsonwebtoken  = { version = "11", optional = true, features = ["aws_lc_rs"] }
+rustls        = { workspace = true, optional = true }
+# `rust_crypto` avoids re-introducing aws-lc-sys into http-transport builds.
+jsonwebtoken  = { version = "11", optional = true, features = ["rust_crypto"] }
 strsim.workspace = true
 
 [target.'cfg(windows)'.dependencies]

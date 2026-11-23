@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Once;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -11,6 +12,15 @@ use serde_json::{Value, json};
 pub const ROUTE_FAMILY_MCP: &str = "mcp";
 const OIDC_DISCOVERY_PATH: &str = "/.well-known/openid-configuration";
 const DEFAULT_AUTH_TIMEOUT_SECS: u64 = 10;
+
+/// Install the rustls crypto provider that reqwest's `rustls-no-provider`
+/// build expects. Idempotent: an earlier installed provider wins.
+fn install_ring_crypto_provider() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProtectedResourceAuthConfig {
@@ -68,6 +78,7 @@ struct TokenClaims {
 
 impl ProtectedResourceAuthPolicy {
     pub async fn load(config: ProtectedResourceAuthConfig) -> Result<Self> {
+        install_ring_crypto_provider();
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(DEFAULT_AUTH_TIMEOUT_SECS))
             .build()

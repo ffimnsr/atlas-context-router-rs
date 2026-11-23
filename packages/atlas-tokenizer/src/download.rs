@@ -6,6 +6,7 @@
 //! authorization headers, custom headers, or query secrets are added.
 
 use std::io::Read;
+use std::sync::Once;
 use std::time::Duration;
 
 use reqwest::Url;
@@ -14,6 +15,15 @@ use reqwest::redirect::Policy;
 
 use crate::assets::sha256_hex;
 use crate::error::{Error, Result};
+
+/// Install the rustls crypto provider that reqwest's `rustls-no-provider`
+/// build expects. Idempotent: an earlier installed provider wins.
+fn install_ring_crypto_provider() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
 
 /// Maximum accepted asset download size.
 pub const MAX_DOWNLOAD_BYTES: usize = 32 * 1024 * 1024;
@@ -58,6 +68,7 @@ fn fetch_with_policy(url: &str, expected_sha256: &str, policy: SchemePolicy) -> 
             }
         })
     };
+    install_ring_crypto_provider();
     let mut builder = Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(TOTAL_TIMEOUT)

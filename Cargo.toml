@@ -112,7 +112,11 @@ proptest = "1"
 tempfile = "3"
 
 # HTTP client
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+# reqwest's `rustls` feature hardwires aws-lc-rs, whose C build dominates cold
+# builds. Use `rustls-no-provider` and install the ring provider before each
+# reqwest client is built (see atlas-search, atlas-tokenizer, atlas-mcp).
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio = { version = "1", features = ["rt", "time"] }
 
 # regex
@@ -143,6 +147,12 @@ atlas-tokenizer = { path = "packages/atlas-tokenizer", version = "1.7.6" }
 atlas-metrics   = { path = "packages/atlas-metrics", version = "1.7.6" }
 
 [profile.dev]
+debug = 0
+split-debuginfo = "unpacked"
+
+# Opt-in full debug info: `cargo build --profile dev-debug`.
+[profile.dev-debug]
+inherits = "dev"
 debug = 1
 split-debuginfo = "unpacked"
 

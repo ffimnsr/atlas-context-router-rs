@@ -16,6 +16,7 @@
 //! [`ensure_model_available`] pulls a missing model from Ollama-style servers
 //! before embedding. OpenAI-compatible servers have no pull API.
 
+use std::sync::Once;
 use std::time::Duration;
 
 use thiserror::Error;
@@ -34,6 +35,15 @@ pub enum EmbedError {
 }
 
 use serde::Deserialize;
+
+/// Install the rustls crypto provider that reqwest's `rustls-no-provider`
+/// build expects. Idempotent: an earlier installed provider wins.
+fn install_ring_crypto_provider() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -64,6 +74,7 @@ impl EmbeddingConfig {
         max_retries: u32,
         retry_backoff_ms: u64,
     ) -> Self {
+        install_ring_crypto_provider();
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
             .build()
@@ -196,6 +207,7 @@ pub async fn ensure_model_available(config: &EmbeddingConfig) -> Result<bool, Em
     }
 
     let base = config.base_url.trim_end_matches('/');
+    install_ring_crypto_provider();
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(MODEL_PULL_TIMEOUT_SECS))
         .build()
