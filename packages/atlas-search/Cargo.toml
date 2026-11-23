@@ -1,6 +1,6 @@
 [package]
 name = "atlas-search"
-version = "1.7.15"
+version = "1.7.16"
 license.workspace = true
 rust-version.workspace = true
 edition = "2024"
@@ -10,7 +10,7 @@ publish = false
 [dependencies]
 atlas-core.workspace = true
 atlas-metrics.workspace = true
-atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "1.7.15"}
+atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "1.7.16"}
 anyhow.workspace = true
 thiserror.workspace = true
 regex.workspace = true
@@ -25,7 +25,7 @@ strsim.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 tempfile = "3"
-atlas-session = { path = "../atlas-session", version = "1.7.15" }
+atlas-session = { path = "../atlas-session", version = "1.7.16" }
 
 [[bench]]
 name = "retrieval_eval_bench"

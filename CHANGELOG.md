@@ -47,6 +47,38 @@ Versioning policy may evolve while Atlas is still moving quickly, but release no
 - drop the unused `windows-sys` target dependency from `atlas-cli` and the stale `#[allow(deprecated)]` around `std::env::home_dir`; allow `Zlib` in `deny.toml` for `foldhash` 0.2 and remove the obsolete `number_prefix` advisory ignore now that `indicatif` 0.18 no longer pulls it
 - extract the Unix stdio broker (daemon attach/spawn, stdio relay, reconnect loop) and its signal handling into `commands/platform/broker.rs` / `commands/platform/broker_signals.rs`, bringing `platform.rs` back under the 1K LOC threshold
 
+## 1.7.16 - 2026-11-23
+
+### Features
+
+- offload external grammars to runtime profiles, queries, and plugins (`dcd1d68`)
+- add split-large-files agent skill (`a5f41d6`)
+- enforce import and export hygiene in split-large-files skill (`4e545c5`)
+
+
+### Fixes
+
+- stabilize mcp spec fixtures and daemon metadata writes (`9c599fb`)
+- align http initialize test with 2026-07-28 lifecycle (`8698dd6`)
+- align canonical repo root and fuzz parser support checks (`352df1d`)
+
+
+### Documentation
+
+- add new plan for external parsers (`80a3726`)
+
+
+### Maintenance
+
+- replace aws-lc with ring and disable dev debug info (`f86e674`)
+- split oversized modules below 1000 LOC (`d086f0f`)
+
+
+### Other Changes
+
+- add skill for impl phases (`4f657b1`)
+
+
 ## 1.7.15 - 2026-11-22
 
 ### Features
