@@ -77,8 +77,18 @@ impl McpInstance {
             .with_context(|| format!("cannot create {}", self.instance_dir.display()))?;
         let content =
             serde_json::to_string_pretty(metadata).context("cannot encode MCP metadata")?;
-        fs::write(&self.metadata_path, format!("{content}\n"))
-            .with_context(|| format!("cannot write {}", self.metadata_path.display()))
+        // Publish through a same-directory temp file and rename so concurrent
+        // readers (broker startup, tests) never observe a truncated JSON body.
+        let temp_path = self.metadata_path.with_extension("json.tmp");
+        fs::write(&temp_path, format!("{content}\n"))
+            .with_context(|| format!("cannot write {}", temp_path.display()))?;
+        fs::rename(&temp_path, &self.metadata_path).with_context(|| {
+            format!(
+                "cannot replace {} with {}",
+                self.metadata_path.display(),
+                temp_path.display()
+            )
+        })
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -435,6 +445,54 @@ mod tests {
         instance.write_metadata(&metadata).unwrap();
 
         assert_eq!(instance.read_metadata().unwrap(), Some(metadata));
+        assert!(!instance.metadata_path.with_extension("json.tmp").exists());
+    }
+
+    #[test]
+    fn metadata_writes_stay_readable_under_concurrent_reads() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let instance = McpInstance::for_repo_and_db(
+            repo.to_str().unwrap(),
+            repo.join(".atlas/worldtree.db").to_str().unwrap(),
+        )
+        .unwrap();
+        instance
+            .write_metadata(&instance.default_metadata(
+                1,
+                atlas_mcp::MCP_PROTOCOL_VERSION,
+                "2026-04-23T00:00:00Z",
+            ))
+            .unwrap();
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let reader = {
+            let instance = instance.clone();
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let metadata = instance
+                        .read_metadata()
+                        .expect("metadata must stay readable during writes");
+                    assert!(metadata.is_some(), "metadata must never disappear");
+                }
+            })
+        };
+
+        for pid in 2..=200 {
+            let metadata = instance.default_metadata(
+                pid,
+                atlas_mcp::MCP_PROTOCOL_VERSION,
+                "2026-04-23T00:00:00Z",
+            );
+            instance.write_metadata(&metadata).unwrap();
+        }
+        stop.store(true, Ordering::Relaxed);
+        reader.join().unwrap();
     }
 
     #[test]

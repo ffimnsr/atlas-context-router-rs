@@ -16,7 +16,7 @@
       },
       "serverInfo": {
         "name": "atlas",
-        "version": "1.7.14",
+        "version": "<server-version>",
         "description": "MCP server exposing Atlas graph, impact, and review tools over stdio"
       },
       "instructions": "Use server/discover for capability negotiation. After discovery, include params._meta with protocol version and client capabilities."

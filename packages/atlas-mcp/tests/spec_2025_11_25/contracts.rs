@@ -59,35 +59,6 @@ fn spec_capabilities_and_descriptors_omit_unimplemented_methods() {
     }
 }
 
-fn stdio_wait_for_task_result(repo_root: &str, db_path: &str, task_id: &str) -> Value {
-    for _ in 0..50 {
-        let get = stdio_initialized_call(
-            repo_root,
-            db_path,
-            json!({
-                "jsonrpc": "2.0",
-                "id": 3,
-                "method": "tasks/get",
-                "params": { "taskId": task_id }
-            }),
-        );
-        if task_status_value(&get) != json!("working") {
-            break;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-    task_completed_result(&stdio_initialized_call(
-        repo_root,
-        db_path,
-        json!({
-            "jsonrpc": "2.0",
-            "id": 4,
-            "method": "tasks/get",
-            "params": { "taskId": task_id }
-        }),
-    ))
-}
-
 #[test]
 fn spec_broker_status_direct_and_deferred_contracts_match_across_stdio_and_http() {
     let (_dir, repo_root, db_path) = setup_repo();

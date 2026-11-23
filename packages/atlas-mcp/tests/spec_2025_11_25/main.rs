@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use atlas_adapters::derive_session_db_path;
 use atlas_mcp::spec;
@@ -191,7 +191,7 @@ fn build_fixture_graph(repo_root: &str, db_path: &str) {
             "method": "tools/call",
             "params": {
                 "name": "build_graph",
-                "arguments": {}
+                "arguments": {"task": {"ttl": 60000}}
             }
         }),
     );
@@ -204,6 +204,47 @@ fn build_fixture_graph(repo_root: &str, db_path: &str) {
         json!(true),
         "build response must not be an error: {response:#}"
     );
+    // Long builds are deferred behind the tasks extension, so a task handle is
+    // not completion; wait for the terminal task result before indexing.
+    let result = if response["result"]["resultType"] == json!("task") {
+        stdio_wait_for_task_result(
+            repo_root,
+            db_path,
+            task_id_from_call_tool_response(&response),
+        )
+    } else {
+        response["result"].clone()
+    };
+    assert_eq!(
+        result["structuredContent"]["status"],
+        json!("completed"),
+        "build must complete before fixtures query the graph: {result:#}"
+    );
+}
+
+fn stdio_wait_for_task_result(repo_root: &str, db_path: &str, task_id: &str) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let get = stdio_initialized_call(
+            repo_root,
+            db_path,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tasks/get",
+                "params": { "taskId": task_id }
+            }),
+        );
+        let status = task_status_value(&get);
+        if status != json!("working") {
+            return task_completed_result(&get);
+        }
+        assert!(
+            Instant::now() < deadline,
+            "task {task_id} still working after 10s: {get:#}"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 fn seed_saved_context_and_decision(repo_root: &str, db_path: &str) {
@@ -277,6 +318,14 @@ fn normalize_dynamic(value: &mut Value) {
                     | "lastUpdatedAt" => {
                         if !child.is_null() {
                             *child = json!("<timestamp>");
+                        }
+                    }
+                    "serverInfo" => {
+                        normalize_dynamic(child);
+                        if child.get("version").and_then(Value::as_str)
+                            == Some(env!("CARGO_PKG_VERSION"))
+                        {
+                            child["version"] = json!("<server-version>");
                         }
                     }
                     "taskId" => *child = json!("<task-id>"),

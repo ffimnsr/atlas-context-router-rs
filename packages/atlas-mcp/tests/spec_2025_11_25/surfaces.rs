@@ -205,7 +205,7 @@ fn structured_tool_results_preserve_provenance_and_freshness_metadata() {
     assert_eq!(
         structured["atlas_freshness"]["stale"],
         json!(true),
-        "query_graph structured content must expose stale freshness warning"
+        "query_graph structured content must expose stale freshness warning: {structured:#}"
     );
 }
 
