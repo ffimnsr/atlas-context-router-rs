@@ -24,6 +24,9 @@ start the next file only after the current file passes every gate.
   identical. No call added, removed, inlined, or duplicated.
 - **Public API parity.** Every item reachable as `crate::<module>::Item` before
   the split stays reachable at the same path after the split via `pub use`.
+- **Import/export parity.** Imports move with the code that uses them and are
+  rebased when module depth changes. Visibility is the narrowest that compiles
+  and is never widened just to fix a call. Parent re-exports are explicit.
 - **Only code files.** Skip docs and non-code assets even when `mk lf` lists
   them: `.md`, `.mdx`, `.markdown`, `.rst`, `.adoc`, `.txt`, `.org`, config,
   data, lockfiles, snapshots. Only source files are split.
@@ -37,10 +40,11 @@ start the next file only after the current file passes every gate.
 
 Allowed edits during a split are limited to:
 
-- `mod` declarations and `pub use` re-exports
-- visibility modifiers needed for cross-module access (`pub(crate)`,
-  `pub(super)`)
-- `use` lines, including adding `use super::*;` to a new child module
+- `mod` declarations and explicit `pub use` re-exports
+- visibility modifiers on items and fields needed for cross-module access
+  (`pub(super)`, `pub(crate)`)
+- `use` lines, including adding `use super::*;`, moving imports into the module
+  that uses them, and rebasing `use super::X` paths when module depth changes
 - moving `#[cfg(test)]` gating onto the module declaration that owns the tests
 
 If a body reference breaks, add a `use` import or alias. Never edit the body
@@ -130,11 +134,74 @@ directories and `<stem>.rs` + `<stem>/` sibling directories.
   local equivalent). Never duplicate helpers.
 - No `#[ignore]`, no `#[should_panic]` changes, no test removal or merging.
 
-### 1.6 Move and format
+### 1.6 Fix imports and visibility
+
+Moving code changes privacy scope and import depth. Rust rules that drive this
+pass:
+
+- a child module can access private items of its ancestors
+- a parent or sibling cannot access private items of a child
+- `pub(super)` is visible in the parent module and all of its descendants,
+  including siblings
+- `pub(crate)` is visible anywhere in the crate
+- plain `pub` is reachable outside the crate only when the item is also
+  re-exported at the original public module path
+
+Set the narrowest visibility that compiles:
+
+| Moved item is used by | Visibility |
+|---|---|
+| only the new module | unchanged/private |
+| the parent or a sibling | `pub(super)` |
+| anywhere else in the crate | `pub(crate)` |
+| external consumers before the split | `pub` plus parent re-export |
+| struct/tuple field accessed across modules | same rule as the item |
+| trait impl method | no visibility qualifier (the trait defines it) |
+
+Import rules:
+
+- Move each import into the module that uses it; delete imports that became
+  unused in the parent. `cargo clippy -D warnings` catches `unused_imports`.
+- New child modules start with `use super::*;` when they consume parent names.
+  Use explicit imports instead when a glob would be ambiguous.
+- When a file moves one level deeper, `use super::X` no longer points at the
+  original parent. Rebase it to `use crate::<original>::X;` (preferred) or
+  `use super::super::X;`. Rebase import paths only; never edit a function body
+  to fix a path.
+- Keep `pub(crate) use` / `pub(super) use` at the original visibility; do not
+  promote them to `pub use`.
+- If a moved `macro_rules!` is used outside its new module, add
+  `pub(crate) use <macro>;` or `pub(super) use <macro>;`. Keep
+  `#[macro_export]` unchanged.
+
+Export rules:
+
+- New modules created by the split stay private (`mod <topic>;`). Only
+  pre-existing `pub mod` visibility is preserved. Expose items through parent
+  `pub use`, not by making new module paths public.
+- The parent module must re-export every item that was reachable as
+  `crate::<module>::Item` before the split:
+  `pub use self::<topic>::{A, B};`.
+- List names explicitly. Do not use `pub use self::<topic>::*;` for public API;
+  it expands the API and can create ambiguous exports.
+- Never re-export a `pub(crate)` item as `pub`; use `pub(crate) use` for
+  crate-only re-exports.
+- One owner per name. If two children expose the same name, keep one definition
+  and re-export it from one place.
+- Types in public signatures must stay reachable from the original public path,
+  otherwise rustc `private_interfaces` fails. Re-export them; do not widen
+  unrelated internals.
+- Preserve original `pub use` chains so downstream imports resolve to the same
+  final items.
+
+Never widen a `pub(crate)` or `pub(super)` item just to silence a compile error.
+Regroup items or add a re-export instead.
+
+### 1.7 Move and format
 
 1. Cut blocks verbatim, including doc comments, attributes, and internal order.
 2. Paste into the new module in the same relative order.
-3. Add only the allowed `mod`/`pub use`/visibility/`use` edits.
+3. Apply the import/visibility pass in 1.6.
 4. Run `cargo fmt --all` and let rustfmt do all formatting.
 
 ## 2. Validation gate
@@ -161,6 +228,22 @@ Gate rules:
   per output file, `fn` name multiset, call-token multiset, and normalized source
   line multiset. The line check is a multiset; the mandatory `--color-moved` diff
   below is what proves statement order inside each moved block.
+- Import/export correctness is not covered by the verifier, which deliberately
+  ignores `use`/`mod`/visibility scaffolding. Enforce it with `cargo check`,
+  clippy (`unused_imports`, `private_interfaces`), and this public-path audit:
+  ```bash
+  # Externally reachable definitions and re-exports before the split.
+  grep -nE '^pub (struct|enum|trait|type|const|static|fn|mod|use)\b' \
+    "/tmp/atlas-split/<slug>/before.rs" \
+    > "/tmp/atlas-split/<slug>/public-before.txt"
+
+  # Parent definitions and re-exports after the split.
+  grep -nE '^(pub (struct|enum|trait|type|const|static|fn|mod)\b|pub(\([^)]*\))? use\b)' \
+    <parent-file>
+  ```
+  Every public definition from the baseline must be defined in the parent or
+  named by an explicit parent `pub use`. `pub(crate)`/`pub(super)` items must
+  stay non-public. Inspect preserved `pub use` chains for the same final names.
 - `mk lf` must no longer list the split file, and no new module may appear.
 - For a test-only split, run the targeted test filter first, then the full
   package test command.
@@ -182,13 +265,20 @@ a test rerun.
 2. Confirm moved blocks appear as moves: no rewritten statements, no reordered
    statements inside a moved block, no changed literals, no changed comments.
 3. Confirm function and call counts from the verifier output match exactly.
-4. Confirm visibility edits are only those required for compilation; public
-   paths are preserved by `pub use`.
-5. Confirm test names and assertions are unchanged and only their module path
+4. Confirm every cross-module access uses the narrowest visibility: no `pub`
+   added only to make a call compile, no `pub(crate)`/`pub(super)` widened.
+5. Confirm imports moved with their users, unused parent imports were removed,
+   and every `use super::X` path was rebased for the new module depth.
+6. Confirm the parent `pub use` list is explicit, collision-free, and covers
+   every formerly public item; no wildcard public re-export and no new `pub mod`
+   was added.
+7. Confirm the public-path audit and `private_interfaces` pass, and that no
+   macro or trait-impl visibility rule was broken.
+8. Confirm test names and assertions are unchanged and only their module path
    moved.
-6. Confirm no unrelated files, docs, fixtures, or `ISSUES.md` changes.
-7. If any check fails, fix the split and rerun the whole gate. Do not report the
-   file done early.
+9. Confirm no unrelated files, docs, fixtures, or `ISSUES.md` changes.
+10. If any check fails, fix the split and rerun the whole gate. Do not report the
+    file done early.
 
 ## 4. Report and continue
 
@@ -231,6 +321,6 @@ mk lf
 ```
 
 Report a table of every split file: before LOC, new modules and their LOC,
-function/call parity, and test result. Remaining `mk lf` entries must be
-non-code only. Offer a conventional commit message with the required sign-off
-but do not commit.
+function/call parity, visibility/re-export changes, and test result. Remaining
+`mk lf` entries must be non-code only. Offer a conventional commit message with
+the required sign-off but do not commit.

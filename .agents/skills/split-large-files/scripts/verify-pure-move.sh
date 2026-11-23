@@ -19,6 +19,10 @@
 # prefixes. Everything else (signatures, statements, attributes, comments,
 # string contents) must match after leading indentation is ignored.
 #
+# Import/export scaffolding is deliberately ignored: verify it with cargo check,
+# clippy (`unused_imports`, `private_interfaces`), and the skill's public-path
+# audit instead.
+#
 # Exit 0 = pass, 1 = mismatch, 2 = usage/input error.
 set -euo pipefail
 
