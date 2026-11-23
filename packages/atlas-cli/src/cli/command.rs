@@ -1,0 +1,974 @@
+use super::*;
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Initialize the atlas work directory and database in the current repo.
+    Init {
+        /// Config template profile to write on first init: auto tunes build/
+        /// search/mcp/context values from hardware and repo size.
+        #[arg(long, default_value = "auto", value_parser = ["minimal", "standard", "full", "auto"])]
+        profile: String,
+
+        /// Shell-first install mode: mcp config asset (default), hooks,
+        /// AGENTS.md instructions, or all.
+        #[arg(long, default_value = "mcp", value_enum)]
+        mode: InitMode,
+
+        /// Show every file the mode would create or refresh without writing.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Overwrite existing non-Atlas hooks and user-edited init assets.
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Run repo-local database migrations without building graph state, or
+    /// export continuity truth to markdown.
+    Migrate {
+        #[command(subcommand)]
+        subcommand: Option<MigrateCommand>,
+    },
+
+    /// Rebuild derived retrieval indexes from markdown truth files.
+    Index {
+        #[command(subcommand)]
+        subcommand: IndexCommand,
+    },
+
+    /// Manage the multi-repo registry.
+    Repo {
+        #[command(subcommand)]
+        subcommand: RepoCommand,
+    },
+
+    /// Scan all tracked files and build the code graph from scratch.
+    Build {
+        /// Stop immediately on the first parse error instead of continuing.
+        #[arg(long)]
+        fail_fast: bool,
+
+        /// Preview build work without writing graph state.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Build one registered repo by stable repo id.
+        #[arg(long, conflicts_with = "all_repos")]
+        repo_id: Option<String>,
+
+        /// Build all enabled registered repos.
+        #[arg(long)]
+        all_repos: bool,
+    },
+
+    /// Incrementally update the graph for files changed since a base ref.
+    Update {
+        /// Git ref or range to diff against (e.g. `origin/main`).
+        #[arg(long)]
+        base: Option<String>,
+
+        /// Diff staged changes only.
+        #[arg(long)]
+        staged: bool,
+
+        /// Diff working-tree (unstaged) changes only.
+        #[arg(long)]
+        working_tree: bool,
+
+        /// Explicit list of files to update.
+        #[arg(long, num_args = 1..)]
+        files: Vec<String>,
+
+        /// Stop immediately on the first parse error instead of continuing.
+        #[arg(long)]
+        fail_fast: bool,
+
+        /// Preview update work without writing graph state.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Update one registered repo by stable repo id.
+        #[arg(long, conflicts_with_all = ["all_repos", "affected_repos"])]
+        repo_id: Option<String>,
+
+        /// Update all enabled registered repos.
+        #[arg(long, conflicts_with = "affected_repos")]
+        all_repos: bool,
+
+        /// Update only enabled repos with detected changes.
+        #[arg(long)]
+        affected_repos: bool,
+    },
+
+    /// Show database status and graph statistics.
+    Status {
+        /// Git ref or range to diff against for changed-file status.
+        #[arg(long)]
+        base: Option<String>,
+
+        /// Diff staged changes only for changed-file status.
+        #[arg(long)]
+        staged: bool,
+    },
+
+    /// List files changed since a base ref.
+    DetectChanges {
+        /// Git ref or range to diff against.
+        #[arg(long)]
+        base: Option<String>,
+
+        /// Diff staged changes only.
+        #[arg(long)]
+        staged: bool,
+
+        /// Detect changes for one registered repo by stable repo id.
+        #[arg(long, conflicts_with = "all_repos")]
+        repo_id: Option<String>,
+
+        /// Detect changes for all enabled registered repos.
+        #[arg(long)]
+        all_repos: bool,
+    },
+
+    /// Search the code graph by keyword.
+    Query {
+        /// Search text.
+        text: String,
+
+        /// Filter by node kind (e.g. `function`, `struct`).
+        #[arg(long)]
+        kind: Option<String>,
+
+        /// Filter by language.
+        #[arg(long)]
+        language: Option<String>,
+
+        /// Include file nodes in the result set.
+        #[arg(long)]
+        include_files: bool,
+
+        /// Filter by a file path prefix (subpath within the repo).
+        #[arg(long)]
+        subpath: Option<String>,
+
+        /// Non-recursive scope: only files directly inside this directory.
+        #[arg(long)]
+        exact_dir: Option<String>,
+
+        /// Exclude a subpath prefix (repeatable).
+        #[arg(long = "exclude-subpath")]
+        exclude_subpaths: Vec<String>,
+
+        /// Maximum results to return.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+
+        /// Expand results through graph edges (graph-aware search).
+        #[arg(long)]
+        expand: bool,
+
+        /// Maximum edge hops when --expand is active (alias: --depth).
+        #[arg(long, default_value_t = 1, visible_alias = "depth")]
+        expand_hops: u32,
+
+        /// Enable fuzzy matching boost for near-miss symbol names.
+        #[arg(long)]
+        fuzzy: bool,
+
+        /// Use hybrid FTS + vector search with RRF (requires search.embedding.url in config).
+        #[arg(long)]
+        hybrid: bool,
+
+        /// Use semantic (graph-aware) retrieval: expands the result set via
+        /// graph neighbours of the initial FTS hits before re-ranking.
+        #[arg(long)]
+        semantic: bool,
+
+        /// Treat text as a regex pattern matched against name and qualified_name
+        /// via SQL UDF. Bypasses FTS; uses structural scan with kind/language/subpath filters.
+        /// Use `|` for alternation: `atlas query "handle|HANDLE" --regex`.
+        #[arg(long)]
+        regex: bool,
+
+        /// Allow queries on a stale graph; prints a freshness warning.
+        #[arg(long)]
+        allow_stale: bool,
+
+        /// Allow symbol lookup on a partial (degraded) graph.
+        #[arg(long)]
+        allow_partial: bool,
+
+        /// Restrict query to one registered repo by stable repo id.
+        #[arg(long, conflicts_with = "all_repos")]
+        repo_id: Option<String>,
+
+        /// Query across all enabled registered repos.
+        #[arg(long)]
+        all_repos: bool,
+    },
+
+    /// List graph symbols with deterministic ordering and pagination.
+    Symbols {
+        /// Resolve one symbol by qualified name, exact name, then prefix.
+        ///
+        /// Prints a single match with its canonical qualified name, or a
+        /// bounded ambiguity list. Mutually exclusive with pagination flags.
+        #[arg(long, value_name = "NAME")]
+        resolve: Option<String>,
+
+        /// Restrict resolution to a file path (exact or prefix).
+        #[arg(long)]
+        file: Option<String>,
+
+        /// Filter by node kind (e.g. `function`, `struct`); accepts aliases like `fn`.
+        #[arg(long)]
+        kind: Option<String>,
+
+        /// Filter by language.
+        #[arg(long)]
+        language: Option<String>,
+
+        /// Filter by a file path prefix (subpath within the repo).
+        #[arg(long)]
+        subpath: Option<String>,
+
+        /// Non-recursive scope: only files directly inside this directory.
+        #[arg(long)]
+        exact_dir: Option<String>,
+
+        /// Exclude a subpath prefix (repeatable).
+        #[arg(long = "exclude-subpath")]
+        exclude_subpaths: Vec<String>,
+
+        /// Restrict listing to one registered repo by stable repo id.
+        #[arg(long)]
+        repo_id: Option<String>,
+
+        /// Include synthetic owner/workspace metadata nodes under `.atlas/synthetic/`.
+        #[arg(long)]
+        include_synthetic: bool,
+
+        /// Maximum symbols per page.
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+
+        /// Number of matching symbols to skip before this page starts.
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+
+        /// Allow listing on a stale graph; prints a freshness warning.
+        #[arg(long)]
+        allow_stale: bool,
+
+        /// Allow listing on a partial (degraded) graph.
+        #[arg(long)]
+        allow_partial: bool,
+    },
+
+    /// Follow call chains from a symbol: callers, callees, or a path to a target.
+    ///
+    /// Examples:
+    ///   atlas trace build_graph --direction down --depth 2
+    ///   atlas trace build_graph --direction up
+    ///   atlas trace build_graph --to reconcile_call_targets
+    Trace {
+        /// Starting symbol name or qualified name.
+        #[arg(value_name = "FROM")]
+        from: String,
+
+        /// Target symbol for shortest-path tracing.
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Trace direction: down (callees, default), up (callers), or both.
+        #[arg(long, default_value = "down")]
+        direction: String,
+
+        /// Edge kinds to follow (repeatable; default calls).
+        #[arg(long = "edge-kind", value_name = "KIND")]
+        edge_kinds: Vec<String>,
+
+        /// Maximum hops from the root (default: 3).
+        #[arg(long, default_value_t = 3)]
+        depth: u32,
+
+        /// Maximum symbols in the trace (default: 200).
+        #[arg(long, default_value_t = 200)]
+        max_nodes: usize,
+
+        /// Allow traversal on a stale graph; prints a freshness warning.
+        #[arg(long)]
+        allow_stale: bool,
+
+        /// Allow traversal on a partial (degraded) graph.
+        #[arg(long)]
+        allow_partial: bool,
+    },
+
+    /// Show runtime manual for one visible exported MCP tool.
+    Man {
+        /// Manual namespace. Must be `mcp`.
+        namespace: String,
+
+        /// Exact exported MCP tool name.
+        tool_name: String,
+    },
+
+    /// Read one indexed Markdown docs section by heading path/slug or line.
+    #[command(name = "docs-section")]
+    DocsSection {
+        /// Repo-relative path to the Markdown file.
+        path: String,
+
+        /// Heading path, slug, or title selector.
+        #[arg(long, conflicts_with = "line")]
+        heading: Option<String>,
+
+        /// One-based source line inside the desired section.
+        #[arg(long, conflicts_with = "heading")]
+        line: Option<u32>,
+
+        /// Maximum UTF-8 bytes to return from the section body.
+        #[arg(long, default_value_t = 16_384)]
+        max_bytes: usize,
+    },
+
+    /// Companion content discovery and relationship lookups.
+    Content {
+        #[command(subcommand)]
+        subcommand: ContentCommand,
+    },
+
+    /// Generate Markdown documentation or export dependency diagrams from the graph.
+    Docs {
+        #[command(subcommand)]
+        subcommand: DocsCommand,
+
+        /// Allow docs generation on a stale graph; prints a freshness warning.
+        #[arg(long)]
+        allow_stale: bool,
+
+        /// Allow docs generation on a partial (degraded) graph.
+        #[arg(long)]
+        allow_partial: bool,
+    },
+
+    /// Compute the impact radius of changed files.
+    Impact {
+        /// Git ref or range to diff against.
+        #[arg(long)]
+        base: Option<String>,
+
+        /// Explicit list of files.
+        #[arg(long, num_args = 1..)]
+        files: Vec<String>,
+
+        /// Maximum traversal depth.
+        #[arg(long, default_value_t = 5)]
+        max_depth: u32,
+
+        /// Maximum number of impacted nodes to return.
+        #[arg(long, default_value_t = 200)]
+        max_nodes: u32,
+
+        /// Allow impact traversal on a stale graph; prints a freshness warning.
+        #[arg(long)]
+        allow_stale: bool,
+
+        /// Allow impact traversal on a partial (degraded) graph.
+        #[arg(long)]
+        allow_partial: bool,
+
+        /// Restrict impact seeds to one registered repo by stable repo id.
+        #[arg(long, conflicts_with = "all_repos")]
+        repo_id: Option<String>,
+
+        /// Expand impact seeds across all enabled registered repos.
+        #[arg(long)]
+        all_repos: bool,
+    },
+
+    /// Assemble review context for changed files.
+    ReviewContext {
+        /// Git ref or range to diff against.
+        #[arg(long)]
+        base: Option<String>,
+
+        /// Explicit list of files.
+        #[arg(long, num_args = 1..)]
+        files: Vec<String>,
+
+        /// Maximum traversal depth.
+        #[arg(long, default_value_t = 3)]
+        max_depth: u32,
+
+        /// Maximum number of impacted nodes to consider.
+        #[arg(long, default_value_t = 200)]
+        max_nodes: u32,
+
+        /// Output profile for human-readable review comments.
+        #[arg(long, value_enum, default_value_t = ReviewContextFormat::Text)]
+        format: ReviewContextFormat,
+
+        /// Allow review context assembly on a stale graph; prints a freshness warning.
+        #[arg(long)]
+        allow_stale: bool,
+
+        /// Allow review context assembly on a partial (degraded) graph.
+        #[arg(long)]
+        allow_partial: bool,
+
+        /// Include fresh overview memory records matching changed symbols/files.
+        #[arg(long)]
+        include_overviews: bool,
+
+        /// Include stale overview records explicitly.
+        #[arg(long)]
+        include_stale_overviews: bool,
+
+        /// Include request/emitted telemetry in JSON output.
+        #[arg(long)]
+        telemetry: bool,
+
+        /// Keep per-item context_ranking_evidence in JSON output.
+        #[arg(long = "include-ranking-evidence")]
+        include_ranking_evidence: bool,
+
+        /// Non-recursive scope: only files directly inside this directory.
+        #[arg(long)]
+        exact_dir: Option<String>,
+
+        /// Exclude a subpath prefix from context selection (repeatable).
+        #[arg(long = "exclude-subpath")]
+        exclude_subpaths: Vec<String>,
+
+        /// Maximum overview records to include.
+        #[arg(long)]
+        overview_limit: Option<usize>,
+
+        /// Byte cap for overview previews.
+        #[arg(long)]
+        overview_max_bytes: Option<usize>,
+    },
+
+    /// Generate and store embeddings for all un-embedded chunks.
+    Embed {
+        /// Maximum number of chunks to embed in one run.
+        #[arg(long, default_value_t = 1000)]
+        limit: usize,
+    },
+
+    /// Start a JSON-RPC / MCP stdio server.
+    Serve {
+        /// Bypass repo-scoped broker/daemon indirection and serve MCP directly on stdio.
+        ///
+        /// Without `--repo` and `--db`, Atlas resolves repo from launch cwd the same way as other
+        /// repo-scoped commands. For explicit cross-repo tool calls, pass `arguments.repo_root`
+        /// or registry-backed `arguments.repo_id`.
+        #[arg(long)]
+        direct_stdio: bool,
+    },
+
+    /// Internal repo-scoped MCP daemon entrypoint.
+    #[command(name = "serve-daemon", hide = true)]
+    ServeDaemon,
+
+    /// Start Streamable HTTP MCP server.
+    ///
+    /// Binds to `ATLAS_HTTP_BIND` (default `127.0.0.1:7070`).
+    /// Protected-resource OAuth bearer validation reads from `.atlas/config.toml`
+    /// under `[mcp.http_auth]`.
+    ///
+    /// Requires the `http-transport` feature (build with
+    /// `cargo build --features http-transport`).
+    #[command(name = "serve-http")]
+    ServeHttp,
+
+    /// Run an integrity check on the atlas database (SQLite + orphan/dangling checks).
+    DbCheck,
+
+    /// Run a health check on the atlas setup (repo, config, database).
+    Doctor,
+
+    /// Purge repo-local context/session stores after noncanonical path identity drift.
+    #[command(name = "purge-noncanonical")]
+    PurgeNoncanonical,
+
+    /// Show detailed graph structure for debugging.
+    #[command(name = "debug-graph")]
+    DebugGraph {
+        /// Maximum number of orphan nodes and dangling edges to display.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+
+    /// Show resolved config values and their sources.
+    #[command(name = "debug-config")]
+    DebugConfig,
+
+    /// Inspect Atlas config surfaces.
+    Config {
+        #[command(subcommand)]
+        subcommand: ConfigCommand,
+    },
+
+    /// Show what a query would match, with timing and match details.
+    #[command(name = "explain-query")]
+    ExplainQuery {
+        /// Search text.
+        text: String,
+
+        /// Treat `text` as a regex pattern and run a structural scan.
+        #[arg(long)]
+        regex: bool,
+
+        /// Filter by node kind.
+        #[arg(long)]
+        kind: Option<String>,
+
+        /// Filter by language.
+        #[arg(long)]
+        language: Option<String>,
+
+        /// Filter by file path prefix.
+        #[arg(long)]
+        subpath: Option<String>,
+
+        /// Maximum results.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+
+    /// Summarize a change-set: changed symbols, impact, risk, and test gaps.
+    #[command(name = "explain-change")]
+    ExplainChange {
+        /// Git ref or range to diff against.
+        #[arg(long)]
+        base: Option<String>,
+
+        /// Diff staged changes only.
+        #[arg(long)]
+        staged: bool,
+
+        /// Explicit list of files to explain.
+        #[arg(long, num_args = 1..)]
+        files: Vec<String>,
+
+        /// Maximum traversal depth.
+        #[arg(long, default_value_t = 5)]
+        max_depth: u32,
+
+        /// Maximum number of impacted nodes to consider.
+        #[arg(long, default_value_t = 200)]
+        max_nodes: u32,
+
+        /// Allow change explanation on a stale graph; prints a freshness warning.
+        #[arg(long)]
+        allow_stale: bool,
+
+        /// Allow change explanation on a partial (degraded) graph.
+        #[arg(long)]
+        allow_partial: bool,
+    },
+
+    /// Install generic Atlas integration (git hooks, hook runner, AGENTS.md).
+    ///
+    /// Atlas no longer writes per-tool MCP or hook config files. After install,
+    /// register the `atlas serve` MCP server with your preferred coding tool.
+    Install {
+        /// Show what would be done without writing any files.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Validate existing install targets without writing files.
+        #[arg(long)]
+        validate_only: bool,
+
+        /// Overwrite existing non-Atlas git hooks.
+        #[arg(long)]
+        force: bool,
+
+        /// Update only the managed AGENTS.md instruction block; implies --no-hooks.
+        #[arg(long)]
+        instructions_only: bool,
+
+        /// Skip installing git hooks and the agent hook runner.
+        #[arg(long)]
+        no_hooks: bool,
+
+        /// Skip injecting the managed AGENTS.md instruction block.
+        #[arg(long)]
+        no_instructions: bool,
+
+        /// Instruction write mode: refresh managed atlas block or replace whole file.
+        #[arg(long, default_value = "refresh", value_enum)]
+        instructions_mode: InstructionsMode,
+
+        /// Install mode: hook (git + agent hooks), cli (AGENTS.md instructions), or all (default).
+        #[arg(long, default_value = "all", value_enum)]
+        mode: InstallMode,
+    },
+
+    /// Read the agent skill guides served by this Atlas version.
+    Skills {
+        #[command(subcommand)]
+        subcommand: SkillsCommand,
+    },
+
+    /// Explain supported update path for the installed atlas binary.
+    Selfupdate,
+
+    /// Print shell completion script to stdout.
+    Completions {
+        /// Shell to generate completions for.
+        #[arg(value_enum)]
+        shell: Shell,
+    },
+
+    /// Start interactive developer shell for natural-language graph queries.
+    Shell {
+        /// Enable fuzzy matching for `/query` lookups.
+        #[arg(long)]
+        fuzzy: bool,
+
+        /// Pipe long results through pager when possible.
+        #[arg(long)]
+        paging: bool,
+    },
+
+    /// Watch the repository for file-system changes and update the graph in near real-time.
+    ///
+    /// Atlas watches the repo tree, debounces rapid edits, and incrementally
+    /// updates the graph without running a full rebuild.
+    Watch {
+        /// Debounce window in milliseconds: collect events for this long
+        /// after the first change before processing (default: 200).
+        #[arg(long, default_value_t = 200)]
+        debounce_ms: u64,
+
+        /// Emit machine-readable JSON lines to stdout (one object per batch).
+        /// Mirrors the global --json flag but specific to watch output.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Build context around a symbol, file, or change-set using the context engine.
+    ///
+    /// TARGET accepts: a symbol name, qualified name, free-text query, or file
+    /// path.  Alternatively, supply --file or --files for explicit targets.
+    /// Examples:
+    ///   atlas context "AuthService"
+    ///   atlas context "who calls handle_request"
+    ///   atlas context --file src/auth.rs
+    ///   atlas context --files src/auth.rs src/session.rs --intent review
+    #[command(name = "context")]
+    Context {
+        /// Symbol name, qualified name, or free-text query (auto-classified).
+        /// Omit when using --file or --files.
+        #[arg(value_name = "TARGET")]
+        query: Option<String>,
+
+        /// Explicit repo-relative file path target (file intent).
+        #[arg(long)]
+        file: Option<String>,
+
+        /// Changed file paths for review/impact context.
+        #[arg(long, num_args = 1..)]
+        files: Vec<String>,
+
+        /// Override intent: symbol, file, review, impact, usage_lookup,
+        /// refactor_safety, dead_code_check, rename_preview, dependency_removal.
+        /// Inferred automatically when omitted.
+        #[arg(long)]
+        intent: Option<String>,
+
+        /// Maximum nodes to include (default: 100).
+        #[arg(long)]
+        max_nodes: Option<usize>,
+
+        /// Maximum edges to include (default: 100).
+        #[arg(long)]
+        max_edges: Option<usize>,
+
+        /// Maximum files to include (default: 20).
+        #[arg(long)]
+        max_files: Option<usize>,
+
+        /// Non-recursive scope: only files directly inside this directory.
+        #[arg(long)]
+        exact_dir: Option<String>,
+
+        /// Exclude a subpath prefix from context selection (repeatable).
+        #[arg(long = "exclude-subpath")]
+        exclude_subpaths: Vec<String>,
+
+        /// Traversal depth in graph hops (default: 2).
+        #[arg(long)]
+        depth: Option<u32>,
+
+        /// Include source line ranges in result.
+        #[arg(long)]
+        code_spans: bool,
+
+        /// Include test-adjacency nodes.
+        #[arg(long)]
+        tests: bool,
+
+        /// Include import edges and nodes.
+        #[arg(long)]
+        imports: bool,
+
+        /// Include containment-sibling nodes.
+        #[arg(long)]
+        neighbors: bool,
+
+        /// Route the query through graph-aware semantic expansion before
+        /// building context.  When a session is active, prior-context files
+        /// and symbols from recent events are used to boost relevance.
+        #[arg(long)]
+        semantic: bool,
+
+        /// Restrict session-aware context enrichment to one agent partition.
+        #[arg(long)]
+        agent_id: Option<String>,
+
+        /// Intentionally merge context across all agent partitions.
+        #[arg(long)]
+        merge_agent_partitions: bool,
+
+        /// Maximum tokens to include in the result.  Overrides the default
+        /// policy limit (context_tokens_estimate) for this request only.
+        /// The engine enforces this as a strict cap; it cannot exceed the
+        /// policy ceiling set in atlas.toml.
+        #[arg(long)]
+        token_budget: Option<usize>,
+
+        /// Include fresh overview memory records matching selected symbols/files.
+        #[arg(long)]
+        include_overviews: bool,
+
+        /// Include stale overview records explicitly (freshness filter).
+        #[arg(long)]
+        include_stale_overviews: bool,
+
+        /// Include request/emitted telemetry in JSON output.
+        #[arg(long)]
+        telemetry: bool,
+
+        /// Keep per-item context_ranking_evidence in JSON output.
+        #[arg(long = "include-ranking-evidence")]
+        include_ranking_evidence: bool,
+
+        /// Maximum overview records to include (default: 10).
+        #[arg(long)]
+        overview_limit: Option<usize>,
+
+        /// Byte cap for overview previews (default: 4096).
+        #[arg(long)]
+        overview_max_bytes: Option<usize>,
+
+        /// Restrict overview subject kinds (comma-separated: file,function,...).
+        #[arg(long)]
+        overview_subject_kinds: Option<String>,
+    },
+
+    /// Manage named ordered sequences of graph nodes (flows).
+    Flows {
+        #[command(subcommand)]
+        subcommand: FlowsCommand,
+    },
+
+    /// Manage graph node communities (clusters / partitions).
+    Communities {
+        #[command(subcommand)]
+        subcommand: CommunitiesCommand,
+    },
+
+    /// Refresh derived graph analytics without reparsing source files.
+    #[command(name = "postprocess")]
+    Postprocess {
+        /// Restrict refresh to files currently changed in the working tree.
+        #[arg(long)]
+        changed_only: bool,
+
+        /// Run only one postprocess stage.
+        #[arg(long)]
+        stage: Option<String>,
+
+        /// Compute the summary without recording lifecycle state.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Run deterministic graph-backed insight reports.
+    Insights {
+        #[command(subcommand)]
+        subcommand: InsightsCommand,
+
+        /// Allow insight generation on a stale graph; prints a freshness warning.
+        #[arg(long)]
+        allow_stale: bool,
+
+        /// Allow insight generation on a partial (degraded) graph.
+        #[arg(long)]
+        allow_partial: bool,
+    },
+
+    /// Analyse a symbol or the whole graph for removal impact, dead code, safety, or dependencies.
+    Analyze {
+        #[command(subcommand)]
+        subcommand: AnalyzeCommand,
+
+        /// Allow analysis on a stale graph; prints a freshness warning.
+        #[arg(long)]
+        allow_stale: bool,
+
+        /// Allow analysis on a partial (degraded) graph.
+        #[arg(long)]
+        allow_partial: bool,
+    },
+
+    /// Plan or apply deterministic refactoring operations.
+    Refactor {
+        #[command(subcommand)]
+        subcommand: RefactorCommand,
+
+        /// Allow refactoring on a stale graph; prints a freshness warning.
+        #[arg(long)]
+        allow_stale: bool,
+
+        /// Allow refactoring on a partial (degraded) graph.
+        #[arg(long)]
+        allow_partial: bool,
+    },
+
+    /// Manage Atlas context memory sessions (start, status, resume, clear, list).
+    Session {
+        #[command(subcommand)]
+        subcommand: SessionCommand,
+    },
+
+    /// Manage shared memory records (store, recall, list, delete).
+    Memory {
+        #[command(subcommand)]
+        subcommand: MemoryCommand,
+    },
+
+    /// Manage memoir concept graphs (separate knowledge layer from the code graph).
+    Memoir {
+        #[command(subcommand)]
+        subcommand: MemoirCommand,
+    },
+
+    /// Manage evidence-linked code overview memory and external analysis handoff.
+    Overview {
+        #[command(subcommand)]
+        subcommand: OverviewCommand,
+    },
+
+    /// Read, list, grep, and search the canonical atlas:// URI namespace.
+    ///
+    /// Accepted URI forms (percent-encode path segments):
+    ///
+    ///   atlas://repo/{repo_id}/tree/{dir}
+    ///   atlas://repo/{repo_id}/file/{path}
+    ///   atlas://repo/{repo_id}/symbol/{qualified_name}
+    ///   atlas://memories/topic/{topic}
+    ///   atlas://memories/id/{memory_id}
+    ///   atlas://memoir/{graph}/{concept}
+    ///   atlas://artifacts/{source_id}/{chunk_index}
+    ///
+    /// `?level=l0|l1|l2` selects disclosure depth for repo tree/file/symbol
+    /// URIs. Bare `atlas://repo`, `atlas://file/<path>`, and `atlas://<repo_id>`
+    /// forms are not part of the grammar; use the canonical forms above.
+    #[command(args_conflicts_with_subcommands = true)]
+    Uri {
+        /// Canonical atlas:// URI (shorthand for `uri read`).
+        uri: Option<String>,
+
+        /// Disclosure level for the shorthand read form.
+        #[arg(long)]
+        level: Option<String>,
+
+        #[command(subcommand)]
+        subcommand: Option<UriCommand>,
+    },
+
+    /// Inspect and prune query-conditioned experience edges.
+    #[command(args_conflicts_with_subcommands = true)]
+    Experience {
+        /// Canonical source or target URI (shorthand for `experience inspect`).
+        uri: Option<String>,
+
+        #[command(subcommand)]
+        subcommand: Option<ExperienceCommand>,
+    },
+
+    /// Record corrections on wrong analysis predictions and search past mistakes.
+    Feedback {
+        #[command(subcommand)]
+        subcommand: FeedbackCommand,
+    },
+
+    /// Build a bounded session-start recall pack (focus, memories, decisions, feedback, graph readiness).
+    WakeUp {
+        /// Focus topic; topic-relevant memories, decisions, and feedback rank first.
+        #[arg(long)]
+        topic: Option<String>,
+
+        /// Explicit session id; defaults to the derived cli session for the repo.
+        #[arg(long)]
+        session: Option<String>,
+
+        /// Frontend identity recorded in the pack.
+        #[arg(long)]
+        frontend: Option<String>,
+
+        /// Max items per pack list; clamped to the hard ceiling (config: memory.wake_up.max_items).
+        #[arg(long)]
+        max_items: Option<usize>,
+    },
+
+    /// Internal hook entrypoint for generated agent hook runners.
+    #[command(hide = true)]
+    Hook {
+        /// Normalized hook event name (for example `session-start`).
+        event: String,
+    },
+
+    /// Query, build, and inspect historical graph snapshots per git commit.
+    #[command(args_conflicts_with_subcommands = true)]
+    History {
+        #[command(subcommand)]
+        subcommand: Option<HistoryCommand>,
+
+        /// Repo-relative file path (shorthand for `history file`).
+        path: Option<String>,
+
+        /// Symbol name to scope the file history to (shorthand form).
+        #[arg(long)]
+        symbol: Option<String>,
+
+        /// Follow git-detected renames across indexed snapshots.
+        #[arg(long)]
+        follow_renames: bool,
+
+        /// Emit only compact summary fields.
+        #[arg(long, conflicts_with = "full")]
+        stat_only: bool,
+
+        /// Emit expanded human-readable details.
+        #[arg(long, conflicts_with = "stat_only")]
+        full: bool,
+    },
+
+    /// Print CLI version, build commit hash, and build date.
+    Version,
+
+    /// Show active embedding provider configuration and dimension registry.
+    ///
+    /// Lists all registered (provider, model, dimension) entries from the
+    /// content store and reports the active embedding config from `.atlas/config.toml`.
+    #[command(name = "embedding-config")]
+    EmbeddingConfig,
+}
