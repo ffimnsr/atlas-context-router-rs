@@ -95,6 +95,16 @@
         "stale_index": { "type": "boolean" },
         "pending_graph_change_count": { "type": "integer" },
         "pending_graph_changes": { "type": "array", "items": { "type": "string" } },
+        "execution_state": { "type": "string" },
+        "parser_fingerprint": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "revision"],
+          "properties": {
+            "state": { "type": "string" },
+            "revision": { "type": "integer" }
+          }
+        },
         "retrieval_index": {
           "type": "object",
           "additionalProperties": true,

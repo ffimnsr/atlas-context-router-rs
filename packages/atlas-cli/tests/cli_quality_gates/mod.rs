@@ -37,6 +37,7 @@ mod context;
 mod content;
 mod core;
 mod docs;
+mod offloaded_languages;
 mod resolution;
 mod shell;
 mod tokenizer_budget;

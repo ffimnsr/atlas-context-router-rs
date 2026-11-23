@@ -183,6 +183,21 @@
       }
     },
     {
+      "name": "offloaded_language_support",
+      "check": "offloaded_language_support",
+      "status": "pass",
+      "ok": true,
+      "message": "all tracked offloaded-language files have registered parsers",
+      "detail": "all tracked offloaded-language files have registered parsers",
+      "issue_code": null,
+      "details": {
+        "label": "offloaded_language_support",
+        "ok": true,
+        "issue_code": null,
+        "noncanonical_path_rows": null
+      }
+    },
+    {
       "name": "graph_freshness",
       "check": "graph_freshness",
       "status": "pass",
@@ -267,6 +282,21 @@
       "issue_code": null,
       "details": {
         "label": "connection_mode",
+        "ok": true,
+        "issue_code": null,
+        "noncanonical_path_rows": null
+      }
+    },
+    {
+      "name": "parser_fingerprint",
+      "check": "parser_fingerprint",
+      "status": "pass",
+      "ok": true,
+      "message": "current revision=1",
+      "detail": "current revision=1",
+      "issue_code": null,
+      "details": {
+        "label": "parser_fingerprint",
         "ok": true,
         "issue_code": null,
         "noncanonical_path_rows": null

@@ -97,6 +97,11 @@ Indexed graph is older than current graph-relevant repo changes.
 
 Retrieval/content index is unavailable or not searchable.
 
+<a id="unregistered_offloaded_language"></a>
+### `unregistered_offloaded_language`
+
+Tracked files use an offloaded language extension (PHP, C++, C#, Java, Scala, Ruby, or Bash) but no matching `[parsers.external]` extractor profile is registered. Add the profile and rerun `atlas build` or `atlas update`.
+
 <a id="node_not_found"></a>
 ### `node_not_found`
 

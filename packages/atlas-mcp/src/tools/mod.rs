@@ -8,6 +8,8 @@ mod graph;
 mod graph_debug;
 mod graph_stats;
 pub mod health;
+mod health_db_check;
+mod health_parser_fingerprint;
 mod health_postprocess;
 mod health_retrieval;
 mod inventory;

@@ -39,6 +39,7 @@ impl Config {
         let mut config: Self =
             toml::from_str(&raw).with_context(|| format!("cannot parse {}", path.display()))?;
         config.parsers.resolve_from(atlas_dir);
+        config.parsers.apply_defaults();
         config.insights.validate()?;
         config.insights.validate_layer_rules_file(atlas_dir)?;
         config.parsers.validate()?;
@@ -191,5 +192,74 @@ fn tiktoken_config_detail(tokenizer: &super::context::ContextTokenizerConfig) ->
         format!("context.tokenizer.model={model}")
     } else {
         "context.tokenizer".to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_normalizes_profile_defaults_before_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        let atlas_dir = dir.path();
+        std::fs::write(
+            atlas_dir.join(crate::paths::ATLAS_CONFIG),
+            "[[parsers.external]]\nextractor = \"php\"\ngrammar_dir = \"grammars/tree-sitter-php\"\n",
+        )
+        .unwrap();
+
+        let config = Config::load(atlas_dir).unwrap();
+        let entry = &config.parsers.external[0];
+        assert_eq!(entry.language_name, "php");
+        assert_eq!(entry.extensions, ["php"]);
+        assert_eq!(entry.lib_function.as_deref(), Some("tree_sitter_php"));
+        assert_eq!(
+            entry.grammar_dir.as_deref(),
+            Some(atlas_dir.join("grammars/tree-sitter-php").to_str().unwrap())
+        );
+    }
+
+    #[test]
+    fn load_resolves_query_path_from_atlas_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let atlas_dir = dir.path();
+        std::fs::write(
+            atlas_dir.join(crate::paths::ATLAS_CONFIG),
+            "[[parsers.external]]\nlanguage_name = \"zig\"\nextensions = [\"zig\"]\ngrammar_dir = \"grammars/tree-sitter-zig\"\nquery_path = \"queries/zig.scm\"\n",
+        )
+        .unwrap();
+
+        let config = Config::load(atlas_dir).unwrap();
+        let entry = &config.parsers.external[0];
+        assert_eq!(
+            entry.query_path.as_deref(),
+            Some(atlas_dir.join("queries/zig.scm").to_str().unwrap())
+        );
+    }
+
+    #[test]
+    fn load_resolves_plugin_paths_and_defaults_working_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let atlas_dir = dir.path();
+        std::fs::write(
+            atlas_dir.join(crate::paths::ATLAS_CONFIG),
+            "[[parsers.external]]\nlanguage_name = \"custom\"\nextensions = [\"cust\"]\ncommand = \"bin/custom-parser\"\nargs = [\"--stdio\"]\n",
+        )
+        .unwrap();
+
+        let config = Config::load(atlas_dir).unwrap();
+        let entry = &config.parsers.external[0];
+        assert_eq!(
+            entry.command.as_deref(),
+            Some(atlas_dir.join("bin/custom-parser").to_str().unwrap())
+        );
+        assert_eq!(
+            entry.working_dir.as_deref(),
+            atlas_dir.parent().map(|root| root.to_str().unwrap())
+        );
+        assert_eq!(entry.protocol.as_deref(), Some("atlas-parser.v1"));
+        assert_eq!(entry.timeout_ms, Some(30_000));
+        assert_eq!(entry.max_response_bytes, Some(16_777_216));
     }
 }

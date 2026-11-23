@@ -14,6 +14,7 @@ mod determinism_support;
 mod docs_section;
 mod feedback;
 mod health;
+mod health_doctor;
 mod history;
 mod hooks;
 mod insights;

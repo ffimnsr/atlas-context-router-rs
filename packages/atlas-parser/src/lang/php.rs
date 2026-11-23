@@ -20,7 +20,19 @@ use crate::traits::{LangParser, ParseContext};
 
 const PHP_QUERY: &str = include_str!("../../queries/php.scm");
 
-pub struct PhpParser;
+pub struct PhpParser {
+    language: tree_sitter::Language,
+}
+
+impl PhpParser {
+    pub fn new(language: tree_sitter::Language) -> Self {
+        Self { language }
+    }
+}
+
+pub(crate) fn validate_query(language: &tree_sitter::Language) -> Result<(), String> {
+    compile_static_query(language.clone(), "php", PHP_QUERY).map(|_| ())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct PhpNodeKey {
@@ -42,10 +54,13 @@ struct PhpSyntaxFacts {
 }
 
 impl PhpSyntaxFacts {
-    fn extract(root: TsNode<'_>, _source: &[u8]) -> Result<Self, String> {
-        let language: tree_sitter::Language = tree_sitter_php::LANGUAGE_PHP.into();
-        let query = compile_static_query(language, "php", PHP_QUERY)?;
-        let matches = run_query(&query, root, _source);
+    fn extract(
+        root: TsNode<'_>,
+        source: &[u8],
+        language: &tree_sitter::Language,
+    ) -> Result<Self, String> {
+        let query = compile_static_query(language.clone(), "php", PHP_QUERY)?;
+        let matches = run_query(&query, root, source);
         let mut facts = Self::default();
 
         for group in matches {
@@ -100,7 +115,7 @@ impl LangParser for PhpParser {
     fn parse(&self, ctx: &ParseContext<'_>) -> (ParsedFile, Option<tree_sitter::Tree>) {
         let mut parser = tree_sitter::Parser::new();
         parser
-            .set_language(&tree_sitter_php::LANGUAGE_PHP.into())
+            .set_language(&self.language)
             .expect("tree-sitter-php grammar failed to load");
 
         let tree = crate::parse_runtime::parse_tree(&mut parser, ctx.source, ctx.old_tree);
@@ -111,7 +126,7 @@ impl LangParser for PhpParser {
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
-            let facts = PhpSyntaxFacts::extract(root, ctx.source)
+            let facts = PhpSyntaxFacts::extract(root, ctx.source, &self.language)
                 .unwrap_or_else(|err| panic!("php query extraction failed: {err}"));
             let mut import_index = 0usize;
             let mut attribute_index = 0usize;
@@ -641,7 +656,8 @@ mod tests {
     use super::*;
 
     fn parse(src: &str) -> ParsedFile {
-        let (pf, _) = PhpParser.parse(&ParseContext {
+        let language: tree_sitter::Language = tree_sitter_php::LANGUAGE_PHP.into();
+        let (pf, _) = PhpParser::new(language).parse(&ParseContext {
             rel_path: "src/index.php",
             file_hash: "deadbeef",
             source: src.as_bytes(),
@@ -697,7 +713,7 @@ mod tests {
             .expect("tree-sitter-php grammar failed to load");
         let source = b"<?php\nnamespace Demo\\App;\nuse Demo\\Support\\Helper;\nclass Runner { const STATUS = 1; public function run() { helper(); } }\ntrait UsesLog {}\ninterface RunnerContract {}\nfunction helper() {}\n";
         let tree = parser.parse(source, None).expect("fixture should parse");
-        let facts = PhpSyntaxFacts::extract(tree.root_node(), source)
+        let facts = PhpSyntaxFacts::extract(tree.root_node(), source, &language)
             .expect("php query extraction should succeed");
 
         assert!(!facts.namespaces.is_empty());
@@ -709,5 +725,11 @@ mod tests {
         assert!(!facts.methods.is_empty());
         assert!(!facts._constants.is_empty());
         assert!(!facts.calls.is_empty());
+    }
+
+    #[test]
+    fn bundled_query_validates() {
+        let language: tree_sitter::Language = tree_sitter_php::LANGUAGE_PHP.into();
+        validate_query(&language).expect("php query should validate");
     }
 }

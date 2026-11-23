@@ -46,9 +46,16 @@ Supported languages in current build:
 - Python
 - JavaScript
 - TypeScript
+- JSON
+- TOML
+- HTML
+- CSS
+- C
+- Markdown
 
-External languages can be registered at runtime via `[parsers.external]` in
-`.atlas/config.toml` (see [External languages](#external-languages)).
+PHP, C++, C#, Java, Scala, Ruby, and Bash are offloaded: register an
+extractor profile at runtime via `[parsers.external]` in `.atlas/config.toml`
+(see [External languages](#external-languages)).
 
 ## Install
 
@@ -469,10 +476,42 @@ atlas status --base origin/main
 
 ## External languages
 
-Extra languages can be scanned without rebuilding Atlas by registering a
-tree-sitter grammar in `.atlas/config.toml`. The grammar is compiled with a C
-compiler on first use (cached in `grammar_lib_dir` or the tree-sitter user
-cache) — or loaded from a prebuilt shared library via `lib_path`.
+Offloaded and extra languages can be scanned without rebuilding Atlas by
+registering a tree-sitter grammar in `.atlas/config.toml`. The grammar is
+compiled with a C compiler on first use (cached in `grammar_lib_dir` or the
+tree-sitter user cache) — or loaded from a prebuilt shared library via
+`lib_path`.
+
+### Extractor profiles
+
+Offloaded languages use built-in extraction profiles. `language_name`,
+`extensions`, and `lib_function` may be omitted; profile defaults apply.
+
+```toml
+[[parsers.external]]
+extractor = "php"
+grammar_dir = "grammars/tree-sitter-php"  # relative to .atlas/
+
+[[parsers.external]]
+extractor = "csharp"
+lib_path = "grammars/libtree-sitter-c-sharp.so"
+# lib_function = "tree_sitter_c_sharp"   # C# uses c_sharp, not csharp
+```
+
+| Extractor | Language name | Default extensions | Default lib function |
+|---|---|---|---|
+| `php` | `php` | `php` | `tree_sitter_php` |
+| `cpp` | `cpp` | `cpp`, `cc`, `cxx` | `tree_sitter_cpp` |
+| `csharp` | `csharp` | `cs` | `tree_sitter_c_sharp` |
+| `java` | `java` | `java` | `tree_sitter_java` |
+| `scala` | `scala` | `scala`, `sc` | `tree_sitter_scala` |
+| `ruby` | `ruby` | `rb` | `tree_sitter_ruby` |
+| `bash` | `bash` | `sh`, `bash` | `tree_sitter_bash` |
+
+### Generic rule-based parser
+
+For a language without an extractor profile, describe which tree-sitter node
+kinds map to graph symbols:
 
 ```toml
 [[parsers.external]]
@@ -498,19 +537,116 @@ language_name = "swift"
 extensions = ["swift"]
 lib_path = "/opt/grammars/libtree-sitter-swift.so"
 # lib_function = "tree_sitter_swift"   # default: tree_sitter_<language_name>
+
+[[parsers.external.symbols]]
+tree_kind = "function_declaration"
+node_kind = "function"
+```
+
+### Query/capture parser
+
+For grammars that do not map cleanly to node-kind rules, use a tree-sitter SCM
+query with Atlas captures. Relative `query_path` values resolve from `.atlas/`:
+
+```toml
+[[parsers.external]]
+language_name = "zig"
+extensions = ["zig"]
+grammar_dir = "/opt/grammars/tree-sitter-zig"
+query_path = "queries/zig.scm"   # relative to .atlas/
+# or inline:
+# query = "(function_declaration name: (identifier) @atlas.name) @atlas.definition.function"
+# qn_style = "nested"
+# test_name_patterns = ["^test_"]
+```
+
+Supported captures: `@atlas.definition.{function,method,class,interface,struct,enum,trait,module,package,variable,constant,test}`,
+`@atlas.name`, `@atlas.import`, `@atlas.attribute`, `@atlas.call`,
+`@atlas.receiver`, `@atlas.parameters`, `@atlas.return_type`, and
+`@atlas.reference`. `symbols`, `imports`, `attributes`, and `call_*` rules are
+rejected in query mode. Invalid query text or an unsupported `@atlas.*` capture
+fails parser construction with the query diagnostics.
+
+### Out-of-process plugin parser
+
+A plugin owns extraction completely and speaks a versioned JSON/stdio protocol.
+Atlas spawns `command` with the literal `args` argv vector (no shell), writes one
+request to stdin, and validates the response before persisting it:
+
+```toml
+[[parsers.external]]
+language_name = "custom"
+extensions = ["cust"]
+command = "bin/custom-parser"   # relative to .atlas/
+args = ["--stdio"]
+# working_dir = ".."            # defaults to the repo root (parent of .atlas/)
+# protocol = "atlas-parser.v1"  # default
+# timeout_ms = 30000            # default
+# max_response_bytes = 16777216 # default (16 MiB)
+```
+
+Request: `{protocol, language_name, path, file_hash, source_b64}`.
+Response: `{protocol, parsed_file}` where `parsed_file` is an Atlas
+`ParsedFile`. Nonzero exit, timeout, invalid JSON, protocol/path/hash mismatch,
+node/edge file-path mismatch, and oversize responses are per-file parse errors.
+Local paths use `grammar_dir`/`lib_path` instead of `command`; rule, query, and
+plugin extraction fields are mutually exclusive.
+
+Plugin execution is trusted local code — Atlas provides no OS sandbox. Do not
+run build/update on untrusted revisions with plugins enabled.
+
+### Migration from bundled handlers
+
+The default registry no longer bundles PHP, C++, C#, Java, Scala, Ruby, or
+Bash. Add one extractor profile per language to restore support. Existing graph
+contracts are preserved: profile parsers emit the canonical language name,
+qualified names, nodes, and edges produced by the previous built-in handlers.
+
+```toml
+[[parsers.external]]
+extractor = "php"
+grammar_dir = "grammars/tree-sitter-php"
+
+[[parsers.external]]
+extractor = "cpp"
+grammar_dir = "grammars/tree-sitter-cpp"
+
+[[parsers.external]]
+extractor = "csharp"
+grammar_dir = "grammars/tree-sitter-c-sharp"
+
+[[parsers.external]]
+extractor = "java"
+grammar_dir = "grammars/tree-sitter-java"
+
+[[parsers.external]]
+extractor = "scala"
+grammar_dir = "grammars/tree-sitter-scala"
+
+[[parsers.external]]
+extractor = "ruby"
+grammar_dir = "grammars/tree-sitter-ruby"
+
+[[parsers.external]]
+extractor = "bash"
+grammar_dir = "grammars/tree-sitter-bash"
 ```
 
 Notes:
 
 - Built-in handlers keep precedence for overlapping extensions.
-- Relative `grammar_dir` / `lib_path` / `grammar_lib_dir` paths resolve from
-  `.atlas/` (drop grammars under `.atlas/grammars/...` for repo-local setup).
-- `atlas build` / `atlas update` / `status` / `doctor` / change detection and
-  agent-hook refresh all honor `[parsers.external]`; watch mode does not yet
-  register external parsers.
+- Relative `grammar_dir` / `lib_path` / `grammar_lib_dir` / `query_path` paths
+  resolve from `.atlas/` (drop grammars under `.atlas/grammars/...` and queries
+  under `.atlas/queries/...` for repo-local setup).
+- `atlas build` / `atlas update` / `watch` / `status` / `doctor` / change
+  detection and agent-hook refresh all honor `[parsers.external]`.
+- `atlas doctor` reports tracked files with offloaded extensions when no
+  matching parser is registered.
 - Grammar ABI is validated at load; mismatched grammars fail with a clear error.
+- Query/capture and out-of-process plugin (`command`) modes are enabled.
+  Plugin execution is trusted local code; no OS sandbox is provided.
 - Compiling or loading a grammar executes code from configured paths — treat
-  grammar sources as trusted.
+  grammar sources and plugin commands as trusted local configuration.
 
 Search graph nodes:
 

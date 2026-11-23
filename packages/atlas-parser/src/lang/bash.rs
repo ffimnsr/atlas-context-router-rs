@@ -19,7 +19,19 @@ use crate::traits::{LangParser, ParseContext};
 
 const BASH_QUERY: &str = include_str!("../../queries/bash.scm");
 
-pub struct BashParser;
+pub struct BashParser {
+    language: tree_sitter::Language,
+}
+
+impl BashParser {
+    pub fn new(language: tree_sitter::Language) -> Self {
+        Self { language }
+    }
+}
+
+pub(crate) fn validate_query(language: &tree_sitter::Language) -> Result<(), String> {
+    compile_static_query(language.clone(), "bash", BASH_QUERY).map(|_| ())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct BashNodeKey {
@@ -35,10 +47,13 @@ struct BashSyntaxFacts {
 }
 
 impl BashSyntaxFacts {
-    fn extract(root: TsNode<'_>, _source: &[u8]) -> Result<Self, String> {
-        let language: tree_sitter::Language = tree_sitter_bash::LANGUAGE.into();
-        let query = compile_static_query(language, "bash", BASH_QUERY)?;
-        let matches = run_query(&query, root, _source);
+    fn extract(
+        root: TsNode<'_>,
+        source: &[u8],
+        language: &tree_sitter::Language,
+    ) -> Result<Self, String> {
+        let query = compile_static_query(language.clone(), "bash", BASH_QUERY)?;
+        let matches = run_query(&query, root, source);
         let mut facts = Self::default();
 
         for group in matches {
@@ -75,7 +90,7 @@ impl LangParser for BashParser {
     fn parse(&self, ctx: &ParseContext<'_>) -> (ParsedFile, Option<tree_sitter::Tree>) {
         let mut parser = tree_sitter::Parser::new();
         parser
-            .set_language(&tree_sitter_bash::LANGUAGE.into())
+            .set_language(&self.language)
             .expect("tree-sitter-bash grammar failed to load");
 
         let tree = crate::parse_runtime::parse_tree(&mut parser, ctx.source, ctx.old_tree);
@@ -86,7 +101,7 @@ impl LangParser for BashParser {
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
-            let facts = BashSyntaxFacts::extract(root, ctx.source)
+            let facts = BashSyntaxFacts::extract(root, ctx.source, &self.language)
                 .unwrap_or_else(|err| panic!("bash query extraction failed: {err}"));
             collect_functions(root, ctx, &facts, ctx.rel_path, &mut nodes, &mut edges);
 
@@ -410,7 +425,8 @@ mod tests {
     use crate::ParserRegistry;
 
     fn parse(src: &str) -> ParsedFile {
-        let (pf, _) = BashParser.parse(&ParseContext {
+        let language: tree_sitter::Language = tree_sitter_bash::LANGUAGE.into();
+        let (pf, _) = BashParser::new(language).parse(&ParseContext {
             rel_path: "scripts/deploy.sh",
             file_hash: "deadbeef",
             source: src.as_bytes(),
@@ -493,7 +509,7 @@ mod tests {
         let source =
             b"CONFIG=prod\nsource ./env.sh\nsetup() {\n  helper\n}\nhelper() {\n  echo hi\n}\n";
         let tree = parser.parse(source, None).expect("fixture should parse");
-        let facts = BashSyntaxFacts::extract(tree.root_node(), source)
+        let facts = BashSyntaxFacts::extract(tree.root_node(), source, &language)
             .expect("bash query extraction should succeed");
 
         assert!(!facts.functions.is_empty());
@@ -503,7 +519,8 @@ mod tests {
 
     #[test]
     fn incremental_reparse_with_shorter_source_does_not_panic() {
-        let registry = ParserRegistry::with_defaults();
+        let mut registry = ParserRegistry::with_defaults();
+        registry.register(Box::new(BashParser::new(tree_sitter_bash::LANGUAGE.into())));
         let path = "scripts/deploy.sh";
 
         let (_, tree1) = registry
@@ -520,5 +537,11 @@ mod tests {
             tree2.is_some(),
             "incremental parse should still return a tree"
         );
+    }
+
+    #[test]
+    fn bundled_query_validates() {
+        let language: tree_sitter::Language = tree_sitter_bash::LANGUAGE.into();
+        validate_query(&language).expect("bash query should validate");
     }
 }

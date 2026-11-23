@@ -137,6 +137,7 @@ roaring = "0.10"
 # concurrency
 rayon = "1"
 notify = "7"
+wait-timeout = "0.2"
 
 # internal crates
 atlas-core      = { path = "packages/atlas-core", version = "1.7.6" }

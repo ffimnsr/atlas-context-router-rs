@@ -42,6 +42,25 @@ fn last_indexed_ref_roundtrip_and_status_field() {
 }
 
 #[test]
+fn parser_fingerprint_roundtrip_is_repo_scoped() {
+    let store = open_in_memory();
+    assert_eq!(store.parser_fingerprint("repo_1").unwrap(), None);
+
+    store.set_parser_fingerprint("repo_1", "rev1:abc").unwrap();
+    assert_eq!(
+        store.parser_fingerprint("repo_1").unwrap().as_deref(),
+        Some("rev1:abc")
+    );
+    assert_eq!(store.parser_fingerprint("repo_2").unwrap(), None);
+
+    store.set_parser_fingerprint("repo_1", "rev1:def").unwrap();
+    assert_eq!(
+        store.parser_fingerprint("repo_1").unwrap().as_deref(),
+        Some("rev1:def")
+    );
+}
+
+#[test]
 fn finish_build_after_begin_sets_built_with_counters() {
     let store = open_in_memory();
     store.begin_build_for_repo("repo_test", "/repo").unwrap();

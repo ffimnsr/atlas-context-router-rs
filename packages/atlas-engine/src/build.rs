@@ -228,8 +228,8 @@ pub fn build_graph(
                     Ok(b) => b,
                     Err(e) => return (rel_str.clone(), Err(format!("read error: {e}"))),
                 };
-                match registry.parse(rel_str, hash, &source, None) {
-                    Some((mut pf, _tree)) => {
+                match registry.parse_checked(rel_str, hash, &source, None) {
+                    Ok(Some((mut pf, _tree))) => {
                         annotate_parsed_file_owner(&mut pf, owners.owner_for_path(rel_str));
                         annotate_parsed_file_repo(
                             &mut pf,
@@ -239,7 +239,8 @@ pub fn build_graph(
                         );
                         (rel_str.clone(), Ok(pf))
                     }
-                    None => (rel_str.clone(), Err("unsupported (skipped)".into())),
+                    Ok(None) => (rel_str.clone(), Err("unsupported (skipped)".into())),
+                    Err(msg) => (rel_str.clone(), Err(msg)),
                 }
             })
             .collect();
@@ -390,6 +391,13 @@ pub fn build_graph(
         tracing::warn!("cannot record indexed ref: {error:#}");
     }
 
+    if !opts.dry_run {
+        let fingerprint = crate::parser_fingerprint::compute(&opts.external_parsers);
+        store
+            .set_parser_fingerprint(&source_repo_id, &fingerprint)
+            .context("cannot record parser fingerprint")?;
+    }
+
     Ok(summary)
 }
 
@@ -481,16 +489,17 @@ mod tests {
             language_name: "rust".to_owned(),
             extensions: vec!["myrs".to_owned()],
             grammar_dir: Some(grammar_root.to_string()),
-            lib_path: None,
-            lib_function: None,
             grammar_lib_dir: Some(lib_cache.path().to_string_lossy().into_owned()),
             symbols: vec![ExternalSymbolRule {
                 tree_kind: "function_item".to_owned(),
                 node_kind: NodeKind::Function,
                 name_field: "name".to_owned(),
+                params_field: None,
+                return_type_field: None,
+                modifier_node_kinds: Vec::new(),
             }],
             call_node_kinds: Vec::new(),
-            call_target_field: None,
+            ..Default::default()
         };
 
         let dir = tempfile::tempdir().unwrap();
@@ -527,6 +536,47 @@ mod tests {
             sigs.contains_key("main.myrs::function::hello"),
             "external-language symbol must be in the graph"
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn build_graph_counts_plugin_failures_as_parse_errors() {
+        let external = ExternalParserConfig {
+            language_name: "custom".to_owned(),
+            extensions: vec!["cust".to_owned()],
+            command: Some("printf".to_owned()),
+            args: vec!["not json".to_owned()],
+            ..Default::default()
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo_root = dir.path();
+        git(repo_root, &["init", "--quiet"]);
+        std::fs::write(repo_root.join("main.cust"), "fn hello() {}\n").unwrap();
+        git(repo_root, &["add", "main.cust"]);
+        git(repo_root, &["commit", "--quiet", "-m", "init"]);
+
+        let db_path = repo_root.join("worldtree.db");
+        let summary = build_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &BuildOptions {
+                fail_fast: false,
+                dry_run: false,
+                batch_size: 16,
+                budget: BuildRunBudget::default(),
+                source_repo_id: None,
+                namespace_qualified_names: false,
+                external_parsers: vec![external],
+            },
+        )
+        .expect("plugin failure is a per-file parse error, not a build abort");
+        assert_eq!(
+            summary.parsed, 0,
+            "parsed={} parse_errors={} unsupported={}",
+            summary.parsed, summary.parse_errors, summary.skipped_unsupported
+        );
+        assert_eq!(summary.parse_errors, 1);
     }
 
     #[test]

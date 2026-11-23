@@ -2,11 +2,20 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use atlas_parser::ParserRegistry;
+use atlas_parser::{ExternalExtractor, ExternalLangParser, ExternalParserConfig, ParserRegistry};
 use serde_json::Value;
 
 const FIXTURE_HASH: &str = "fixture-hash";
 const FIXTURE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+const OFFLOADED_LANGUAGES: &[(&str, &str)] = &[
+    ("bash", "sh"),
+    ("cpp", "cpp"),
+    ("csharp", "cs"),
+    ("java", "java"),
+    ("php", "php"),
+    ("ruby", "rb"),
+    ("scala", "scala"),
+];
 
 #[derive(Debug, Clone)]
 struct FixtureCase {
@@ -26,6 +35,40 @@ impl FixtureCase {
     }
 }
 
+fn registry_with_offloaded_profiles() -> ParserRegistry {
+    let mut registry = ParserRegistry::with_defaults();
+    for (extractor, language) in offloaded_languages() {
+        let config = ExternalParserConfig {
+            extractor: Some(extractor),
+            grammar_dir: Some("fixtures/preloaded-grammar".to_owned()),
+            ..Default::default()
+        };
+        let parser = ExternalLangParser::from_language(&config, language).unwrap_or_else(|err| {
+            panic!(
+                "failed to build {} profile parser: {err}",
+                extractor.language_name()
+            )
+        });
+        registry.register(Box::new(parser));
+    }
+    registry
+}
+
+fn offloaded_languages() -> Vec<(ExternalExtractor, tree_sitter::Language)> {
+    vec![
+        (ExternalExtractor::Bash, tree_sitter_bash::LANGUAGE.into()),
+        (
+            ExternalExtractor::CSharp,
+            tree_sitter_c_sharp::LANGUAGE.into(),
+        ),
+        (ExternalExtractor::Cpp, tree_sitter_cpp::LANGUAGE.into()),
+        (ExternalExtractor::Java, tree_sitter_java::LANGUAGE.into()),
+        (ExternalExtractor::Php, tree_sitter_php::LANGUAGE_PHP.into()),
+        (ExternalExtractor::Ruby, tree_sitter_ruby::LANGUAGE.into()),
+        (ExternalExtractor::Scala, tree_sitter_scala::LANGUAGE.into()),
+    ]
+}
+
 #[test]
 fn parser_fixtures_match_goldens() {
     let fixture_root = Path::new(FIXTURE_DIR);
@@ -36,7 +79,7 @@ fn parser_fixtures_match_goldens() {
         fixture_root.display()
     );
 
-    let registry = ParserRegistry::with_defaults();
+    let registry = registry_with_offloaded_profiles();
     let update_goldens = env::var_os("ATLAS_UPDATE_GOLDENS").is_some();
 
     for case in cases {
@@ -76,6 +119,44 @@ fn parser_fixtures_match_goldens() {
             case.rel_path,
             case.fixture_path.display()
         );
+    }
+}
+
+#[test]
+fn offloaded_language_fixtures_are_inventoried() {
+    let fixture_root = Path::new(FIXTURE_DIR);
+    let cases = fixture_cases(fixture_root);
+
+    for &(language, extension) in OFFLOADED_LANGUAGES {
+        let prefix = format!("fixtures/{language}/");
+        let language_cases = cases
+            .iter()
+            .filter(|case| case.rel_path.starts_with(&prefix))
+            .collect::<Vec<_>>();
+
+        assert!(
+            !language_cases.is_empty(),
+            "expected at least one fixture for offloaded language {language} under {}",
+            fixture_root.join(language).display()
+        );
+
+        for case in language_cases {
+            assert_eq!(
+                case.fixture_path
+                    .extension()
+                    .and_then(|value| value.to_str()),
+                Some(extension),
+                "offloaded {language} fixture has unexpected extension: {}",
+                case.fixture_path.display()
+            );
+            let golden_path = case.golden_path();
+            assert!(
+                golden_path.is_file(),
+                "missing golden for offloaded {language} fixture {}: {}",
+                case.fixture_path.display(),
+                golden_path.display()
+            );
+        }
     }
 }
 

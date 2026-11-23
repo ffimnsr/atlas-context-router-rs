@@ -728,7 +728,7 @@ fn build_and_update_replace_json_toml_file_graphs() {
 }
 
 #[test]
-fn build_and_update_replace_markup_shell_file_graphs() {
+fn build_and_update_replace_markup_script_file_graphs() {
     let repo = setup_repo(&[
         (
             "public/index.html",
@@ -739,8 +739,8 @@ fn build_and_update_replace_markup_shell_file_graphs() {
             "@import url('base.css');\n.button { color: red; }\n",
         ),
         (
-            "scripts/deploy.sh",
-            "source ./env.sh\nsetup() {\n  helper\n}\nhelper() {\n  echo ok\n}\n",
+            "scripts/deploy.go",
+            "package main\n\nimport \"fmt\"\n\nfunc run() {\n\thelper()\n}\n\nfunc helper() {\n\tfmt.Println(\"ok\")\n}\n",
         ),
         (
             "README.md",
@@ -780,19 +780,24 @@ fn build_and_update_replace_markup_shell_file_graphs() {
             .any(|node| node.kind == NodeKind::Class && node.name == ".button")
     );
 
-    let bash_nodes = store
-        .nodes_by_file("scripts/deploy.sh")
-        .expect("bash nodes");
+    let go_nodes = store
+        .nodes_by_file("scripts/deploy.go")
+        .expect("go nodes");
     assert!(
-        bash_nodes
+        go_nodes
             .iter()
-            .any(|node| node.qualified_name == "scripts/deploy.sh::fn::setup")
+            .any(|node| node.qualified_name == "scripts/deploy.go::fn::run")
     );
-    let bash_edges = store
-        .edges_by_file("scripts/deploy.sh")
-        .expect("bash edges");
-    assert!(bash_edges.iter().any(|edge| {
-        edge.kind == EdgeKind::Calls && edge.target_qn == "scripts/deploy.sh::fn::helper"
+    assert!(
+        go_nodes
+            .iter()
+            .any(|node| node.kind == NodeKind::Import && node.name == "fmt")
+    );
+    let go_edges = store
+        .edges_by_file("scripts/deploy.go")
+        .expect("go edges");
+    assert!(go_edges.iter().any(|edge| {
+        edge.kind == EdgeKind::Calls && edge.target_qn == "scripts/deploy.go::fn::helper"
     }));
 
     let markdown_nodes = store.nodes_by_file("README.md").expect("markdown nodes");
@@ -819,8 +824,8 @@ fn build_and_update_replace_markup_shell_file_graphs() {
     );
     write_repo_file(
         repo.path(),
-        "scripts/deploy.sh",
-        "setup() {\n  helper\n  source ./inner.sh\n}\nhelper() {\n  echo ok\n}\n",
+        "scripts/deploy.go",
+        "package main\n\nimport \"os\"\n\nfunc run() {\n\thelper()\n\tother()\n}\n\nfunc helper() {}\n\nfunc other() {}\n",
     );
     write_repo_file(
         repo.path(),
@@ -840,7 +845,7 @@ fn build_and_update_replace_markup_shell_file_graphs() {
                 "--files",
                 "assets/app.css",
                 "--files",
-                "scripts/deploy.sh",
+                "scripts/deploy.go",
                 "--files",
                 "README.md",
             ],
@@ -876,13 +881,23 @@ fn build_and_update_replace_markup_shell_file_graphs() {
     assert!(css_nodes.iter().any(|node| node.name == "#app"));
     assert!(!css_nodes.iter().any(|node| node.name == ".button"));
 
-    let bash_nodes = store
-        .nodes_by_file("scripts/deploy.sh")
-        .expect("updated bash nodes");
+    let go_nodes = store
+        .nodes_by_file("scripts/deploy.go")
+        .expect("updated go nodes");
     assert!(
-        bash_nodes
+        go_nodes
             .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "./inner.sh")
+            .any(|node| node.kind == NodeKind::Import && node.name == "os")
+    );
+    assert!(
+        go_nodes
+            .iter()
+            .any(|node| node.qualified_name == "scripts/deploy.go::fn::other")
+    );
+    assert!(
+        !go_nodes
+            .iter()
+            .any(|node| node.kind == NodeKind::Import && node.name == "fmt")
     );
 
     let markdown_nodes = store
@@ -902,399 +917,5 @@ fn build_and_update_replace_markup_shell_file_graphs() {
         !markdown_nodes
             .iter()
             .any(|node| node.kind == NodeKind::Import && node.name == "docs/guide.md")
-    );
-}
-
-#[test]
-fn build_and_update_replace_compiled_language_file_graphs() {
-    let repo = setup_repo(&[
-        (
-            "src/Main.java",
-            "package demo.app;\nimport java.util.List;\nclass Main { void run() { helper(); } void helper() {} }\n",
-        ),
-        (
-            "src/App.cs",
-            "using System.Text;\nnamespace Demo.App;\nclass Runner { void Run() { Helper(); } void Helper() {} }\n",
-        ),
-        (
-            "src/index.php",
-            "<?php\nnamespace Demo\\App;\nuse Demo\\Support\\Helper;\nclass Runner { public function run() { helper(); } private function helper() {} }\n",
-        ),
-        (
-            "src/native.c",
-            "#include \"util.h\"\ntypedef unsigned long size_t;\nstatic void helper(void) {}\nvoid run(void) { helper(); }\n",
-        ),
-        (
-            "src/native.cpp",
-            "#include <vector>\nnamespace demo { template <typename T> class Box {}; class Runner { public: void helper() {} void run() { helper(); } }; }\n",
-        ),
-    ]);
-
-    run_atlas(repo.path(), &["init"]);
-    let build = read_json_data_output("build", run_atlas(repo.path(), &["--json", "build"]));
-    assert_eq!(build["parse_errors"], json!(0));
-    assert!(build["parsed"].as_u64().unwrap_or_default() >= 5);
-
-    let store = open_store(repo.path());
-    let java_nodes = store.nodes_by_file("src/Main.java").expect("java nodes");
-    assert!(
-        java_nodes
-            .iter()
-            .any(|node| node.qualified_name == "src/Main.java::package::demo.app")
-    );
-    assert!(
-        java_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "java.util.List")
-    );
-    let java_edges = store.edges_by_file("src/Main.java").expect("java edges");
-    assert!(java_edges.iter().any(|edge| {
-        edge.kind == EdgeKind::Calls && edge.target_qn == "src/Main.java::method::Main.helper"
-    }));
-
-    let csharp_nodes = store.nodes_by_file("src/App.cs").expect("csharp nodes");
-    assert!(
-        csharp_nodes
-            .iter()
-            .any(|node| node.qualified_name == "src/App.cs::namespace::Demo.App")
-    );
-    assert!(
-        csharp_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "System.Text")
-    );
-
-    let php_nodes = store.nodes_by_file("src/index.php").expect("php nodes");
-    assert!(
-        php_nodes
-            .iter()
-            .any(|node| node.qualified_name == "src/index.php::namespace::Demo\\App")
-    );
-    assert!(
-        php_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "Demo\\Support\\Helper")
-    );
-
-    let c_nodes = store.nodes_by_file("src/native.c").expect("c nodes");
-    assert!(
-        c_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "util.h")
-    );
-    assert!(
-        c_nodes
-            .iter()
-            .any(|node| node.qualified_name == "src/native.c::typedef::size_t")
-    );
-
-    let cpp_nodes = store.nodes_by_file("src/native.cpp").expect("cpp nodes");
-    assert!(
-        cpp_nodes
-            .iter()
-            .any(|node| node.qualified_name == "src/native.cpp::namespace::demo")
-    );
-    assert!(
-        cpp_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "vector")
-    );
-    let cpp_edges = store.edges_by_file("src/native.cpp").expect("cpp edges");
-    assert!(cpp_edges.iter().any(|edge| {
-        edge.kind == EdgeKind::Calls && edge.target_qn == "src/native.cpp::method::Runner.helper"
-    }));
-
-    write_repo_file(
-        repo.path(),
-        "src/Main.java",
-        "package demo.app;\nimport java.util.Map;\nclass Main { void run() { assist(); } void assist() {} }\n",
-    );
-    write_repo_file(
-        repo.path(),
-        "src/App.cs",
-        "using System.IO;\nnamespace Demo.App;\nclass Runner { void Run() { Assist(); } void Assist() {} }\n",
-    );
-    write_repo_file(
-        repo.path(),
-        "src/index.php",
-        "<?php\nnamespace Demo\\App;\nuse Demo\\Support\\Other;\nclass Runner { public function run() { assist(); } private function assist() {} }\n",
-    );
-    write_repo_file(
-        repo.path(),
-        "src/native.c",
-        "#include \"other.h\"\ntypedef unsigned long count_t;\nstatic void assist(void) {}\nvoid run(void) { assist(); }\n",
-    );
-    write_repo_file(
-        repo.path(),
-        "src/native.cpp",
-        "#include <string>\nnamespace demo { class Runner { public: void assist() {} void run() { assist(); } }; }\n",
-    );
-
-    let update = read_json_data_output(
-        "update",
-        run_atlas(
-            repo.path(),
-            &[
-                "--json",
-                "update",
-                "--files",
-                "src/Main.java",
-                "--files",
-                "src/App.cs",
-                "--files",
-                "src/index.php",
-                "--files",
-                "src/native.c",
-                "--files",
-                "src/native.cpp",
-            ],
-        ),
-    );
-    assert_eq!(update["parse_errors"], json!(0));
-    assert_eq!(update["parsed"], json!(5));
-
-    let store = open_store(repo.path());
-    let java_nodes = store
-        .nodes_by_file("src/Main.java")
-        .expect("updated java nodes");
-    assert!(
-        java_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "java.util.Map")
-    );
-    assert!(
-        java_nodes
-            .iter()
-            .any(|node| node.qualified_name == "src/Main.java::method::Main.assist")
-    );
-    assert!(
-        !java_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "java.util.List")
-    );
-
-    let csharp_nodes = store
-        .nodes_by_file("src/App.cs")
-        .expect("updated csharp nodes");
-    assert!(
-        csharp_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "System.IO")
-    );
-    assert!(
-        csharp_nodes
-            .iter()
-            .any(|node| node.qualified_name == "src/App.cs::method::Runner.Assist")
-    );
-    assert!(
-        !csharp_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "System.Text")
-    );
-
-    let php_nodes = store
-        .nodes_by_file("src/index.php")
-        .expect("updated php nodes");
-    assert!(
-        php_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "Demo\\Support\\Other")
-    );
-    assert!(
-        php_nodes
-            .iter()
-            .any(|node| node.qualified_name == "src/index.php::method::Runner.assist")
-    );
-    assert!(
-        !php_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "Demo\\Support\\Helper")
-    );
-
-    let c_nodes = store
-        .nodes_by_file("src/native.c")
-        .expect("updated c nodes");
-    assert!(
-        c_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "other.h")
-    );
-    assert!(
-        c_nodes
-            .iter()
-            .any(|node| node.qualified_name == "src/native.c::typedef::count_t")
-    );
-    assert!(
-        !c_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "util.h")
-    );
-
-    let cpp_nodes = store
-        .nodes_by_file("src/native.cpp")
-        .expect("updated cpp nodes");
-    assert!(
-        cpp_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "string")
-    );
-    assert!(
-        cpp_nodes
-            .iter()
-            .any(|node| node.qualified_name == "src/native.cpp::method::Runner.assist")
-    );
-    assert!(
-        !cpp_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "vector")
-    );
-}
-
-#[test]
-fn build_and_update_replace_scala_ruby_file_graphs() {
-    let repo = setup_repo(&[
-        (
-            "src/Main.scala",
-            "package demo.app\nimport demo.support.Helper\nobject Runner { def helper(): Unit = () ; def run(): Unit = helper() }\ncase class Box(value: Int)\n",
-        ),
-        (
-            "lib/app.rb",
-            "require \"json\"\nmodule Demo\n  class Runner\n    include Logging\n    def helper\n    end\n    def run\n      helper()\n    end\n  end\nend\n",
-        ),
-    ]);
-
-    run_atlas(repo.path(), &["init"]);
-    let build = read_json_data_output("build", run_atlas(repo.path(), &["--json", "build"]));
-    assert_eq!(build["parse_errors"], json!(0));
-    assert!(build["parsed"].as_u64().unwrap_or_default() >= 2);
-
-    let store = open_store(repo.path());
-    let scala_nodes = store.nodes_by_file("src/Main.scala").expect("scala nodes");
-    assert!(
-        scala_nodes
-            .iter()
-            .any(|node| node.qualified_name == "src/Main.scala::package::demo.app")
-    );
-    assert!(
-        scala_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "demo.support.Helper")
-    );
-    assert!(
-        scala_nodes
-            .iter()
-            .any(|node| node.qualified_name == "src/Main.scala::case_class::Box")
-    );
-    let scala_edges = store.edges_by_file("src/Main.scala").expect("scala edges");
-    assert!(scala_edges.iter().any(|edge| {
-        edge.kind == EdgeKind::Calls && edge.target_qn == "src/Main.scala::method::Runner.helper"
-    }));
-
-    let ruby_nodes = store.nodes_by_file("lib/app.rb").expect("ruby nodes");
-    assert!(
-        ruby_nodes
-            .iter()
-            .any(|node| node.qualified_name == "lib/app.rb::module::Demo")
-    );
-    assert!(
-        ruby_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "json")
-    );
-    assert!(
-        ruby_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "Logging")
-    );
-    let ruby_edges = store.edges_by_file("lib/app.rb").expect("ruby edges");
-    assert!(ruby_edges.iter().any(|edge| {
-        edge.kind == EdgeKind::Calls && edge.target_qn == "lib/app.rb::method::Runner.helper"
-    }));
-
-    write_repo_file(
-        repo.path(),
-        "src/Main.scala",
-        "package demo.app\nimport demo.support.Other\nobject Runner { def assist(): Unit = () ; def run(): Unit = assist() }\ncase class Crate(value: Int)\n",
-    );
-    write_repo_file(
-        repo.path(),
-        "lib/app.rb",
-        "require \"yaml\"\nmodule Demo\n  class Runner\n    extend Builders\n    def assist\n    end\n    def run\n      assist()\n    end\n  end\nend\n",
-    );
-
-    let update = read_json_data_output(
-        "update",
-        run_atlas(
-            repo.path(),
-            &[
-                "--json",
-                "update",
-                "--files",
-                "src/Main.scala",
-                "--files",
-                "lib/app.rb",
-            ],
-        ),
-    );
-    assert_eq!(update["parse_errors"], json!(0));
-    assert_eq!(update["parsed"], json!(2));
-
-    let store = open_store(repo.path());
-    let scala_nodes = store
-        .nodes_by_file("src/Main.scala")
-        .expect("updated scala nodes");
-    assert!(
-        scala_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "demo.support.Other")
-    );
-    assert!(
-        scala_nodes
-            .iter()
-            .any(|node| node.qualified_name == "src/Main.scala::method::Runner.assist")
-    );
-    assert!(
-        scala_nodes
-            .iter()
-            .any(|node| node.qualified_name == "src/Main.scala::case_class::Crate")
-    );
-    assert!(
-        !scala_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "demo.support.Helper")
-    );
-    assert!(
-        !scala_nodes
-            .iter()
-            .any(|node| node.qualified_name == "src/Main.scala::case_class::Box")
-    );
-
-    let ruby_nodes = store
-        .nodes_by_file("lib/app.rb")
-        .expect("updated ruby nodes");
-    assert!(
-        ruby_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "yaml")
-    );
-    assert!(
-        ruby_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "Builders")
-    );
-    assert!(
-        ruby_nodes
-            .iter()
-            .any(|node| node.qualified_name == "lib/app.rb::method::Runner.assist")
-    );
-    assert!(
-        !ruby_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "json")
-    );
-    assert!(
-        !ruby_nodes
-            .iter()
-            .any(|node| node.kind == NodeKind::Import && node.name == "Logging")
     );
 }

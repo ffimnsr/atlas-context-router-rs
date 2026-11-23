@@ -19,7 +19,19 @@ use crate::traits::{LangParser, ParseContext};
 
 const RUBY_QUERY: &str = include_str!("../../queries/ruby.scm");
 
-pub struct RubyParser;
+pub struct RubyParser {
+    language: tree_sitter::Language,
+}
+
+impl RubyParser {
+    pub fn new(language: tree_sitter::Language) -> Self {
+        Self { language }
+    }
+}
+
+pub(crate) fn validate_query(language: &tree_sitter::Language) -> Result<(), String> {
+    compile_static_query(language.clone(), "ruby", RUBY_QUERY).map(|_| ())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct RubyNodeKey {
@@ -38,10 +50,13 @@ struct RubySyntaxFacts {
 }
 
 impl RubySyntaxFacts {
-    fn extract(root: TsNode<'_>, _source: &[u8]) -> Result<Self, String> {
-        let language: tree_sitter::Language = tree_sitter_ruby::LANGUAGE.into();
-        let query = compile_static_query(language, "ruby", RUBY_QUERY)?;
-        let matches = run_query(&query, root, _source);
+    fn extract(
+        root: TsNode<'_>,
+        source: &[u8],
+        language: &tree_sitter::Language,
+    ) -> Result<Self, String> {
+        let query = compile_static_query(language.clone(), "ruby", RUBY_QUERY)?;
+        let matches = run_query(&query, root, source);
         let mut facts = Self::default();
 
         for group in matches {
@@ -88,7 +103,7 @@ impl LangParser for RubyParser {
     fn parse(&self, ctx: &ParseContext<'_>) -> (ParsedFile, Option<tree_sitter::Tree>) {
         let mut parser = tree_sitter::Parser::new();
         parser
-            .set_language(&tree_sitter_ruby::LANGUAGE.into())
+            .set_language(&self.language)
             .expect("tree-sitter-ruby grammar failed to load");
 
         let tree = crate::parse_runtime::parse_tree(&mut parser, ctx.source, ctx.old_tree);
@@ -99,7 +114,7 @@ impl LangParser for RubyParser {
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
-            let facts = RubySyntaxFacts::extract(root, ctx.source)
+            let facts = RubySyntaxFacts::extract(root, ctx.source, &self.language)
                 .unwrap_or_else(|err| panic!("ruby query extraction failed: {err}"));
             let mut import_index = 0usize;
             let mut cursor = root.walk();
@@ -527,7 +542,8 @@ mod tests {
     use super::*;
 
     fn parse(src: &str) -> ParsedFile {
-        let (pf, _) = RubyParser.parse(&ParseContext {
+        let language: tree_sitter::Language = tree_sitter_ruby::LANGUAGE.into();
+        let (pf, _) = RubyParser::new(language).parse(&ParseContext {
             rel_path: "lib/app.rb",
             file_hash: "deadbeef",
             source: src.as_bytes(),
@@ -585,7 +601,7 @@ mod tests {
             .expect("tree-sitter-ruby grammar failed to load");
         let source = b"module Demo\n  class Runner\n    VALUE = 1\n    def run\n      helper()\n    end\n\n    def self.build\n    end\n  end\nend\n";
         let tree = parser.parse(source, None).expect("fixture should parse");
-        let facts = RubySyntaxFacts::extract(tree.root_node(), source)
+        let facts = RubySyntaxFacts::extract(tree.root_node(), source, &language)
             .expect("ruby query extraction should succeed");
 
         assert!(!facts.modules.is_empty());
@@ -594,5 +610,11 @@ mod tests {
         assert!(!facts.singleton_methods.is_empty());
         assert!(!facts._constants.is_empty());
         assert!(!facts.calls.is_empty());
+    }
+
+    #[test]
+    fn bundled_query_validates() {
+        let language: tree_sitter::Language = tree_sitter_ruby::LANGUAGE.into();
+        validate_query(&language).expect("ruby query should validate");
     }
 }

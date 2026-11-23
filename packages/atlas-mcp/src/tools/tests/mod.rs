@@ -385,6 +385,15 @@ pub(super) fn setup_git_mcp_fixture() -> GitMcpFixture {
         )
         .expect("replace readme graph");
 
+    // The fixture seeds a graph that pretends to be a completed build; record
+    // the default-parser fingerprint so incremental updates fail open here.
+    store
+        .set_parser_fingerprint(
+            &source_repo_id,
+            &atlas_engine::parser_fingerprint::compute(&[]),
+        )
+        .expect("record parser fingerprint");
+
     let content_db_path = atlas_engine::paths::content_db_path(&db_path);
     let mut content_store = ContentStore::open(&content_db_path).expect("open content store");
     content_store.migrate().expect("migrate content store");

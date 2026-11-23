@@ -303,4 +303,37 @@ impl Store {
             .map_err(|e| AtlasError::Db(e.to_string()))?;
         Ok(())
     }
+
+    /// Return the parser configuration fingerprint recorded by the last
+    /// successful build for `source_repo_id`.
+    pub fn parser_fingerprint(&self, source_repo_id: &str) -> Result<Option<String>> {
+        use rusqlite::OptionalExtension;
+        self.conn
+            .query_row(
+                "SELECT value FROM metadata WHERE key = ?1",
+                params![parser_fingerprint_key(source_repo_id)],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| AtlasError::Db(e.to_string()))
+    }
+
+    /// Record the parser configuration fingerprint for `source_repo_id`.
+    pub fn set_parser_fingerprint(&self, source_repo_id: &str, fingerprint: &str) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO metadata(key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                 WHERE metadata.value <> excluded.value",
+                params![parser_fingerprint_key(source_repo_id), fingerprint],
+            )
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        Ok(())
+    }
+}
+
+const PARSER_FINGERPRINT_KEY_PREFIX: &str = "atlas_parser_fingerprint:";
+
+fn parser_fingerprint_key(source_repo_id: &str) -> String {
+    format!("{PARSER_FINGERPRINT_KEY_PREFIX}{source_repo_id}")
 }

@@ -29,7 +29,8 @@ pub fn run_watch(cli: &Cli) -> Result<()> {
         debounce,
         engine_config.parse_batch_size(),
     )
-    .context("cannot start watch runner")?;
+    .context("cannot start watch runner")?
+    .with_external_parsers(engine_config.parsers.external.clone());
 
     if !json_output {
         println!(

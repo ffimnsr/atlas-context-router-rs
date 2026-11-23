@@ -21,6 +21,40 @@ fn call_tool_status_matches_handrolled_structured_content() {
 }
 
 #[test]
+fn call_tool_status_reports_parser_fingerprint_state() {
+    let fixture = ToolFixture::new();
+    let args = json!({"output_format": "json"});
+    let handrolled =
+        handrolled_tools_call(&fixture, "status", &args).expect("handrolled status response");
+    let body = tool_body(&handrolled);
+    assert_eq!(
+        body["graph_state"]["parser_fingerprint"]["state"],
+        json!("current")
+    );
+    assert_eq!(
+        body["graph_state"]["parser_fingerprint"]["revision"],
+        json!(atlas_engine::parser_fingerprint::PARSER_FINGERPRINT_REVISION)
+    );
+}
+
+#[test]
+fn call_tool_doctor_reports_parser_fingerprint_check() {
+    let fixture = ToolFixture::new();
+    let args = json!({"output_format": "json"});
+    let handrolled =
+        handrolled_tools_call(&fixture, "doctor", &args).expect("handrolled doctor response");
+    let body = tool_body(&handrolled);
+    let check = body["checks"]
+        .as_array()
+        .expect("doctor checks array")
+        .iter()
+        .find(|check| check["check"] == json!("parser_fingerprint"))
+        .expect("parser_fingerprint doctor check");
+    assert_eq!(check["status"], json!("pass"));
+    assert_eq!(check["issue_code"], serde_json::Value::Null);
+}
+
+#[test]
 fn call_tool_get_context_matches_handrolled_structured_content() {
     let fixture = ToolFixture::new();
     let args = json!({

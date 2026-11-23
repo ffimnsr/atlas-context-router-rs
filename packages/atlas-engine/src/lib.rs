@@ -8,6 +8,7 @@ pub mod config;
 mod embedding;
 pub mod lang_policy;
 mod owner_graph;
+pub mod parser_fingerprint;
 pub mod paths;
 
 mod build;

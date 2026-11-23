@@ -547,17 +547,46 @@ impl Config {
         lines.push(
             "# External (runtime) language parsers — uncomment to scan extra languages.".to_owned(),
         );
+        lines.push(
+            "# Extractor profiles keep built-in extraction for offloaded languages.".to_owned(),
+        );
+        lines.push("# [[parsers.external]]".to_owned());
+        lines.push("# extractor = \"php\"".to_owned());
+        lines.push("# grammar_dir = \"grammars/tree-sitter-php\"".to_owned());
+        lines.push(String::new());
+        lines.push("# [[parsers.external]]".to_owned());
+        lines.push("# extractor = \"csharp\"".to_owned());
+        lines.push("# lib_path = \"grammars/libtree-sitter-c-sharp.so\"".to_owned());
+        lines.push("# # lib_function = \"tree_sitter_c_sharp\"".to_owned());
+        lines.push(String::new());
+        lines.push("# Generic node-kind mapping for a language without a profile.".to_owned());
         lines.push("# [[parsers.external]]".to_owned());
         lines.push("# language_name = \"zig\"".to_owned());
         lines.push("# extensions = [\"zig\"]".to_owned());
-        lines.push(
-            "# # grammar checkout dir (compiled on first use) or a prebuilt .so via lib_path"
-                .to_owned(),
-        );
-        lines.push("# grammar_dir = \"/opt/grammars/tree-sitter-zig\"".to_owned());
+        lines.push("# grammar_dir = \"grammars/tree-sitter-zig\"".to_owned());
         lines.push("# [[parsers.external.symbols]]".to_owned());
         lines.push("# tree_kind = \"function_declaration\"".to_owned());
         lines.push("# node_kind = \"function\"".to_owned());
+        lines.push(String::new());
+        lines.push(
+            "# Query/capture extraction for grammars without clean node-kind rules.".to_owned(),
+        );
+        lines.push("# [[parsers.external]]".to_owned());
+        lines.push("# language_name = \"zig\"".to_owned());
+        lines.push("# extensions = [\"zig\"]".to_owned());
+        lines.push("# grammar_dir = \"grammars/tree-sitter-zig\"".to_owned());
+        lines.push("# query_path = \"queries/zig.scm\"".to_owned());
+        lines.push(String::new());
+        lines.push("# Out-of-process plugin extraction (trusted local code):".to_owned());
+        lines
+            .push("# Plugin commands run as the Atlas user; no OS sandbox is provided.".to_owned());
+        lines.push("# [[parsers.external]]".to_owned());
+        lines.push("# language_name = \"zig\"".to_owned());
+        lines.push("# extensions = [\"zig\"]".to_owned());
+        lines.push("# command = \"atlas-parser-zig\"".to_owned());
+        lines.push("# protocol = \"atlas-parser-json-v1\"".to_owned());
+        lines.push("# timeout_ms = 30000".to_owned());
+        lines.push("# max_response_bytes = 1048576".to_owned());
         lines.push(String::new());
 
         lines.extend(render_section(

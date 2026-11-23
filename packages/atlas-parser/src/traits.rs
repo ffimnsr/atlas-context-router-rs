@@ -35,4 +35,17 @@ pub trait LangParser: Send + Sync {
     /// On partial tree-sitter parse failure the function should still return a
     /// best-effort result (File node + any symbols found before the error node).
     fn parse(&self, ctx: &ParseContext<'_>) -> (ParsedFile, Option<tree_sitter::Tree>);
+
+    /// Parse one file, surfacing extraction failures to the caller.
+    ///
+    /// The default implementation wraps [`Self::parse`], so in-process parsers
+    /// keep their best-effort behavior. Out-of-process parsers override this so
+    /// a crashed or malformed plugin is reported as a per-file parse error
+    /// instead of an empty success or a panic.
+    fn parse_checked(
+        &self,
+        ctx: &ParseContext<'_>,
+    ) -> Result<(ParsedFile, Option<tree_sitter::Tree>), String> {
+        Ok(self.parse(ctx))
+    }
 }

@@ -19,7 +19,19 @@ use crate::traits::{LangParser, ParseContext};
 
 const JAVA_QUERY: &str = include_str!("../../queries/java.scm");
 
-pub struct JavaParser;
+pub struct JavaParser {
+    language: tree_sitter::Language,
+}
+
+impl JavaParser {
+    pub fn new(language: tree_sitter::Language) -> Self {
+        Self { language }
+    }
+}
+
+pub(crate) fn validate_query(language: &tree_sitter::Language) -> Result<(), String> {
+    compile_static_query(language.clone(), "java", JAVA_QUERY).map(|_| ())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct JavaNodeKey {
@@ -41,10 +53,13 @@ struct JavaSyntaxFacts {
 }
 
 impl JavaSyntaxFacts {
-    fn extract(root: TsNode<'_>, _source: &[u8]) -> Result<Self, String> {
-        let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
-        let query = compile_static_query(language, "java", JAVA_QUERY)?;
-        let matches = run_query(&query, root, _source);
+    fn extract(
+        root: TsNode<'_>,
+        source: &[u8],
+        language: &tree_sitter::Language,
+    ) -> Result<Self, String> {
+        let query = compile_static_query(language.clone(), "java", JAVA_QUERY)?;
+        let matches = run_query(&query, root, source);
         let mut facts = Self::default();
 
         for group in matches {
@@ -100,7 +115,7 @@ impl LangParser for JavaParser {
     fn parse(&self, ctx: &ParseContext<'_>) -> (ParsedFile, Option<tree_sitter::Tree>) {
         let mut parser = tree_sitter::Parser::new();
         parser
-            .set_language(&tree_sitter_java::LANGUAGE.into())
+            .set_language(&self.language)
             .expect("tree-sitter-java grammar failed to load");
 
         let tree = crate::parse_runtime::parse_tree(&mut parser, ctx.source, ctx.old_tree);
@@ -111,7 +126,7 @@ impl LangParser for JavaParser {
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
-            let facts = JavaSyntaxFacts::extract(root, ctx.source)
+            let facts = JavaSyntaxFacts::extract(root, ctx.source, &self.language)
                 .unwrap_or_else(|err| panic!("java query extraction failed: {err}"));
             let package_qn = emit_package(root, ctx, &facts, &mut nodes, &mut edges);
             let parent_qn = package_qn.as_deref().unwrap_or(ctx.rel_path).to_owned();
@@ -569,7 +584,8 @@ mod tests {
     use super::*;
 
     fn parse(src: &str) -> ParsedFile {
-        let (pf, _) = JavaParser.parse(&ParseContext {
+        let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
+        let (pf, _) = JavaParser::new(language).parse(&ParseContext {
             rel_path: "src/Main.java",
             file_hash: "deadbeef",
             source: src.as_bytes(),
@@ -616,5 +632,11 @@ mod tests {
         assert!(pf.edges.iter().any(|edge| {
             edge.kind == EdgeKind::Calls && edge.target_qn == "src/Main.java::method::Main.helper"
         }));
+    }
+
+    #[test]
+    fn bundled_query_validates() {
+        let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
+        validate_query(&language).expect("java query should validate");
     }
 }

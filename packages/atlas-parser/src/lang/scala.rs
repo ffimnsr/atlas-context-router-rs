@@ -19,7 +19,19 @@ use crate::traits::{LangParser, ParseContext};
 
 const SCALA_QUERY: &str = include_str!("../../queries/scala.scm");
 
-pub struct ScalaParser;
+pub struct ScalaParser {
+    language: tree_sitter::Language,
+}
+
+impl ScalaParser {
+    pub fn new(language: tree_sitter::Language) -> Self {
+        Self { language }
+    }
+}
+
+pub(crate) fn validate_query(language: &tree_sitter::Language) -> Result<(), String> {
+    compile_static_query(language.clone(), "scala", SCALA_QUERY).map(|_| ())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct ScalaNodeKey {
@@ -41,10 +53,13 @@ struct ScalaSyntaxFacts {
 }
 
 impl ScalaSyntaxFacts {
-    fn extract(root: TsNode<'_>, _source: &[u8]) -> Result<Self, String> {
-        let language: tree_sitter::Language = tree_sitter_scala::LANGUAGE.into();
-        let query = compile_static_query(language, "scala", SCALA_QUERY)?;
-        let matches = run_query(&query, root, _source);
+    fn extract(
+        root: TsNode<'_>,
+        source: &[u8],
+        language: &tree_sitter::Language,
+    ) -> Result<Self, String> {
+        let query = compile_static_query(language.clone(), "scala", SCALA_QUERY)?;
+        let matches = run_query(&query, root, source);
         let mut facts = Self::default();
 
         for group in matches {
@@ -103,7 +118,7 @@ impl LangParser for ScalaParser {
     fn parse(&self, ctx: &ParseContext<'_>) -> (ParsedFile, Option<tree_sitter::Tree>) {
         let mut parser = tree_sitter::Parser::new();
         parser
-            .set_language(&tree_sitter_scala::LANGUAGE.into())
+            .set_language(&self.language)
             .expect("tree-sitter-scala grammar failed to load");
 
         let tree = crate::parse_runtime::parse_tree(&mut parser, ctx.source, ctx.old_tree);
@@ -114,7 +129,7 @@ impl LangParser for ScalaParser {
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
-            let facts = ScalaSyntaxFacts::extract(root, ctx.source)
+            let facts = ScalaSyntaxFacts::extract(root, ctx.source, &self.language)
                 .unwrap_or_else(|err| panic!("scala query extraction failed: {err}"));
             let package_qn = emit_top_package(root, ctx, &facts, &mut nodes, &mut edges);
             let default_parent = package_qn.as_deref().unwrap_or(ctx.rel_path).to_owned();
@@ -627,7 +642,8 @@ mod tests {
     use super::*;
 
     fn parse(src: &str) -> ParsedFile {
-        let (pf, _) = ScalaParser.parse(&ParseContext {
+        let language: tree_sitter::Language = tree_sitter_scala::LANGUAGE.into();
+        let (pf, _) = ScalaParser::new(language).parse(&ParseContext {
             rel_path: "src/Main.scala",
             file_hash: "deadbeef",
             source: src.as_bytes(),
@@ -675,5 +691,11 @@ mod tests {
             edge.kind == EdgeKind::Calls
                 && edge.target_qn == "src/Main.scala::method::Runner.helper"
         }));
+    }
+
+    #[test]
+    fn bundled_query_validates() {
+        let language: tree_sitter::Language = tree_sitter_scala::LANGUAGE.into();
+        validate_query(&language).expect("scala query should validate");
     }
 }

@@ -20,7 +20,19 @@ use crate::traits::{LangParser, ParseContext};
 
 const CSHARP_QUERY: &str = include_str!("../../queries/csharp.scm");
 
-pub struct CSharpParser;
+pub struct CSharpParser {
+    language: tree_sitter::Language,
+}
+
+impl CSharpParser {
+    pub fn new(language: tree_sitter::Language) -> Self {
+        Self { language }
+    }
+}
+
+pub(crate) fn validate_query(language: &tree_sitter::Language) -> Result<(), String> {
+    compile_static_query(language.clone(), "csharp", CSHARP_QUERY).map(|_| ())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct CSharpNodeKey {
@@ -42,9 +54,12 @@ struct CSharpSyntaxFacts {
 }
 
 impl CSharpSyntaxFacts {
-    fn extract(root: TsNode<'_>, source: &[u8]) -> Result<Self, String> {
-        let language: tree_sitter::Language = tree_sitter_c_sharp::LANGUAGE.into();
-        let query = compile_static_query(language, "csharp", CSHARP_QUERY)?;
+    fn extract(
+        root: TsNode<'_>,
+        source: &[u8],
+        language: &tree_sitter::Language,
+    ) -> Result<Self, String> {
+        let query = compile_static_query(language.clone(), "csharp", CSHARP_QUERY)?;
         let matches = run_query(&query, root, source);
         let mut facts = Self::default();
 
@@ -100,7 +115,7 @@ impl LangParser for CSharpParser {
     fn parse(&self, ctx: &ParseContext<'_>) -> (ParsedFile, Option<tree_sitter::Tree>) {
         let mut parser = tree_sitter::Parser::new();
         parser
-            .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
+            .set_language(&self.language)
             .expect("tree-sitter-c-sharp grammar failed to load");
 
         let tree = crate::parse_runtime::parse_tree(&mut parser, ctx.source, ctx.old_tree);
@@ -111,7 +126,7 @@ impl LangParser for CSharpParser {
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
-            let facts = CSharpSyntaxFacts::extract(root, ctx.source)
+            let facts = CSharpSyntaxFacts::extract(root, ctx.source, &self.language)
                 .unwrap_or_else(|err| panic!("csharp query extraction failed: {err}"));
             let mut import_index = 0usize;
             let mut attribute_index = 0usize;
@@ -598,7 +613,8 @@ mod tests {
     use super::*;
 
     fn parse(src: &str) -> ParsedFile {
-        let (pf, _) = CSharpParser.parse(&ParseContext {
+        let language: tree_sitter::Language = tree_sitter_c_sharp::LANGUAGE.into();
+        let (pf, _) = CSharpParser::new(language).parse(&ParseContext {
             rel_path: "src/App.cs",
             file_hash: "deadbeef",
             source: src.as_bytes(),
@@ -645,5 +661,11 @@ mod tests {
         assert!(pf.edges.iter().any(|edge| {
             edge.kind == EdgeKind::Calls && edge.target_qn == "src/App.cs::method::Runner.Helper"
         }));
+    }
+
+    #[test]
+    fn bundled_query_validates() {
+        let language: tree_sitter::Language = tree_sitter_c_sharp::LANGUAGE.into();
+        validate_query(&language).expect("csharp query should validate");
     }
 }

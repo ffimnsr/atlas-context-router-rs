@@ -9,7 +9,11 @@ pub mod registry;
 pub mod traits;
 pub mod tree_cache;
 
-pub use external::{ExternalLangParser, ExternalParserConfig, ExternalSymbolRule};
+pub use external::{
+    ExternalAttributeRule, ExternalAttributeTarget, ExternalExtractionMode, ExternalExtractor,
+    ExternalImportRule, ExternalLangParser, ExternalParserConfig, ExternalQnStyle,
+    ExternalSymbolRule,
+};
 pub use registry::ParserRegistry;
 pub use traits::{LangParser, ParseContext};
 pub use tree_cache::TreeCache;

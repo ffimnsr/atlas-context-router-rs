@@ -68,95 +68,95 @@ Rules:
 
 #### Phase 0 — Baseline
 
-- [ ] record baseline `cargo test -p atlas-parser`, release binary size, and `cargo tree -p atlas-cli -e normal` output
-- [ ] add fixture inventory assertion for the seven offloaded languages in `packages/atlas-parser/tests/parser_golden.rs`
+- [x] record baseline `cargo test -p atlas-parser`, release binary size, and `cargo tree -p atlas-cli -e normal` output
+- [x] add fixture inventory assertion for the seven offloaded languages in `packages/atlas-parser/tests/parser_golden.rs`
 
 #### Phase 1 — Grammar injection
 
-- [ ] add `language: tree_sitter::Language` and `new(language)` to `packages/atlas-parser/src/lang/{php,cpp,csharp,java,scala,ruby,bash}.rs`
-- [ ] thread the language through each `*SyntaxFacts::extract` and add module `validate_query` helpers
-- [ ] update module tests and confirm existing golden JSON stays byte-identical
+- [x] add `language: tree_sitter::Language` and `new(language)` to `packages/atlas-parser/src/lang/{php,cpp,csharp,java,scala,ruby,bash}.rs`
+- [x] thread the language through each `*SyntaxFacts::extract` and add module `validate_query` helpers
+- [x] update module tests and confirm existing golden JSON stays byte-identical
 
 #### Phase 2 — Profile support
 
-- [ ] split `packages/atlas-parser/src/external.rs` into `external/{mod,loader,generic,profile}.rs`
-- [ ] add `ExternalExtractor`, profile defaults, `apply_profile_defaults`, and shared `validate`
-- [ ] add `load_external_language`, `ExternalLangParser::from_language`, extension override, and profile dispatch
-- [ ] normalize and validate profile config in `packages/atlas-engine/src/config/{load,parsers}.rs`
-- [ ] add tests for defaults, conflicts, canonical names, C#/Java lib functions, and query validation failure
+- [x] split `packages/atlas-parser/src/external.rs` into `external/{mod,loader,generic,profile}.rs`
+- [x] add `ExternalExtractor`, profile defaults, `apply_profile_defaults`, and shared `validate`
+- [x] add `load_external_language`, `ExternalLangParser::from_language`, extension override, and profile dispatch
+- [x] normalize and validate profile config in `packages/atlas-engine/src/config/{load,parsers}.rs`
+- [x] add tests for defaults, conflicts, canonical names, C#/Java lib functions, and query validation failure
 
 #### Phase 3 — Remove bundled registration
 
-- [ ] remove the seven parsers from `ParserRegistry::with_defaults`
-- [ ] move the seven grammar crates from `packages/atlas-parser` dependencies to dev-dependencies; add them to `fuzz/Cargo.toml`
-- [ ] register profile parsers with `ExternalLangParser::from_language` in `packages/atlas-parser/tests/parser_golden.rs`; keep goldens unchanged
-- [ ] update `registry.rs` tests: default registry rejects the seven, profile registration restores support
-- [ ] rewrite offloaded-language fixtures in `packages/atlas-cli/tests/cli_quality_gates/resolution.rs` or move extraction assertions to parser goldens
-- [ ] assert normal dependency graph excludes the seven grammar crates
+- [x] remove the seven parsers from `ParserRegistry::with_defaults`
+- [x] move the seven grammar crates from `packages/atlas-parser` dependencies to dev-dependencies; add them to `fuzz/Cargo.toml`
+- [x] register profile parsers with `ExternalLangParser::from_language` in `packages/atlas-parser/tests/parser_golden.rs`; keep goldens unchanged
+- [x] update `registry.rs` tests: default registry rejects the seven, profile registration restores support
+- [x] rewrite offloaded-language fixtures in `packages/atlas-cli/tests/cli_quality_gates/resolution.rs` or move extraction assertions to parser goldens
+- [x] assert normal dependency graph excludes the seven grammar crates
 
 #### Phase 4 — Docs and diagnostics
 
-- [ ] add profile/query/plugin examples to `packages/atlas-engine/src/config/template.rs`
-- [ ] update README external-language docs, path-resolution rules, migration steps, and supported-language list
-- [ ] update `packages/atlas-parser/README.md` and `CHANGELOG.md`
-- [ ] update threat-model docs for grammar/plugin trusted-code boundaries
-- [ ] add `atlas doctor` warning for tracked offloaded extensions with no registered parser
+- [x] add profile/query/plugin examples to `packages/atlas-engine/src/config/template.rs`
+- [x] update README external-language docs, path-resolution rules, migration steps, and supported-language list
+- [x] update `packages/atlas-parser/README.md` and `CHANGELOG.md`
+- [x] update threat-model docs for grammar/plugin trusted-code boundaries
+- [x] add `atlas doctor` warning for tracked offloaded extensions with no registered parser
 
 #### Phase 5 — Generic external fidelity
 
-- [ ] add `ExternalImportRule` and emit import nodes/`Imports` edges from file scope
-- [ ] add `ExternalAttributeRule` with `attach_to = scope | next_symbol` and emit `Contains` edges
-- [ ] add symbol-rule `params_field`, `return_type_field`, and `modifier_node_kinds`; populate node metadata
-- [ ] add `qn_style` + `owner_node_kinds`; implement `nested` and `flat_owner`
-- [ ] add compiled `test_name_patterns` / `test_path_patterns`; set `Node.is_test`
-- [ ] add `call_receiver_field` and replace generic call construction with `common::call_edge` tiers
-- [ ] add vendored Rust grammar tests for imports, attributes, metadata, regexes, QN style, receiver, and call confidence
-- [ ] reject generic-only fields in profile configs
+- [x] add `ExternalImportRule` and emit import nodes/`Imports` edges from file scope
+- [x] add `ExternalAttributeRule` with `attach_to = scope | next_symbol` and emit `Contains` edges
+- [x] add symbol-rule `params_field`, `return_type_field`, and `modifier_node_kinds`; populate node metadata
+- [x] add `qn_style` + `owner_node_kinds`; implement `nested` and `flat_owner`
+- [x] add compiled `test_name_patterns` / `test_path_patterns`; set `Node.is_test`
+- [x] add `call_receiver_field` and replace generic call construction with `common::call_edge` tiers
+- [x] add vendored Rust grammar tests for imports, attributes, metadata, regexes, QN style, receiver, and call confidence
+- [x] reject generic-only fields in profile configs
 
 #### Phase 6 — Watch and fingerprint
 
-- [ ] carry `[parsers.external]` through `WatchRunner` into `UpdateOptions` and test the forwarding helper
-- [ ] add `packages/atlas-engine/src/parser_fingerprint.rs` with revision, normalized config hash, and query/plugin fields
-- [ ] add fingerprint metadata getter/setter in `packages/atlas-store-sqlite/src/store/build_state.rs`
-- [ ] write fingerprint after non-dry-run build
-- [ ] fail closed on missing/mismatched fingerprint in update
-- [ ] surface stale/missing fingerprint in `status` and `doctor`
-- [ ] add stable/change-sensitive fingerprint tests
-- [ ] add update-rejection tests for fingerprint mismatch
+- [x] carry `[parsers.external]` through `WatchRunner` into `UpdateOptions` and test the forwarding helper
+- [x] add `packages/atlas-engine/src/parser_fingerprint.rs` with revision, normalized config hash, and query/plugin fields
+- [x] add fingerprint metadata getter/setter in `packages/atlas-store-sqlite/src/store/build_state.rs`
+- [x] write fingerprint after non-dry-run build
+- [x] fail closed on missing/mismatched fingerprint in update
+- [x] surface stale/missing fingerprint in `status` and `doctor`
+- [x] add stable/change-sensitive fingerprint tests
+- [x] add update-rejection tests for fingerprint mismatch
 
 #### Phase 7 — SCM query/capture mode
 
-- [ ] add `query_path` / inline `query`, extraction-mode validation, and `.atlas/` path resolution
-- [ ] implement `packages/atlas-parser/src/external/query.rs` with `@atlas.*` capture mapping
-- [ ] support definitions, names, imports, attributes, calls, receivers, params/return, and references
-- [ ] reject rule fields with query mode; add valid, invalid, and conflict tests
+- [x] add `query_path` / inline `query`, extraction-mode validation, and `.atlas/` path resolution
+- [x] implement `packages/atlas-parser/src/external/query.rs` with `@atlas.*` capture mapping
+- [x] support definitions, names, imports, attributes, calls, receivers, params/return, and references
+- [x] reject rule fields with query mode; add valid, invalid, and conflict tests
 
 #### Phase 8 — Out-of-process plugin
 
-- [ ] add plugin config (`command`, `args`, `working_dir`, `protocol`, timeout, response cap) and mode validation
-- [ ] implement `external/protocol.rs` and `external/plugin.rs` with argv spawn, timeout, kill, and output caps
-- [ ] validate protocol version, JSON shape, path, hash, and node/edge file paths
-- [ ] add protocol tests plus Unix fixture tests for success, timeout, malformed, oversize, and hash mismatch
-- [ ] document trusted-code execution; confirm no `dylib` path exists
+- [x] add plugin config (`command`, `args`, `working_dir`, `protocol`, timeout, response cap) and mode validation
+- [x] implement `external/protocol.rs` and `external/plugin.rs` with argv spawn, timeout, kill, and output caps
+- [x] validate protocol version, JSON shape, path, hash, and node/edge file paths
+- [x] add protocol tests plus Unix fixture tests for success, timeout, malformed, oversize, and hash mismatch
+- [x] document trusted-code execution; confirm no `dylib` path exists
 
 #### Phase 9 — Release validation
 
-- [ ] run `cargo fmt --all -- --check`
-- [ ] run `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] run parser, engine, store, CLI, and workspace tests
-- [ ] run `cargo build --release` and record binary-size delta
-- [ ] verify released dependency graph excludes the seven grammar crates
-- [ ] manual fixture repo: no config, profile config, query config, plugin config, update, watch, fingerprint mismatch
+- [x] run `cargo fmt --all -- --check`
+- [x] run `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] run parser, engine, store, CLI, and workspace tests
+- [x] run `cargo build --release` and record binary-size delta
+- [x] verify released dependency graph excludes the seven grammar crates
+- [x] manual fixture repo: no config, profile config, query config, plugin config, update, watch, fingerprint mismatch
 
 #### Patch completion criteria
 
-- [ ] all seven profile fixture sets match existing goldens byte-for-byte
-- [ ] default registry excludes the seven languages; profile config restores them
-- [ ] generic imports, attributes, metadata, test regexes, QN style, and call confidence are covered
-- [ ] query and plugin modes are covered per plan §2.9 and §2.10
-- [ ] watch mode and parser fingerprint are enforced
-- [ ] all plan §4 limitations are closed except explicit Rust `dylib` non-goal
-- [ ] docs and diagnostics updated; validation commands pass
+- [x] all seven profile fixture sets match existing goldens byte-for-byte
+- [x] default registry excludes the seven languages; profile config restores them
+- [x] generic imports, attributes, metadata, test regexes, QN style, and call confidence are covered
+- [x] query and plugin modes are covered per plan §2.9 and §2.10
+- [x] watch mode and parser fingerprint are enforced
+- [x] all plan §4 limitations are closed except explicit Rust `dylib` non-goal
+- [x] docs and diagnostics updated; validation commands pass
 
 
 ### Minimal-Context Escalation Metadata Patch

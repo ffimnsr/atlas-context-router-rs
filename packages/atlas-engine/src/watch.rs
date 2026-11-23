@@ -26,6 +26,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result};
 use atlas_core::model::{ChangeType, ChangedFile};
+use atlas_parser::ExternalParserConfig;
 use atlas_repo::{CanonicalRepoPath, DEFAULT_IGNORE_PATTERNS};
 use camino::Utf8Path;
 use notify::event::{ModifyKind, RenameMode};
@@ -460,6 +461,8 @@ pub struct WatchRunner {
     pub debounce: Duration,
     /// Number of files per parallel parse batch (mirrors `UpdateOptions`).
     pub batch_size: usize,
+    /// External parsers forwarded to every incremental update batch.
+    external_parsers: Vec<ExternalParserConfig>,
     /// Accumulated statistics updated after every batch.
     pub state: WatchState,
 }
@@ -483,8 +486,15 @@ impl WatchRunner {
             db_path: db_path.into(),
             debounce,
             batch_size,
+            external_parsers: Vec::new(),
             state: WatchState::default(),
         })
+    }
+
+    /// Forward `[parsers.external]` entries into every watch update batch.
+    pub fn with_external_parsers(mut self, configs: Vec<ExternalParserConfig>) -> Self {
+        self.external_parsers = configs;
+        self
     }
 
     /// Block forever, processing file-system events.
@@ -547,16 +557,7 @@ impl WatchRunner {
         let started = Instant::now();
         let mut error_messages: Vec<String> = Vec::new();
 
-        let opts = crate::update::UpdateOptions {
-            fail_fast: false,
-            dry_run: false,
-            batch_size: self.batch_size,
-            target: plan.target,
-            budget: crate::config::BuildRunBudget::default(),
-            source_repo_id: None,
-            namespace_qualified_names: false,
-            external_parsers: Vec::new(),
-        };
+        let opts = update_options_for_batch(&plan, self.batch_size, &self.external_parsers);
 
         let (nodes_updated, errors) =
             match crate::run_metrics::update_graph(&self.repo_root, &self.db_path, &opts) {
@@ -589,6 +590,23 @@ impl WatchRunner {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn update_options_for_batch(
+    plan: &WatchBatchPlan,
+    batch_size: usize,
+    external_parsers: &[ExternalParserConfig],
+) -> crate::update::UpdateOptions {
+    crate::update::UpdateOptions {
+        fail_fast: false,
+        dry_run: false,
+        batch_size,
+        target: plan.target.clone(),
+        budget: crate::config::BuildRunBudget::default(),
+        source_repo_id: None,
+        namespace_qualified_names: false,
+        external_parsers: external_parsers.to_vec(),
+    }
+}
 
 /// Convert a batch of [`WatchEvent`]s to a deduplicated list of [`ChangedFile`]s.
 ///
@@ -657,6 +675,33 @@ mod tests {
             paths,
             attrs: Default::default(),
         }
+    }
+
+    #[test]
+    fn update_options_for_batch_forwards_external_parsers() {
+        use atlas_parser::ExternalExtractor;
+
+        let configs = vec![ExternalParserConfig {
+            extractor: Some(ExternalExtractor::Php),
+            grammar_dir: Some("grammars/tree-sitter-php".to_owned()),
+            ..Default::default()
+        }];
+        let plan = WatchBatchPlan {
+            target: crate::update::UpdateTarget::Files(vec!["src/index.php".to_owned()]),
+            files_updated: 1,
+            observed_events: 1,
+            coalesced_events: 0,
+            dropped_events: 0,
+            recovery_mode: WatchRecoveryMode::EventBatch,
+        };
+
+        let opts = update_options_for_batch(&plan, 7, &configs);
+        assert_eq!(opts.batch_size, 7);
+        assert_eq!(opts.external_parsers.len(), 1);
+        assert_eq!(
+            opts.external_parsers[0].extractor,
+            Some(ExternalExtractor::Php)
+        );
     }
 
     fn watcher_for_root(root: &Path) -> FileWatcher {

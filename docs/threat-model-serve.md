@@ -10,6 +10,7 @@ In scope:
 - repo-scoped broker/daemon mode
 - MCP request parsing and dispatch
 - graph/context/session store access triggered by MCP tools
+- runtime grammar loading and configured external parser execution
 - hook- and artifact-derived text returned through MCP responses
 
 Out of scope:
@@ -116,6 +117,29 @@ Defenses:
 - canonical repo-relative path identity
 - repo-relative file resolution
 - socket/pipe instance scoped by canonical repo root plus DB path
+
+### Boundary 5: configured grammar/plugin -> Atlas process
+
+`[parsers.external]` can execute local code. Treat `.atlas/config.toml` as
+reviewed local configuration, not as untrusted repository text.
+
+Defenses:
+
+- `grammar_dir` compiles the grammar's `src/parser.c` with the system C
+  compiler; `lib_path` loads a prebuilt shared library as the Atlas user.
+- out-of-process plugin mode spawns the configured argv vector directly (no
+  shell), pins the working directory, enforces a per-file timeout with kill, and
+  caps stdout/stderr; protocol, path, hash, and node/edge file paths are
+  validated before graph persistence.
+- grammar ABI, static query, and plugin protocol validation fail closed before
+  scan work starts.
+- no automatic grammar download, no Rust `dylib`/stable-ABI shim, and no claim
+  that Atlas sandboxes grammar C code or plugin processes.
+- configured grammar and plugin paths resolve from `.atlas/`; MCP requests
+  cannot supply them.
+- a repository that can modify `.atlas/config.toml` can cause local code
+  execution during build/update. Review that file like a build script and do not
+  run Atlas build/update on untrusted revisions with external parsers enabled.
 
 ## Forbidden MCP client actions
 

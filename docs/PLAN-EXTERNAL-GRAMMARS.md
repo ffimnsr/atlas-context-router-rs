@@ -95,6 +95,48 @@ No parser-config fingerprint is persisted. If the parser set or config changes,
 `atlas update` can leave stale rows from the old parser for unchanged files. A
 full `atlas build` already clears all file graphs for the repo before rebuilding.
 
+### 1.5 Phase 0 baseline
+
+Recorded before offload work on 2026-11-23 at commit
+`4f657b1dee9442b6ca196a594f177fa61ca1d569`:
+
+- `cargo test -p atlas-parser`: 152 library tests and 1 parser golden test
+  passed, 0 failed.
+- `target/release/atlas`: 62,152,896 bytes.
+- `cargo tree -p atlas-cli -e normal`: 883 lines, SHA-256
+  `8086a1df053032bbd93fd9ad22acfd7c42e3997efe061e285c3b8a09f23f9e5d`.
+- Offloaded grammar crates present in the normal dependency graph:
+  `tree-sitter-bash v0.25.1`, `tree-sitter-c-sharp v0.23.5`,
+  `tree-sitter-cpp v0.23.4`, `tree-sitter-java v0.23.5`,
+  `tree-sitter-php v0.24.2`, `tree-sitter-ruby v0.23.1`, and
+  `tree-sitter-scala v0.26.0`.
+
+Reproduce the dependency-tree baseline with `cargo tree -p atlas-cli -e normal`
+at the recorded commit.
+
+### 1.6 Phase 3 dependency boundary
+
+After offload, `cargo tree -p atlas-cli -e normal` and
+`cargo tree -p atlas-parser -e normal` contain none of the seven offloaded
+grammar crates. `packages/atlas-parser/tests/dependency_boundary.rs` asserts
+they remain dev-dependencies of `atlas-parser` only.
+
+### 1.7 Phase 9 release validation
+
+Recorded on 2026-11-23 after the full patch:
+
+- `target/release/atlas`: 41,773,600 bytes, a 20,379,296-byte (32.8%) reduction
+  from the 62,152,896-byte Phase 0 baseline.
+- `cargo tree -p atlas-cli -e normal`: 873 lines, SHA-256
+  `069fff2ffbe32a167b29787afb58d2bf9eb742f7edabe1c54cb61251092a1b94`,
+  zero matches for the seven grammar crates.
+- `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D
+  warnings`, and `cargo test --workspace` pass.
+- Manual fixtures: default build with no external config, PHP extractor profile,
+  inline Rust query mode, out-of-process Python plugin, `update --working-tree`,
+  `watch` batch update, and fingerprint-mismatch rejection all behaved as
+  specified.
+
 ---
 
 ## 2. Target Design
@@ -254,7 +296,7 @@ pub modifier_node_kinds: Vec<String>,
 `ExternalParserConfig` methods:
 
 ```rust
-pub fn apply_profile_defaults(&mut self); // fills only empty fields
+pub fn apply_defaults(&mut self); // fills only empty fields
 pub fn validate(&self) -> anyhow::Result<()>;
 ```
 
@@ -697,14 +739,14 @@ Exit criteria:
 - Add `ExternalExtractor` with names, extensions, and lib-function defaults
 - Add `ExternalParserConfig.extractor`
 - Make `language_name`, `extensions`, and `symbols` serde-defaulted
-- Add `apply_profile_defaults` and `validate`
+- Add `apply_defaults` and `validate`
 - Implement `load_external_language`
 - Implement `ExternalExtractor::build`
 - Implement `ExternalProfileParser` extension override wrapper
 - Make `ExternalLangParser::new` dispatch generic vs profile
 - Update `packages/atlas-engine/src/config/parsers.rs` to use the shared
       validation method
-- Call `apply_profile_defaults` from `Config::load`
+- Call `apply_defaults` from `Config::load`
 - Add unit tests for:
       - profile defaults
       - profile/generic conflict rejection

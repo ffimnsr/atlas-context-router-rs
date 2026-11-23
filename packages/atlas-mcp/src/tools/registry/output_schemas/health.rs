@@ -450,10 +450,19 @@ pub(crate) fn status_output_schema() -> Value {
                     "pending_graph_change_count": { "type": "integer" },
                     "pending_graph_changes": { "type": "array", "items": { "type": "string" } },
                     "execution_state": { "type": "string" },
+                    "parser_fingerprint": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "state": { "type": "string" },
+                            "revision": { "type": "integer" }
+                        },
+                        "required": ["state", "revision"]
+                    },
                     "connection_mode": { "type": "string" },
                     "read_pool_active": { "type": "boolean" }
                 },
-                "required": ["graph_built", "build_state", "build_last_error", "build_budget_stop_reason", "stale_index", "pending_graph_change_count", "pending_graph_changes", "execution_state", "connection_mode", "read_pool_active"]
+                "required": ["graph_built", "build_state", "build_last_error", "build_budget_stop_reason", "stale_index", "pending_graph_change_count", "pending_graph_changes", "execution_state", "parser_fingerprint", "connection_mode", "read_pool_active"]
             },
             "db_state": {
                 "type": "object",

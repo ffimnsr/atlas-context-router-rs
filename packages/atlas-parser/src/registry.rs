@@ -5,22 +5,15 @@ use anyhow::{Context, Result};
 
 use crate::external::{ExternalLangParser, ExternalParserConfig};
 use crate::lang::{
-    bash::BashParser,
     c::CParser,
-    cpp::CppParser,
-    csharp::CSharpParser,
     css::CssParser,
     go::GoParser,
     html::HtmlParser,
-    java::JavaParser,
     javascript::{JsParser, TsParser},
     json::JsonParser,
     markdown::MarkdownParser,
-    php::PhpParser,
     python::PythonParser,
-    ruby::RubyParser,
     rust::RustParser,
-    scala::ScalaParser,
     toml::TomlParser,
 };
 use crate::traits::{LangParser, ParseContext};
@@ -47,15 +40,8 @@ impl ParserRegistry {
         r.register(Box::new(TomlParser));
         r.register(Box::new(HtmlParser));
         r.register(Box::new(CssParser));
-        r.register(Box::new(BashParser));
         r.register(Box::new(MarkdownParser));
-        r.register(Box::new(JavaParser));
-        r.register(Box::new(CSharpParser));
-        r.register(Box::new(PhpParser));
         r.register(Box::new(CParser));
-        r.register(Box::new(CppParser));
-        r.register(Box::new(ScalaParser));
-        r.register(Box::new(RubyParser));
         r
     }
 
@@ -88,11 +74,11 @@ impl ParserRegistry {
     /// Parse a file, optionally supplying a previous tree-sitter tree to
     /// enable incremental re-parsing.  Returns `None` when no registered
     /// handler supports the file's extension — callers should skip those
-    /// files.
+    /// files. Parser failures are logged and treated as no output; use
+    /// [`Self::parse_checked`] when the caller must count parse errors.
     ///
     /// The second element of the returned tuple is the new tree-sitter tree,
-    /// which the caller may cache and pass back as `old_tree` on the next
-    /// parse of the same file.
+    /// which can be cached and passed back as `old_tree` on the next parse.
     pub fn parse(
         &self,
         rel_path: &str,
@@ -100,6 +86,27 @@ impl ParserRegistry {
         source: &[u8],
         old_tree: Option<&tree_sitter::Tree>,
     ) -> Option<(ParsedFile, Option<tree_sitter::Tree>)> {
+        match self.parse_checked(rel_path, file_hash, source, old_tree) {
+            Ok(result) => result,
+            Err(error) => {
+                tracing::warn!(path = rel_path, error = %error, "parser failed");
+                None
+            }
+        }
+    }
+
+    /// Parse a file, surfacing parser failures to the caller.
+    ///
+    /// `Ok(None)` means no handler supports the path or the file exceeds the
+    /// parser byte cap. `Err` means a handler ran and failed (for example an
+    /// out-of-process plugin timeout or malformed response).
+    pub fn parse_checked(
+        &self,
+        rel_path: &str,
+        file_hash: &str,
+        source: &[u8],
+        old_tree: Option<&tree_sitter::Tree>,
+    ) -> std::result::Result<Option<(ParsedFile, Option<tree_sitter::Tree>)>, String> {
         if source.len() > DEFAULT_MAX_FILE_BYTES as usize {
             tracing::warn!(
                 path = rel_path,
@@ -107,9 +114,11 @@ impl ParserRegistry {
                 max_bytes = DEFAULT_MAX_FILE_BYTES,
                 "skipping parse: file exceeds parser byte cap"
             );
-            return None;
+            return Ok(None);
         }
-        let handler = self.handler_for(rel_path)?;
+        let Some(handler) = self.handler_for(rel_path) else {
+            return Ok(None);
+        };
         // Record before handing off to the language parser: this counts real
         // parse work and whether tree-sitter receives a cached old tree.
         atlas_metrics::record_parse_attempt(old_tree.is_some());
@@ -119,7 +128,7 @@ impl ParserRegistry {
             source,
             old_tree,
         };
-        Some(handler.parse(&ctx))
+        handler.parse_checked(&ctx).map(Some)
     }
 
     /// Returns `true` if a handler is registered for `path`.
@@ -143,10 +152,11 @@ impl ParserRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::external::ExternalExtractor;
     use atlas_core::NodeKind;
     use std::collections::HashMap;
 
-    fn bundled_grammars() -> Vec<(&'static str, tree_sitter::Language)> {
+    fn grammar_crates() -> Vec<(&'static str, tree_sitter::Language)> {
         vec![
             ("bash", tree_sitter_bash::LANGUAGE.into()),
             ("c", tree_sitter_c::LANGUAGE.into()),
@@ -185,21 +195,85 @@ mod tests {
         assert!(reg.supports("Cargo.toml"));
         assert!(reg.supports("index.html"));
         assert!(reg.supports("styles.css"));
-        assert!(reg.supports("script.sh"));
         assert!(reg.supports("README.md"));
-        assert!(reg.supports("src/Main.java"));
-        assert!(reg.supports("src/App.cs"));
-        assert!(reg.supports("src/index.php"));
         assert!(reg.supports("src/native.c"));
-        assert!(reg.supports("src/native.cpp"));
-        assert!(reg.supports("src/Main.scala"));
-        assert!(reg.supports("lib/app.rb"));
+        assert!(!reg.supports("script.sh"));
+        assert!(!reg.supports("src/Main.java"));
+        assert!(!reg.supports("src/App.cs"));
+        assert!(!reg.supports("src/index.php"));
+        assert!(!reg.supports("src/native.cpp"));
+        assert!(!reg.supports("src/Main.scala"));
+        assert!(!reg.supports("lib/app.rb"));
         assert!(!reg.supports("config.yaml"));
     }
 
     #[test]
-    fn bundled_grammars_match_runtime_abi() {
-        for (name, language) in bundled_grammars() {
+    fn default_registry_rejects_offloaded_languages() {
+        let reg = ParserRegistry::with_defaults();
+        for path in [
+            "scripts/deploy.sh",
+            "scripts/deploy.bash",
+            "src/Main.java",
+            "src/App.cs",
+            "src/index.php",
+            "src/native.cpp",
+            "src/Main.scala",
+            "lib/app.rb",
+        ] {
+            assert!(!reg.supports(path), "default registry must reject {path}");
+        }
+    }
+
+    fn offloaded_languages() -> Vec<(ExternalExtractor, tree_sitter::Language)> {
+        vec![
+            (ExternalExtractor::Bash, tree_sitter_bash::LANGUAGE.into()),
+            (
+                ExternalExtractor::CSharp,
+                tree_sitter_c_sharp::LANGUAGE.into(),
+            ),
+            (ExternalExtractor::Cpp, tree_sitter_cpp::LANGUAGE.into()),
+            (ExternalExtractor::Java, tree_sitter_java::LANGUAGE.into()),
+            (ExternalExtractor::Php, tree_sitter_php::LANGUAGE_PHP.into()),
+            (ExternalExtractor::Ruby, tree_sitter_ruby::LANGUAGE.into()),
+            (ExternalExtractor::Scala, tree_sitter_scala::LANGUAGE.into()),
+        ]
+    }
+
+    #[test]
+    fn profile_registration_restores_offloaded_languages() {
+        let mut reg = ParserRegistry::with_defaults();
+        for (extractor, language) in offloaded_languages() {
+            let config = ExternalParserConfig {
+                extractor: Some(extractor),
+                grammar_dir: Some("unused-for-preloaded-language".to_owned()),
+                ..Default::default()
+            };
+            reg.register(Box::new(
+                ExternalLangParser::from_language(&config, language)
+                    .unwrap_or_else(|err| panic!("cannot build {extractor:?} profile: {err}")),
+            ));
+        }
+
+        for path in [
+            "scripts/deploy.sh",
+            "scripts/deploy.bash",
+            "src/Main.java",
+            "src/App.cs",
+            "src/index.php",
+            "src/native.cpp",
+            "src/Main.scala",
+            "lib/app.rb",
+        ] {
+            assert!(
+                reg.supports(path),
+                "profile registration must restore {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn grammar_crates_match_runtime_abi() {
+        for (name, language) in grammar_crates() {
             let abi = language.abi_version();
             assert!(
                 (tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION..=tree_sitter::LANGUAGE_VERSION)
@@ -275,7 +349,7 @@ mod tests {
     #[test]
     fn built_in_handlers_preserve_parsed_file_invariants() {
         let reg = ParserRegistry::with_defaults();
-        let samples: [(&str, &[u8]); 18] = [
+        let samples: [(&str, &[u8]); 11] = [
             ("src/main.rs", b"fn main() {}\n"),
             ("src/main.go", b"package main\nfunc main() {}\n"),
             ("src/main.py", b"def main():\n    return 1\n"),
@@ -291,21 +365,8 @@ mod tests {
                 b"<html><body><main>ok</main></body></html>\n",
             ),
             ("src/main.css", b"body { color: red; }\n"),
-            ("src/main.sh", b"echo hello\n"),
             ("src/main.md", b"# Heading\nbody\n"),
-            (
-                "src/Main.java",
-                b"class Main { int value() { return 1; } }\n",
-            ),
-            ("src/Main.cs", b"class Main { int Value() { return 1; } }\n"),
-            ("src/main.php", b"<?php function main() { return 1; }\n"),
             ("src/main.c", b"int main(void) { return 0; }\n"),
-            ("src/main.cpp", b"int main() { return 0; }\n"),
-            (
-                "src/Main.scala",
-                b"object Main { def main(args: Array[String]): Unit = () }\n",
-            ),
-            ("src/main.rb", b"def main\n  1\nend\n"),
         ];
 
         for (rel_path, source) in samples {

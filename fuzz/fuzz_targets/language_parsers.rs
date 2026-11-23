@@ -63,15 +63,19 @@ fn parse_once(
         SupportedPathKind::Toml => TomlParser.parse(&ctx),
         SupportedPathKind::Html => HtmlParser.parse(&ctx),
         SupportedPathKind::Css => CssParser.parse(&ctx),
-        SupportedPathKind::Bash => BashParser.parse(&ctx),
+        SupportedPathKind::Bash => BashParser::new(tree_sitter_bash::LANGUAGE.into()).parse(&ctx),
         SupportedPathKind::Markdown => MarkdownParser.parse(&ctx),
-        SupportedPathKind::Java => JavaParser.parse(&ctx),
-        SupportedPathKind::CSharp => CSharpParser.parse(&ctx),
-        SupportedPathKind::Php => PhpParser.parse(&ctx),
+        SupportedPathKind::Java => JavaParser::new(tree_sitter_java::LANGUAGE.into()).parse(&ctx),
+        SupportedPathKind::CSharp => {
+            CSharpParser::new(tree_sitter_c_sharp::LANGUAGE.into()).parse(&ctx)
+        }
+        SupportedPathKind::Php => PhpParser::new(tree_sitter_php::LANGUAGE_PHP.into()).parse(&ctx),
         SupportedPathKind::C => CParser.parse(&ctx),
-        SupportedPathKind::Cpp => CppParser.parse(&ctx),
-        SupportedPathKind::Scala => ScalaParser.parse(&ctx),
-        SupportedPathKind::Ruby => RubyParser.parse(&ctx),
+        SupportedPathKind::Cpp => CppParser::new(tree_sitter_cpp::LANGUAGE.into()).parse(&ctx),
+        SupportedPathKind::Scala => {
+            ScalaParser::new(tree_sitter_scala::LANGUAGE.into()).parse(&ctx)
+        }
+        SupportedPathKind::Ruby => RubyParser::new(tree_sitter_ruby::LANGUAGE.into()).parse(&ctx),
     }
     .1
 }

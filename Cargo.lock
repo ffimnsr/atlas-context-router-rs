@@ -291,6 +291,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "static_assertions",
  "sysinfo",
  "tempfile",
@@ -392,6 +393,7 @@ dependencies = [
  "atlas-core",
  "atlas-metrics",
  "atlas-repo",
+ "base64 0.22.1",
  "criterion",
  "regex",
  "serde",
@@ -418,6 +420,7 @@ dependencies = [
  "tree-sitter-rust",
  "tree-sitter-scala",
  "tree-sitter-typescript",
+ "wait-timeout",
 ]
 
 [[package]]

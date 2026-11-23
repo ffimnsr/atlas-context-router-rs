@@ -294,6 +294,10 @@ impl DoctorCheck {
             Some("noncanonical_path_rows") => {
                 Some("rebuild graph/content state from canonical repo paths".to_owned())
             }
+            Some("parser_fingerprint_missing") | Some("parser_fingerprint_stale") => Some(
+                "run `atlas build` to rebuild the graph with the current parser configuration"
+                    .to_owned(),
+            ),
             _ => None,
         }
     }
@@ -428,6 +432,39 @@ pub fn shared_checks(db_path: &str) -> Vec<DoctorCheck> {
         path_canonicality_check(&content.path),
         connection_mode_check(),
     ]
+}
+
+/// Report whether the graph was produced by the current parser configuration.
+pub fn parser_fingerprint_check(
+    store: &Store,
+    source_repo_id: &str,
+    external_parsers: &[atlas_parser::ExternalParserConfig],
+) -> DoctorCheck {
+    let expected = crate::parser_fingerprint::compute(external_parsers);
+    match store.parser_fingerprint(source_repo_id) {
+        Ok(Some(stored)) if stored == expected => DoctorCheck::pass(
+            "parser_fingerprint",
+            format!(
+                "current revision={}",
+                crate::parser_fingerprint::PARSER_FINGERPRINT_REVISION
+            ),
+        ),
+        Ok(Some(_)) => DoctorCheck::fail(
+            "parser_fingerprint",
+            "parser configuration changed since the last build; run `atlas build`",
+            Some("parser_fingerprint_stale"),
+        ),
+        Ok(None) => DoctorCheck::fail(
+            "parser_fingerprint",
+            "graph has no parser fingerprint; run `atlas build`",
+            Some("parser_fingerprint_missing"),
+        ),
+        Err(error) => DoctorCheck::fail(
+            "parser_fingerprint",
+            error.to_string(),
+            Some("parser_fingerprint_missing"),
+        ),
+    }
 }
 
 #[cfg(test)]

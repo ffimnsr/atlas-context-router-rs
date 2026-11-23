@@ -19,7 +19,19 @@ use crate::traits::{LangParser, ParseContext};
 
 const CPP_QUERY: &str = include_str!("../../queries/cpp.scm");
 
-pub struct CppParser;
+pub struct CppParser {
+    language: tree_sitter::Language,
+}
+
+impl CppParser {
+    pub fn new(language: tree_sitter::Language) -> Self {
+        Self { language }
+    }
+}
+
+pub(crate) fn validate_query(language: &tree_sitter::Language) -> Result<(), String> {
+    compile_static_query(language.clone(), "cpp", CPP_QUERY).map(|_| ())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct CppNodeKey {
@@ -40,9 +52,12 @@ struct CppSyntaxFacts {
 }
 
 impl CppSyntaxFacts {
-    fn extract(root: TsNode<'_>, source: &[u8]) -> Result<Self, String> {
-        let language: tree_sitter::Language = tree_sitter_cpp::LANGUAGE.into();
-        let query = compile_static_query(language, "cpp", CPP_QUERY)?;
+    fn extract(
+        root: TsNode<'_>,
+        source: &[u8],
+        language: &tree_sitter::Language,
+    ) -> Result<Self, String> {
+        let query = compile_static_query(language.clone(), "cpp", CPP_QUERY)?;
         let matches = run_query(&query, root, source);
         let mut facts = Self::default();
 
@@ -95,7 +110,7 @@ impl LangParser for CppParser {
     fn parse(&self, ctx: &ParseContext<'_>) -> (ParsedFile, Option<tree_sitter::Tree>) {
         let mut parser = tree_sitter::Parser::new();
         parser
-            .set_language(&tree_sitter_cpp::LANGUAGE.into())
+            .set_language(&self.language)
             .expect("tree-sitter-cpp grammar failed to load");
 
         let tree = crate::parse_runtime::parse_tree(&mut parser, ctx.source, ctx.old_tree);
@@ -106,7 +121,7 @@ impl LangParser for CppParser {
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
-            let facts = CppSyntaxFacts::extract(root, ctx.source)
+            let facts = CppSyntaxFacts::extract(root, ctx.source, &self.language)
                 .unwrap_or_else(|err| panic!("cpp query extraction failed: {err}"));
             let mut import_index = 0usize;
             let mut cursor = root.walk();
@@ -528,7 +543,8 @@ mod tests {
     use super::*;
 
     fn parse(src: &str) -> ParsedFile {
-        let (pf, _) = CppParser.parse(&ParseContext {
+        let language: tree_sitter::Language = tree_sitter_cpp::LANGUAGE.into();
+        let (pf, _) = CppParser::new(language).parse(&ParseContext {
             rel_path: "src/native.cpp",
             file_hash: "deadbeef",
             source: src.as_bytes(),
@@ -565,5 +581,11 @@ mod tests {
         );
         assert!(pf.edges.iter().any(|edge| edge.kind == EdgeKind::Calls
             && edge.target_qn == "src/native.cpp::method::Runner.helper"));
+    }
+
+    #[test]
+    fn bundled_query_validates() {
+        let language: tree_sitter::Language = tree_sitter_cpp::LANGUAGE.into();
+        validate_query(&language).expect("cpp query should validate");
     }
 }

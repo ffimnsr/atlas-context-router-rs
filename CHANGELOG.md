@@ -8,6 +8,13 @@ Versioning policy may evolve while Atlas is still moving quickly, but release no
 
 ### Features
 
+- offload PHP, C++, C#, Java, Scala, Ruby, and Bash to runtime tree-sitter extractor profiles: the default build no longer links their grammar crates, and `[parsers.external]` `extractor` entries restore the same nodes, qualified names, and edges
+- add `ExternalExtractor` profile defaults, `ExternalLangParser::from_language` for preloaded grammars, and shared external parser validation; offloaded parser goldens stay byte-identical
+- add an `atlas doctor` warning for tracked files that use offloaded extensions without a registered parser
+- add SCM query/capture mode for external parsers: `query_path`/inline `query`, `@atlas.*` capture mapping for definitions, names, imports, attributes, calls, receivers, params/return, references, `.atlas/` query path resolution, and construction-time query/capture validation
+- add out-of-process parser plugins speaking `atlas-parser.v1` JSON/stdio: argv spawn without a shell, repo-root working directory, per-file timeout with kill, stdout/stderr caps, and protocol/path/hash/file-path validation; plugin failures surface as per-file parse errors through `LangParser::parse_checked`
+- document runtime grammar loading, profile migration, path resolution, and trusted-code boundaries
+
 - `atlas init --profile auto` (new default) tunes `[build]`/`[search]`/`[mcp]`/`[context]`/`[insights]` from hardware (cores, RAM via `sysinfo`) and repo size (git-tracked file count + bytes), with all values clamped to policy safe maxima and a tuning summary in `--json` output
 - `[insights] ignore_files` accepts glob patterns (`*.md`, `*.json`) in addition to legacy exact/prefix entries, with load-time glob validation; invalid globs are rejected at config load
 - accept repo-relative, repo-dir-prefixed, and absolute-under-root file paths on every MCP and CLI file-path surface (discovery tools, context/change-source tools, graph and analysis tools, `docs-section`, `context`, `impact`, `review-context`, `explain-change`, `update --files`, `insights --files`, `analyze dead-code --subpath`, `query --subpath`) with structured not-found/ambiguity errors

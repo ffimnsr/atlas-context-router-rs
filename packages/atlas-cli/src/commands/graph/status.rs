@@ -121,6 +121,23 @@ fn graph_relevant_changed_files(
     files
 }
 
+fn parser_fingerprint_state(
+    store: Option<&Store>,
+    repo: &str,
+    config: &atlas_engine::Config,
+) -> &'static str {
+    let Some(store) = store else {
+        return "unknown";
+    };
+    let expected = atlas_engine::parser_fingerprint::compute(&config.parsers.external);
+    match store.parser_fingerprint(&stable_repo_id(Utf8Path::new(repo))) {
+        Ok(Some(stored)) if stored == expected => "current",
+        Ok(Some(_)) => "stale",
+        Ok(None) => "missing",
+        Err(_) => "unknown",
+    }
+}
+
 fn retrieval_index_value(repo: &str, db_path: &str) -> serde_json::Value {
     let content_db_path = atlas_engine::paths::content_db_path(db_path);
     let content_db_path_string = content_db_path.clone();
@@ -333,6 +350,7 @@ fn status_payload(ctx: StatusPayloadContext<'_>) -> serde_json::Value {
     };
     let repo_id = stable_repo_id(Utf8Path::new(ctx.repo));
     let repo_fingerprint = stable_repo_fingerprint(Utf8Path::new(ctx.repo), None);
+    let parser_fingerprint_state = parser_fingerprint_state(ctx.store, ctx.repo, ctx.config);
     serde_json::json!({
         "ok": diagnostics.ok,
         "error_code": diagnostics.error_code,
@@ -374,6 +392,10 @@ fn status_payload(ctx: StatusPayloadContext<'_>) -> serde_json::Value {
         "pending_graph_change_count": diagnostics.pending_graph_changes.len(),
         "pending_graph_changes": diagnostics.pending_graph_changes,
         "execution_state": diagnostics.execution_state.as_str(),
+        "parser_fingerprint": {
+            "state": parser_fingerprint_state,
+            "revision": atlas_engine::parser_fingerprint::PARSER_FINGERPRINT_REVISION,
+        },
         "retrieval_index": diagnostics.retrieval_index,
         "changed_file_count": ctx.changes.len(),
         "changed_files": augment_changes_with_node_counts(ctx.changes, ctx.store),
@@ -432,6 +454,10 @@ fn status_fail_closed_payload(
         "pending_graph_change_count": readiness.pending_graph_changes.len(),
         "pending_graph_changes": &readiness.pending_graph_changes,
         "execution_state": readiness.execution_state.as_str(),
+        "parser_fingerprint": {
+            "state": "unknown",
+            "revision": atlas_engine::parser_fingerprint::PARSER_FINGERPRINT_REVISION,
+        },
         "retrieval_index": retrieval_index_value(repo, db_path),
         "changed_file_count": 0,
         "changed_files": Vec::<serde_json::Value>::new(),
@@ -526,6 +552,10 @@ pub fn run_status(cli: &Cli) -> Result<()> {
                 println!("Build error : {err}");
             }
         }
+        println!(
+            "Parser fingerprint: {}",
+            parser_fingerprint_state(Some(&store), &repo, &config)
+        );
         if base.is_some() || staged || !changes.is_empty() {
             println!("Changed files: {}", changes.len());
             for cf in &changes {
