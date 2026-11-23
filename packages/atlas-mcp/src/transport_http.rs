@@ -799,7 +799,10 @@ mod tests {
         let value = read_json_response(response).await;
         assert_eq!(
             value["result"]["protocolVersion"],
-            json!(spec::MCP_PROTOCOL_VERSION)
+            // 2026-07-28 has no initialize handshake (lifecycle is negotiated
+            // through server/discover and _meta), so initialize must fall back
+            // to the newest revision that still defines the handshake.
+            json!(spec::MCP_PREVIOUS_PROTOCOL_VERSION)
         );
     }
 
